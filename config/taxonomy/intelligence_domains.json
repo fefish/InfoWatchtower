@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "description": "Expandable strategic intelligence domains. This is broader than the legacy AI SQL category list.",
+  "rule": "Domains are configurable business scopes for planning work. The legacy AI category list remains only the first export taxonomy for current company SQL.",
+  "domains": [
+    {
+      "code": "ai",
+      "name": "人工智能",
+      "status": "active",
+      "description": "Models, agents, AI applications, AI infrastructure, evaluation, training, inference and ecosystem."
+    },
+    {
+      "code": "hardware",
+      "name": "硬件与终端",
+      "status": "reserved",
+      "description": "Devices, edge hardware, sensors, terminals, robotics hardware and productized computing platforms."
+    },
+    {
+      "code": "semiconductor",
+      "name": "半导体与算力",
+      "status": "reserved",
+      "description": "Chips, accelerators, memory, packaging, foundry, supply chain and compute capacity."
+    },
+    {
+      "code": "cloud_infra",
+      "name": "云与基础设施",
+      "status": "reserved",
+      "description": "Cloud platforms, data centers, network, storage, middleware and developer infrastructure."
+    },
+    {
+      "code": "robotics",
+      "name": "机器人与具身智能",
+      "status": "reserved",
+      "description": "Humanoid robots, industrial robotics, embodied intelligence, autonomy and hardware-software integration."
+    },
+    {
+      "code": "policy_market",
+      "name": "政策与市场",
+      "status": "reserved",
+      "description": "Regulation, investment, enterprise adoption, procurement, geopolitics and market structure."
+    },
+    {
+      "code": "competitor",
+      "name": "竞品与生态",
+      "status": "reserved",
+      "description": "Competitor strategy, product launches, partnerships, pricing, channels and ecosystem moves."
+    }
+  ],
+  "domain_pack_rule": {
+    "summary": "Each domain can add source seeds, taxonomy labels, scoring weights, report templates, prompts and SQL/API export mapping without changing the core pipeline.",
+    "suggested_files": [
+      "config/domain_packs/{domain_code}/sources.json",
+      "config/domain_packs/{domain_code}/taxonomy.json",
+      "config/domain_packs/{domain_code}/scoring.json",
+      "config/domain_packs/{domain_code}/report_templates.json",
+      "config/domain_packs/{domain_code}/export_mapping.json"
+    ]
+  },
+  "legacy_export_note": "config/taxonomy/news_categories.json remains the current AI-oriented first-level category list for legacy company SQL export. Broader domains should map into their own export taxonomies when the company platform supports them."
+}

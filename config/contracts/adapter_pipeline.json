@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "description": "Ingestion adapter and deduplication pipeline contract.",
+  "pipeline_order": [
+    "data_source_config",
+    "adapter_fetch",
+    "raw_item_persist",
+    "content_extract",
+    "normalize_to_news_item",
+    "dedupe_grouping",
+    "scoring_and_recommendation",
+    "generate_structured_news",
+    "daily_report_draft",
+    "editor_review",
+    "company_sql_export"
+  ],
+  "adapter_rule": "Each source type may have its own input structure, but every adapter must persist the full raw payload and emit canonical raw_items. Normalization enriches and maps fields; it must not discard the original payload.",
+  "source_type_to_adapter": {
+    "wiseflow": "WiseflowReadInfoAdapter",
+    "rss": "RssFeedAdapter",
+    "paper_rss": "RssFeedAdapter plus PaperMetadataEnricher",
+    "page_monitor": "PageListingAdapter",
+    "page_manual": "ManualPageAdapter",
+    "crawler": "CustomCrawlerAdapter",
+    "paper_api": "PaperApiAdapter",
+    "paper_page": "PaperPageAdapter",
+    "manual": "ManualNewsAdapter",
+    "internal": "InternalSourceAdapter"
+  },
+  "canonical_raw_item_fields": [
+    "id",
+    "data_source_id",
+    "domain_code",
+    "visibility_scope",
+    "sync_policy",
+    "source_type",
+    "source_name",
+    "entry_key",
+    "source_url",
+    "canonical_url",
+    "source_title",
+    "raw_summary",
+    "raw_content",
+    "published_at",
+    "fetched_at",
+    "raw_payload_json",
+    "source_specific_json",
+    "extract_status",
+    "extract_error"
+  ],
+  "canonical_news_item_fields": [
+    "id",
+    "raw_item_id",
+    "domain_code",
+    "visibility_scope",
+    "sync_policy",
+    "source_url",
+    "canonical_url",
+    "source_title",
+    "content",
+    "created_at",
+    "focus_id",
+    "source_kind",
+    "source_name",
+    "dedupe_key",
+    "duplicate_of",
+    "active",
+    "normalization_status"
+  ],
+  "dedupe_stage": {
+    "runs_after": "normalize_to_news_item",
+    "runs_before": "scoring_and_recommendation",
+    "reason": "Different source structures must first be normalized before they can be compared fairly. Scoring should only run on deduped winners.",
+    "hard_dedupe_key_order": [
+      "canonical_url",
+      "normalized_title + published_date_bucket when canonical_url is missing"
+    ],
+    "canonical_url_rules": [
+      "lowercase scheme and host",
+      "remove URL fragment",
+      "strip trailing slash from path",
+      "remove tracking query params such as utm_*, spm, ref, ref_src, fbclid, gclid"
+    ],
+    "representative_selection_order": [
+      "has source_url/canonical_url",
+      "source_kind priority: wiseflow gets legacy bonus because it may contain richer crawled material",
+      "preferred/trusted source bonus",
+      "longer useful content",
+      "newer created_at"
+    ],
+    "result_fields": {
+      "winner": "active = true, duplicate_of = null",
+      "loser": "active = false, duplicate_of = winner.id or winner.candidate_key",
+      "all_items": "raw_items remain preserved; dedupe never deletes raw records"
+    }
+  },
+  "soft_clustering_stage": {
+    "status": "phase_2",
+    "purpose": "Group same-topic items across different URLs without automatically deleting them.",
+    "signals": [
+      "title similarity",
+      "summary/content embedding similarity",
+      "same company/product/model names",
+      "same publication date window"
+    ],
+    "rule": "Soft clusters support editor review and weekly aggregation; they do not replace hard dedupe in phase 1."
+  }
+}

@@ -1,0 +1,173 @@
+{
+  "schema_version": 1,
+  "description": "Multi-environment and multi-database synchronization strategy.",
+  "recommended_default": "single_codebase_multi_env_app_level_sync",
+  "environment_types": [
+    "public",
+    "intranet",
+    "local_dev"
+  ],
+  "identity_fields": {
+    "instance_id": "Unique ID for each deployment instance.",
+    "global_id": "Stable UUID/ULID for objects that may sync across instances.",
+    "origin_instance_id": "Instance that first created the object.",
+    "revision": "Monotonic revision for mutable synced objects.",
+    "content_hash": "Hash for immutable or append-only payloads.",
+    "visibility_scope": "public/internal/restricted boundary used before any sync.",
+    "sync_policy": "Per-object rule: none/public_to_intranet/two_way_config/manual_only."
+  },
+  "sync_modes": {
+    "single_database": {
+      "description": "Public and intranet app instances point to one PostgreSQL database through a private network or VPN.",
+      "best_for": "One trusted network or early deployment where operational simplicity matters.",
+      "risks": [
+        "Network dependency",
+        "Public app must never expose database port",
+        "Intranet data boundary may be harder to reason about"
+      ]
+    },
+    "database_replication": {
+      "description": "Use PostgreSQL physical or logical replication between databases.",
+      "best_for": "Read-only replicas or infrastructure teams comfortable operating PostgreSQL replication.",
+      "risks": [
+        "Conflict handling is hard for two writable databases",
+        "Schema migration order must be strict",
+        "Sensitive intranet data may replicate unintentionally"
+      ]
+    },
+    "app_level_outbox_inbox": {
+      "description": "Recommended for public plus intranet. Each app writes local DB; selected objects sync through signed export/import packages or internal API.",
+      "best_for": "Clear security boundaries, one-way or controlled two-way sync, auditability.",
+      "core_tables": [
+        "sync_outbox",
+        "sync_inbox",
+        "sync_runs",
+        "sync_conflicts"
+      ]
+    }
+  },
+  "recommended_flow": {
+    "public_to_intranet": [
+      "data_sources public-safe config",
+      "raw_items from public sources",
+      "news_items",
+      "dedupe_groups",
+      "recommendation_items",
+      "generated_news if not sensitive",
+      "export manifests and processing metadata"
+    ],
+    "intranet_only": [
+      "users",
+      "roles",
+      "comments",
+      "ratings",
+      "editorial decisions",
+      "internal requirements",
+      "assigned tasks",
+      "intranet-only source credentials",
+      "company SQL export jobs"
+    ],
+    "intranet_to_public": [
+      "non-sensitive data_source config changes if explicitly approved",
+      "taxonomy/domain pack updates if managed outside Git",
+      "aggregate source quality scores without user details if explicitly approved"
+    ]
+  },
+  "sync_safety_rules": [
+    "Objects with visibility_scope = restricted must never sync automatically.",
+    "Objects with visibility_scope = internal must not sync to public by default.",
+    "Secrets, tokens, cookies and credentials must be referenced by credential_ref and never included in sync packages.",
+    "Public-to-intranet sync is allowed for public raw/news/recommendation data.",
+    "Intranet-to-public sync requires explicit admin approval and must be aggregate or non-sensitive config only."
+  ],
+  "implementation_contract": {
+    "tables": {
+      "sync_outbox": [
+        "id",
+        "instance_id",
+        "event_id",
+        "object_type",
+        "object_global_id",
+        "operation",
+        "payload_json",
+        "payload_hash",
+        "visibility_scope",
+        "sync_policy",
+        "target_environment",
+        "status",
+        "created_at",
+        "exported_at",
+        "error_message"
+      ],
+      "sync_inbox": [
+        "id",
+        "source_instance_id",
+        "event_id",
+        "object_type",
+        "object_global_id",
+        "payload_hash",
+        "status",
+        "received_at",
+        "applied_at",
+        "error_message"
+      ],
+      "sync_runs": [
+        "id",
+        "direction",
+        "mode",
+        "status",
+        "source_instance_id",
+        "target_instance_id",
+        "manifest_json",
+        "started_at",
+        "finished_at",
+        "created_by"
+      ],
+      "sync_conflicts": [
+        "id",
+        "sync_run_id",
+        "object_type",
+        "object_global_id",
+        "local_revision",
+        "incoming_revision",
+        "local_json",
+        "incoming_json",
+        "conflict_reason",
+        "resolution_status",
+        "resolved_by",
+        "resolved_at"
+      ]
+    },
+    "package_format": {
+      "archive": "zip",
+      "manifest": "manifest.json",
+      "record_format": "jsonl envelope",
+      "required_envelope_fields": [
+        "event_id",
+        "object_type",
+        "object_global_id",
+        "operation",
+        "revision",
+        "content_hash",
+        "visibility_scope",
+        "sync_policy",
+        "payload"
+      ]
+    },
+    "first_phase_api": [
+      "POST /api/sync/packages/export",
+      "GET /api/sync/packages/{package_id}/download",
+      "POST /api/sync/packages/import",
+      "GET /api/sync/runs",
+      "GET /api/sync/conflicts",
+      "POST /api/sync/conflicts/{id}/resolve"
+    ]
+  },
+  "conflict_policy": {
+    "raw_items": "append_or_upsert_by_global_id_and_content_hash",
+    "news_items": "upsert_by_global_id",
+    "data_sources": "revision_with_human_conflict_review",
+    "users_and_feedback": "do_not_sync_from_intranet_to_public_by_default",
+    "requirements_and_tasks": "intranet_only_by_default"
+  }
+}

@@ -1,0 +1,116 @@
+{
+  "schema_version": 1,
+  "description": "Stable extension points. New capabilities should plug into these interfaces instead of changing the core pipeline.",
+  "core_rule": "Core business tables and pipeline stages stay stable. New source types, enrichers, scorers, auth providers, exporters, and report generators are added by registration.",
+  "extension_points": {
+    "source_adapter": {
+      "purpose": "Fetch or receive data from one source type and persist canonical raw_items.",
+      "registry_key": "source_type",
+      "must_not_do": [
+        "global final dedupe",
+        "recommendation",
+        "daily report adoption",
+        "company SQL export",
+        "physical deletion of raw payloads"
+      ],
+      "required_output": "RawItemInput matching config/contracts/adapter_pipeline.json canonical_raw_item_fields",
+      "first_phase_implementations": [
+        "RssFeedAdapter",
+        "ManualNewsAdapter",
+        "WiseflowReadInfoAdapter skeleton",
+        "PageListingAdapter skeleton",
+        "PaperMetadataEnricher skeleton"
+      ]
+    },
+    "content_extractor": {
+      "purpose": "Optionally enrich raw_items with extracted article body, language, images, author, and metadata.",
+      "registry_key": "extractor_name or source_type",
+      "input": "raw_items",
+      "output": "updated raw_items.raw_content and raw_items.source_specific_json",
+      "rule": "Extraction enriches raw_items but must keep raw_payload_json unchanged."
+    },
+    "normalizer": {
+      "purpose": "Map raw_items into news_items.",
+      "registry_key": "source_type optional hook, otherwise default normalizer",
+      "required_output": "news_items with source_url or source_title plus created_at for dedupe eligibility",
+      "rule": "Normalizer can derive canonical_url, content, created_at, focus_id, and dedupe_key. It must keep raw_item_id."
+    },
+    "dedupe_strategy": {
+      "purpose": "Group duplicate news_items and select representative winner.",
+      "registry_key": "strategy_name",
+      "first_phase_strategy": "hard_url_then_title_date",
+      "input": "news_items",
+      "output": "dedupe_groups, dedupe_group_items, news_items.active, news_items.duplicate_of",
+      "rule": "Hard dedupe only removes duplicates from active recommendation flow; it never deletes raw_items."
+    },
+    "scoring_strategy": {
+      "purpose": "Score deduped winners for recommendation.",
+      "registry_key": "algorithm_version",
+      "input": "active news_items plus feedback/source/heat signals",
+      "output": "recommendation_runs and recommendation_items",
+      "required_scores": [
+        "quality_score",
+        "topic_score",
+        "freshness_score",
+        "feedback_score",
+        "diversity_score",
+        "source_score",
+        "heat_score",
+        "final_score"
+      ]
+    },
+    "generator_provider": {
+      "purpose": "Generate structured Chinese news copy from recommended news items.",
+      "registry_key": "model_provider plus model_name plus prompt_version",
+      "input": "news_items, raw_items, recommendation_items",
+      "output": "generated_news",
+      "rule": "Generated sourceUrl and created_at are not trusted; final values are forced from news_items/raw_items."
+    },
+    "report_builder": {
+      "purpose": "Build daily reports, weekly reports, and topic reports from recommendation or editor-selected items.",
+      "registry_key": "report_type",
+      "output": "daily_report_items, weekly_report_items, topic_report_items",
+      "rule": "Report-level edits are stored as editor overrides, not by mutating raw_items or generated_news."
+    },
+    "exporter": {
+      "purpose": "Export adopted report items to external formats.",
+      "registry_key": "export_type",
+      "first_phase_exporter": "company_daily_sql",
+      "input": "published report items joined to generated_news, news_items, raw_items",
+      "output": "export_jobs and export_job_items",
+      "rule": "Company SQL exporter must follow config/contracts/news_sql_mapping.json exactly."
+    },
+    "auth_adapter": {
+      "purpose": "Resolve an external identity from public login, OIDC, SAML, or trusted intranet headers.",
+      "registry_key": "AUTH_MODE",
+      "first_phase_modes": [
+        "local",
+        "public_password",
+        "intranet_header"
+      ],
+      "output": "ExternalIdentity",
+      "rule": "Auth adapter only proves identity. Local RBAC decides permissions."
+    },
+    "domain_pack": {
+      "purpose": "Add a new strategic intelligence board such as hardware, semiconductor, robotics, policy, market, or competitor without changing the core pipeline.",
+      "registry_key": "domain_code",
+      "input_files": [
+        "sources.json",
+        "taxonomy.json",
+        "scoring.json",
+        "report_templates.json",
+        "export_mapping.json"
+      ],
+      "rule": "Domain packs configure sources, labels, scoring weights, reports and exports. They must not fork the backend or frontend codebase."
+    },
+    "sync_adapter": {
+      "purpose": "Move selected objects between public, intranet and local deployments.",
+      "registry_key": "sync_mode",
+      "first_phase_modes": [
+        "manual_export_import",
+        "app_level_outbox_inbox"
+      ],
+      "rule": "Public-to-intranet sync can move public signals and recommendations. Intranet users, feedback, requirements and tasks stay intranet-only by default."
+    }
+  }
+}

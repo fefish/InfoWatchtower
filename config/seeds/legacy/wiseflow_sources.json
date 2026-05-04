@@ -1,0 +1,21 @@
+[
+  {
+    "source_type": "wiseflow",
+    "name": "Wiseflow Local Backend",
+    "enabled": true,
+    "default_focus_id": null,
+    "base_url_env": "SOURCE_API_BASE",
+    "read_info_url_env": "SOURCE_READ_INFO_URL",
+    "page_size_env": "READ_INFO_PAGE_SIZE",
+    "state_path_env": "SYNC_STATE_PATH",
+    "lookback_seconds_env": "SYNC_LOOKBACK_SECONDS",
+    "required_full_sync_endpoint": "POST /read_info",
+    "do_not_use_for_full_sync": "GET /list_info",
+    "notes": "Legacy primary raw-source aggregator. /list_info is limited and must not be used for full ingestion; use POST /read_info paging instead.",
+    "metadata": {
+      "legacy_pipeline": "references/legacy-auto-sync-20260412/pipelines/sync_to_remote.py",
+      "legacy_candidate_loader": "references/legacy-auto-sync-20260412/pipelines/prepare_sql_candidates.py",
+      "remote_mirror_url_env": "REMOTE_SYNC_URL"
+    }
+  }
+]

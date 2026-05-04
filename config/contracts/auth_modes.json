@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "description": "Unified authentication modes for public deployment and company intranet deployment.",
+  "principal_key": "employee_no_or_public_user_id",
+  "modes": {
+    "local": {
+      "purpose": "Local development and early public beta.",
+      "identity_source": "users table plus password/session",
+      "auto_provision": false
+    },
+    "public_password": {
+      "purpose": "Public internet deployment with normal login.",
+      "identity_source": "email or username plus password/session",
+      "auto_provision": false
+    },
+    "public_oidc": {
+      "purpose": "Public internet deployment through OAuth/OIDC provider.",
+      "identity_source": "OIDC claims",
+      "auto_provision": true
+    },
+    "intranet_header": {
+      "purpose": "Company intranet deployment behind trusted gateway/portal.",
+      "identity_source": "trusted request headers",
+      "auto_provision": true,
+      "default_headers": {
+        "employee_no": "X-Employee-No",
+        "display_name": "X-Employee-Name",
+        "department": "X-Department",
+        "email": "X-Email"
+      }
+    },
+    "intranet_oidc": {
+      "purpose": "Company intranet deployment through enterprise OIDC.",
+      "identity_source": "enterprise OIDC claims",
+      "auto_provision": true
+    },
+    "intranet_saml": {
+      "purpose": "Company intranet deployment through enterprise SAML.",
+      "identity_source": "SAML attributes",
+      "auto_provision": true
+    }
+  },
+  "local_user_fields": [
+    "id",
+    "external_provider",
+    "external_id",
+    "employee_no",
+    "email",
+    "username",
+    "display_name",
+    "department",
+    "status",
+    "last_login_at"
+  ],
+  "audit_snapshot_fields": [
+    "user_id",
+    "external_provider",
+    "external_id_snapshot",
+    "employee_no_snapshot",
+    "display_name_snapshot"
+  ],
+  "rbac_rule": "External identity proves who the user is; InfoWatchtower roles decide what the user can do."
+}

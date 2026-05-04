@@ -1,0 +1,16 @@
+.DS_Store
+.env
+*.env
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+node_modules/
+dist/
+build/
+.cache/
+
+# Private legacy reference materials live in the separate private repository:
+# git@github.com:fefish/InfoWatchtower-References.git
+references/legacy-auto-sync-20260412/
+references/private/

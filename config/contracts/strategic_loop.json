@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "description": "Planning department operating loop from external signals to internal requirements.",
+  "pipeline": [
+    "external_signal",
+    "normalized_news",
+    "deduped_signal",
+    "recommended_signal",
+    "editorial_interpretation",
+    "insight",
+    "strategic_implication",
+    "opportunity_or_risk",
+    "internal_requirement",
+    "assigned_task",
+    "feedback_to_source_and_scoring"
+  ],
+  "core_objects": {
+    "signals": "External facts and observed industry moves. Stored through raw_items/news_items.",
+    "insights": "Human or model-assisted interpretation of why the signal matters.",
+    "strategic_implications": "What the signal may mean for company strategy, product, capability, competition or risk.",
+    "requirements": "Internal planning/product/research/operation needs created from one or more insights.",
+    "tasks": "Assigned follow-up work for owners, with status and due date."
+  },
+  "required_links": [
+    "insights.news_item_id -> news_items.id",
+    "insights.raw_item_id -> raw_items.id",
+    "strategic_implications.insight_id -> insights.id",
+    "requirements.source_implication_id -> strategic_implications.id",
+    "tasks.requirement_id -> requirements.id"
+  ],
+  "rule": "A requirement must be traceable back to the external signals that motivated it."
+}

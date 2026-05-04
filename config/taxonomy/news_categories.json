@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "description": "Primary news category list used by the legacy generation prompt and company SQL export.",
+  "categories": [
+    "AI Infra",
+    "AI 应用",
+    "测评技术",
+    "大厂动态",
+    "模型",
+    "算法",
+    "推理加速",
+    "训练技术",
+    "智能体",
+    "基础竞争力"
+  ],
+  "aliases": {
+    "AI应用": "AI 应用",
+    "AI Agent": "智能体",
+    "AI 智能体": "智能体",
+    "AI智能体": "智能体"
+  },
+  "fallback": {
+    "category_not_in_list_and_text_mentions_agent": "智能体",
+    "category_not_in_list": "AI 应用"
+  }
+}

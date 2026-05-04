@@ -1,0 +1,50 @@
+[
+  {
+    "name": "Anthropic Official Pages",
+    "type": "listing",
+    "page_url": "https://www.anthropic.com/news",
+    "href_contains": ["/news/"],
+    "exclude_exact": ["https://www.anthropic.com/news"],
+    "max_links": 8,
+    "default_focus_id": 1,
+    "backfill_days": 45
+  },
+  {
+    "name": "Mistral Official Pages",
+    "type": "listing",
+    "page_url": "https://mistral.ai/news",
+    "href_contains": ["/news/"],
+    "exclude_exact": ["https://mistral.ai/news"],
+    "max_links": 8,
+    "default_focus_id": 1,
+    "backfill_days": 45
+  },
+  {
+    "name": "Qwen Official Pages",
+    "type": "manual",
+    "default_focus_id": 1,
+    "backfill_days": 45,
+    "articles": [
+      {
+        "url": "https://qwen.ai/blog?id=qwen3.6-27b",
+        "created_hint": "2026-04-22T00:00:00Z"
+      },
+      {
+        "url": "https://qwen.ai/blog?id=qwen3.6",
+        "created_hint": "2026-04-02T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "name": "Moonshot/Kimi Official Pages",
+    "type": "manual",
+    "default_focus_id": 1,
+    "backfill_days": 45,
+    "articles": [
+      {
+        "url": "https://www.kimi.com/blog/kimi-k2-6",
+        "created_hint": "2026-04-21T00:00:00Z"
+      }
+    ]
+  }
+]
