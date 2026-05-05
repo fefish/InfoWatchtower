@@ -2,7 +2,7 @@
 
 规划部全自动热点追踪与情报生产系统。
 
-当前状态：阶段 0-4 已完成。阶段 3 已完成旧种子源导入、共享数据源池、默认工作台源链接、工作台统一标签策略、adapter 框架、手动 RSS 抓取到 `raw_items`、工作台级 ingestion run API，以及 Redis/RQ worker + scheduler 调度入口。阶段 4 已完成 `raw_items -> news_items -> dedupe_groups` 最小闭环：可按工作台标准化 raw、生成 canonical URL 与 dedupe key、执行工作台隔离硬去重，并查询 winner/loser。前端已切到浅色工作台壳和数据库驱动导航，数据源页采用信息流式共享源列表，右侧展示工作台统一一级/二级标签策略，单个源只编辑启用、权重和日限。`planning_intel` 与 `ai_tools` 的标签策略已在后端隔离。下一步进入阶段 5 的推荐、日报草稿和反馈链路。
+当前状态：阶段 0-5 已完成最小闭环。阶段 3 已完成旧种子源导入、共享数据源池、默认工作台源链接、工作台统一标签策略、adapter 框架、手动 RSS 抓取到 `raw_items`、工作台级 ingestion run API，以及 Redis/RQ worker + scheduler 调度入口。阶段 4 已完成 `raw_items -> news_items -> dedupe_groups`：可按工作台标准化 raw、生成 canonical URL 与 dedupe key、执行工作台隔离硬去重，并查询 winner/loser。阶段 5 已完成推荐 run、可解释推荐分、`generated_news`、日报草稿、发布、日报条目编辑和点赞/评分/评论最小 API；前端 `/daily-reports` 已可生成并查看日报草稿。`planning_intel` 与 `ai_tools` 的标签策略已在后端隔离。下一步进入候选池/日报编辑体验增强和阶段 6 公司 SQL 导出。
 
 ## 接手入口
 
@@ -86,7 +86,7 @@ make build
 
 浏览器访问 `http://127.0.0.1:5173/sources`，使用 `admin/password` 登录。验收点：
 
-- 首页显示当前阶段为阶段 4。
+- 首页显示当前阶段为阶段 5。
 - 数据源页标题为“数据源管理”，共享源列表标题为“活跃数据源”。
 - 数据源页右侧展示工作台统一标签策略，规划部默认使用旧系统兼容的 10 个一级标签，AI 工具桌面默认使用独立工具标签；一级/二级标签都支持新增、重命名、删除，且不在单个源里维护标签。
 - 数据源页每个源都有“配置”入口，可设置当前工作台启用状态、权重和日限；配置开关文案为“启用”。
@@ -99,3 +99,5 @@ make build
 - `POST /api/news-items/normalize` 可把当前工作台已启用源的 raw 标准化为 news，并重建去重组。
 - `GET /api/news-items?workspace_code=planning_intel` 可看到标准化新闻和 `raw_item_id` 追溯 ID。
 - `GET /api/dedupe-groups?workspace_code=planning_intel` 可看到去重 winner/loser。
+- `/daily-reports` 页面可点击“生成日报草稿”，调用 `POST /api/recommendation/runs`，生成推荐 run、结构化稿和日报草稿。
+- `GET /api/daily-reports?workspace_code=planning_intel` 可看到日报草稿和条目；草稿可发布，条目可编辑并支持点赞、评分、评论。

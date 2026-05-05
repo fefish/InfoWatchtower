@@ -225,6 +225,19 @@ GET  /api/dedupe-groups?workspace_code=planning_intel
 }
 ```
 
+阶段 5 当前会在推荐 run 中为 selected 项自动创建 `generated_news` 和日报草稿条目。草稿条目默认：
+
+```json
+{
+  "adoption_status": 2,
+  "sort_order": 1,
+  "editor_title": null,
+  "editor_summary": null
+}
+```
+
+注意：`adoption_status = 2` 只是表示它已进入日报草稿的采信集合；标准 SQL 导出仍然要求日报本身 `status = published`。
+
 所以仍能追溯回模型原稿和原始数据。
 
 ## 8. 公司 SQL 导出

@@ -272,7 +272,7 @@ class SourceAdapter:
 - 单个 RSS 源可以手动触发抓取，首次创建 `raw_items`，重复抓取更新已有 raw 记录而不重复插入。
 - 可以创建工作台级 ingestion run，run 记录 source 成功/失败、拉取数、raw 新增数和 raw 更新数；`limit=0` 可用于无网络验收 API。
 - 可以启动 worker/scheduler 容器；默认 `INGESTION_SCHEDULER_ENABLED=false` 不会自动抓取，设为 `true` 后按 `INGESTION_SCHEDULER_INTERVAL_SECONDS` 入队。
-- 前端首页当前显示阶段 4；数据源页仍可验收阶段 3 的数据源管理能力，并能增删改工作台统一一级/二级标签策略、通过“配置”修改单源启用/权重/日限、通过“抓取”按钮触发单源抓取。
+- 前端首页当前显示阶段 5；数据源页仍可验收阶段 3 的数据源管理能力，并能增删改工作台统一一级/二级标签策略、通过“配置”修改单源启用/权重/日限、通过“抓取”按钮触发单源抓取。
 - 新增 source_type 只需注册 adapter。
 - adapter 输出满足 `adapter_pipeline.json` 的 raw 字段要求。
 
@@ -326,6 +326,8 @@ cd backend && ruff check app/normalization app/schemas/news.py app/api/routes/ne
 
 目标：形成可解释推荐，并能进入日报编辑。
 
+当前实现状态：已完成最小闭环。服务位于 `backend/app/recommendations/service.py`，API 位于 `backend/app/api/routes/recommendations.py` 和 `backend/app/api/routes/reports.py`，schema 位于 `backend/app/schemas/recommendations.py` 和 `backend/app/schemas/reports.py`。`POST /api/recommendation/runs` 会读取当前工作台 active winner，生成可解释推荐分，写入 `recommendation_items`，为 selected 项生成 `generated_news`，并创建或替换日报草稿。`daily_reports` 已按 `workspace_code + domain_code + day_key` 唯一，避免多个工作台同一天同板块互相覆盖。前端 `/daily-reports` 已接入生成和查看日报草稿。
+
 推荐字段：
 
 ```text
@@ -349,6 +351,7 @@ recommendation_reason
 - 推荐结果写 `recommendation_items`。
 - 生成 `generated_news` 作为日报候选。
 - 生成 `daily_reports/daily_report_items` 草稿。
+- `daily_report_items.adoption_status = 2` 表示进入日报草稿且未来发布后可被 SQL 导出；草稿未发布前不进入标准 SQL 导出。
 
 反馈：
 
@@ -363,6 +366,15 @@ recommendation_reason
 - 管理员可以把推荐项采信进日报。
 - 日报编辑只写 `daily_report_items.editor_*`。
 - 点赞、评分、评论会影响后续 `feedback_score/heat_score/source_score` 的计算输入。
+- `planning_intel` 和 `ai_tools` 同一天都能生成自己的日报草稿。
+
+已验证：
+
+```text
+cd backend && DATABASE_URL="" pytest tests/test_recommendations.py
+cd frontend && npm run build
+make migration-check
+```
 
 ## 10. 阶段 6：公司 SQL 导出
 

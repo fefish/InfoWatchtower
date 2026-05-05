@@ -235,7 +235,7 @@ AuthAdapter -> ExternalIdentity -> IdentityResolver -> users -> session/JWT -> R
 - 导入后旧源进入共享数据源池，并为所有已启用的默认工作台创建 `workspace_source_links`；源定义仍只保存一份。
 - `folo_metadata.info_category = 学术论文` 的 RSS 源导入为 `paper_rss`。
 - wiseflow 作为 `source_type=wiseflow` 单独存在，不要混成 RSS。
-- 前端首页当前显示阶段 4 进度；数据源页应能继续验收阶段 3 的增删改工作台统一一级/二级标签策略、单源启用/权重/日限、手动触发 RSS/paper RSS 抓取；单源配置里不得维护标签。
+- 前端首页当前显示阶段 5 进度；数据源页应能继续验收阶段 3 的增删改工作台统一一级/二级标签策略、单源启用/权重/日限、手动触发 RSS/paper RSS 抓取；单源配置里不得维护标签。
 - 重复抓取同一个 RSS 源时，`raw_items` 按 `(data_source_id, entry_key)` 更新，不重复插入。
 - `POST /api/ingestion/runs` 能创建工作台级抓取 run；`GET /api/ingestion/runs` 和 `GET /api/ingestion/runs/{id}` 能查看历史与详情。
 
@@ -304,6 +304,8 @@ class SourceAdapter:
 
 ### 5.8 推荐
 
+当前进度：已实现最小闭环。`POST /api/recommendation/runs` 可按工作台读取 `dedupe_groups` winner，写入 `recommendation_runs/recommendation_items`，并为 selected 推荐生成 `generated_news`。推荐分数包含 `quality_score/topic_score/freshness_score/feedback_score/diversity_score/source_score/heat_score/final_score` 和 `recommendation_reason`。
+
 实现可重跑的推荐 run。
 
 评分字段：
@@ -326,6 +328,8 @@ class SourceAdapter:
 
 ### 5.9 日报与编辑
 
+当前进度：已实现最小闭环。推荐 run 可创建或替换 `daily_reports/daily_report_items` 草稿；`GET /api/daily-reports`、`GET /api/daily-reports/{id}` 可查看日报；`PATCH /api/daily-report-items/{id}` 可编辑日报层覆盖字段；`POST /api/daily-reports/{id}/publish` 可发布。前端 `/daily-reports` 可点击生成日报草稿并展示条目。
+
 实现：
 
 - 根据推荐 run 生成日报草稿。
@@ -339,7 +343,20 @@ class SourceAdapter:
 - 原始 `generated_news` 不被覆盖。
 - 已发布日报可按时间线展示。
 
-### 5.10 公司 SQL 导出
+### 5.10 反馈
+
+当前进度：已实现日报条目的点赞、评分、评论和楼中楼最小 API：
+
+```text
+POST /api/daily-report-items/{id}/reactions
+POST /api/daily-report-items/{id}/ratings
+GET  /api/daily-report-items/{id}/comments
+POST /api/daily-report-items/{id}/comments
+```
+
+反馈会同时挂到 `daily_report_item` 和对应 `news_item`，后续推荐 run 可读取这些数据进入 `heat_score/feedback_score`。
+
+### 5.11 公司 SQL 导出
 
 实现标准导出：
 
@@ -361,7 +378,7 @@ daily_report_items.adoption_status = 2
 - SQL 使用旧系统安全写法。
 - SQL 导出任务写入 `export_jobs` 和 `export_job_items`。
 
-### 5.11 公网到内网同步骨架
+### 5.12 公网到内网同步骨架
 
 第一版先实现应用层同步骨架，不需要一开始做实时同步。
 

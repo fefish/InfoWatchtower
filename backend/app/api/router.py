@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.routes import auth, health, ingestion, news, sources, workspaces
+from app.api.routes import auth, health, ingestion, news, recommendations, reports, sources, workspaces
 
 api_router = APIRouter()
 api_router.include_router(auth.router)
@@ -9,4 +9,6 @@ api_router.include_router(sources.router)
 api_router.include_router(workspaces.router)
 api_router.include_router(ingestion.router)
 api_router.include_router(news.router)
+api_router.include_router(recommendations.router)
+api_router.include_router(reports.router)
 api_router.include_router(health.router)

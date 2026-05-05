@@ -11,7 +11,14 @@ from app.models.common import IdMixin, JsonColumn, JsonDict, ScopeMixin, SyncMix
 
 class DailyReport(IdMixin, ScopeMixin, SyncMixin, TimestampMixin, Base):
     __tablename__ = "daily_reports"
-    __table_args__ = (UniqueConstraint("domain_code", "day_key", name="uq_daily_reports_domain_day"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_code",
+            "domain_code",
+            "day_key",
+            name="uq_daily_reports_workspace_domain_day",
+        ),
+    )
 
     day_key: Mapped[str] = mapped_column(String(10), index=True)
     title: Mapped[str] = mapped_column(String(255))

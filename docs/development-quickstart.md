@@ -4,7 +4,7 @@
 
 ## 1. 当前状态
 
-当前已完成阶段 0、阶段 1、阶段 2、阶段 3 和阶段 4：
+当前已完成阶段 0、阶段 1、阶段 2、阶段 3、阶段 4 和阶段 5 最小闭环：
 
 - 后端 FastAPI 骨架。
 - `/healthz` 健康检查。
@@ -21,8 +21,9 @@
 - 工作台模型按共享主链路实现；工作台列表来自 `workspaces`，页面来自 `workspace_sections`，所有工作台共享数据源管理、候选池、日报、周报和导出能力。差异配置通过 `workspaces.config_json.label_policy` 的工作台统一一级/二级标签策略、`workspace_source_links` 的源启用/权重/日限和可选插件模块完成。
 - 阶段 3 已有共享数据源导入 API、数据源页面、工作台统一标签策略 API、工作台源链接配置 API、工作台级 ingestion run API、Redis/RQ worker + scheduler 调度入口、adapter registry、RSS adapter 和 wiseflow/page/paper/manual 骨架；旧种子源导入后会为所有已启用默认工作台创建源链接；RSS/paper RSS 源可通过手动 API 抓取并幂等写入 `raw_items`，也可通过 ingestion run 按工作台批量触发。前端已切到浅色工作台壳、数据库驱动导航、信息流式数据源列表和紧凑工作台标签策略面板。
 - 阶段 4 已有 raw 到 news 标准化与硬去重 API：`POST /api/news-items/normalize`、`GET /api/news-items`、`GET /api/dedupe-groups`。同一共享 raw 可以被不同工作台各自标准化；去重组按 `workspace_code + dedupe_key` 隔离；winner/loser 会回写到 `news_items.active` 和 `duplicate_of_id`。
+- 阶段 5 已有推荐 run、可解释推荐分、`generated_news`、日报草稿、发布、条目编辑和点赞/评分/评论最小 API；前端 `/daily-reports` 可点击生成日报草稿并展示条目。
 
-业务流程 API 还未实现：推荐执行、日报编辑页面和 SQL 导出会在后续阶段逐步补齐。
+业务流程 API 还未实现：候选池完整页面、日报深度编辑页面、周报和 SQL 导出会在后续阶段逐步补齐。
 
 ## 2. 后端本地运行
 
@@ -141,7 +142,7 @@ curl http://localhost:5173/healthz
 
 1. 打开 `http://127.0.0.1:5173/sources`。
 2. 使用 `admin/password` 登录。
-3. 首页应显示当前阶段为阶段 4；本节验收的是仍然可用的数据源与抓取能力。
+3. 首页应显示当前阶段为阶段 5；本节验收的是仍然可用的数据源与抓取能力。
 4. 数据源页标题应为“数据源管理”，共享源列表标题应为“活跃数据源”。
 5. 数据源页右侧应显示工作台统一标签策略，规划部默认含旧系统兼容的 10 个一级标签；AI 工具桌面默认含“工具新功能、工具新案例、工具新技术”，且每个一级标签下都有 `cursor/claude code/opencode/codex` 二级标签；一级/二级标签都支持新增、重命名、删除，且单个源配置里不出现标签维护。
 6. 数据源页应显示共享源 113、当前工作台启用 79。
@@ -228,6 +229,47 @@ curl -fsS -b /tmp/iw_cookie.txt \
 - 不同 URL 的相似标题第一版不自动合并。
 - 列表返回中必须带 `raw_item_id`，后续日报和 SQL 导出可沿链路追溯回 `raw_items.raw_payload_json`。
 
+## 5.3 当前阶段 5 验收
+
+本阶段已经做到：从去重 winner 生成推荐 run、推荐分、`generated_news` 和日报草稿，并支持发布、条目编辑、点赞、评分、评论。
+
+前端验收：
+
+1. 确保至少已有 raw 标准化和去重 winner。
+2. 打开 `http://127.0.0.1:5173/daily-reports`。
+3. 点击“生成日报草稿”。
+4. 页面应显示最新日报，条目展示分类、标题、摘要、来源 URL、采信状态、点赞和评论数。
+
+API 验收：
+
+```bash
+curl -fsS -b /tmp/iw_cookie.txt \
+  -H 'Content-Type: application/json' \
+  -X POST 'http://127.0.0.1:8000/api/recommendation/runs' \
+  -d '{"workspace_code":"planning_intel","limit":15,"source_daily_limit":2,"create_daily_draft":true}'
+
+curl -fsS -b /tmp/iw_cookie.txt \
+  'http://127.0.0.1:8000/api/daily-reports?workspace_code=planning_intel'
+
+curl -fsS -b /tmp/iw_cookie.txt \
+  -H 'Content-Type: application/json' \
+  -X PATCH 'http://127.0.0.1:8000/api/daily-report-items/{item_id}' \
+  -d '{"editor_title":"编辑后的标题","adoption_status":2}'
+
+curl -fsS -b /tmp/iw_cookie.txt \
+  -H 'Content-Type: application/json' \
+  -X POST 'http://127.0.0.1:8000/api/daily-report-items/{item_id}/ratings' \
+  -d '{"score":5}'
+```
+
+通过标准：
+
+- 推荐只处理 `active=true` 的去重 winner。
+- selected 数量不超过每日上限，且单源数量不超过同源日限。
+- 日报编辑写 `daily_report_items.editor_*`，不覆盖 `generated_news`。
+- 日报可沿 `daily_report_items -> generated_news -> recommendation_items -> news_items -> raw_items` 追溯。
+- `planning_intel` 和 `ai_tools` 同一天都能生成自己的日报草稿。
+
 ## 6. 下一阶段
 
-阶段 4 已完成 raw 到 news 标准化与工作台隔离硬去重。下一步进入阶段 5 的推荐、日报草稿和反馈链路。
+阶段 5 已完成推荐、日报草稿和反馈链路的最小闭环。下一步进入候选池/日报编辑体验增强和阶段 6 公司 SQL 导出。

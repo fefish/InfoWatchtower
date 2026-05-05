@@ -166,7 +166,7 @@ workspace_sections     当前工作台启用的页面
 - 统一候选池，展示 `dedupe_groups` 的 winner，不直接展示未去重 raw 流。
 - 支持按 workspace、domain、source_type、标签、推荐状态、采信状态、日期、关键词筛选。
 - 候选项必须能展开同组来源、重复项、标签、推荐分、热度分和追溯链路。
-- 当前后端已提供阶段 4 API：`POST /api/news-items/normalize`、`GET /api/news-items`、`GET /api/dedupe-groups`。前端候选池页面尚未替换占位页，进入阶段 5 前应先把 winner/loser 查询结果接入页面。
+- 当前后端已提供阶段 4 API：`POST /api/news-items/normalize`、`GET /api/news-items`、`GET /api/dedupe-groups`。前端候选池页面尚未替换占位页，阶段 5 后续增强应把 winner/loser 查询结果接入页面。
 
 `/recommendations`：
 
@@ -175,6 +175,7 @@ workspace_sections     当前工作台启用的页面
 `/daily-reports/:id`：
 
 - 日报时间线、点赞、评分、评论、楼中楼。
+- 当前后端已提供 `GET /api/daily-reports`、`GET /api/daily-reports/{id}`、`POST /api/daily-reports/{id}/publish`、`PATCH /api/daily-report-items/{id}` 以及日报条目的点赞/评分/评论 API；前端 `/daily-reports` 已能生成并查看日报草稿。
 
 `/daily-reports/:id/edit`：
 

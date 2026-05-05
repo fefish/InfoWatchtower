@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from "vue-router";
 
 import AppShell from "../layouts/AppShell.vue";
+import DailyReportsPage from "../pages/DailyReportsPage.vue";
 import DashboardPage from "../pages/DashboardPage.vue";
 import LoginPage from "../pages/LoginPage.vue";
 import PlaceholderPage from "../pages/PlaceholderPage.vue";
@@ -12,7 +13,6 @@ const plannedPages = [
   ["sources/:id", "数据源详情", "展示单个数据源的抓取规则、近期 raw items 和错误记录。"],
   ["news", "候选池", "展示去重 winner、重复来源、标签、推荐分和采信状态。"],
   ["recommendations", "推荐运行", "展示推荐 run、分数拆解、推荐原因和日报候选。"],
-  ["daily-reports", "日报", "按时间线展示已发布日报、点赞、评分和评论。"],
   ["daily-reports/:id", "日报详情", "展示某一天日报的完整条目、反馈和追溯信息。"],
   ["daily-reports/:id/edit", "日报编辑", "管理员采信、剔除、排序、编辑并发布日报。"],
   ["weekly-reports", "周报", "周报候选、采信和自动生成能力将在这里实现。"],
@@ -53,6 +53,11 @@ export const router = createRouter({
           path: "sources",
           name: "sources",
           component: SourcesPage
+        },
+        {
+          path: "daily-reports",
+          name: "daily-reports",
+          component: DailyReportsPage
         },
         ...plannedPages.map(([path, title, description]) => ({
           path,

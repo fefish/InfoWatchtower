@@ -97,6 +97,33 @@
       "all_items": "raw_items remain preserved; dedupe never deletes raw records"
     }
   },
+  "recommendation_stage": {
+    "runs_after": "dedupe_grouping",
+    "runs_before": "generate_structured_news",
+    "current_api": "POST /api/recommendation/runs",
+    "candidate_rule": "Only active dedupe winners from the requested workspace can enter a recommendation run. Losers remain traceable but are not recommended directly.",
+    "default_limit": 15,
+    "default_source_daily_limit": 2,
+    "score_dimensions": [
+      "quality_score",
+      "topic_score",
+      "freshness_score",
+      "feedback_score",
+      "diversity_score",
+      "source_score",
+      "heat_score",
+      "final_score"
+    ],
+    "writes": [
+      "recommendation_runs",
+      "recommendation_items",
+      "generated_news for selected recommendation_items",
+      "daily_reports and daily_report_items when create_daily_draft is true"
+    ],
+    "lineage_rule": "generated_news.content_json.source must preserve news_item_id, raw_item_id and data_source_id so adopted daily report items can be traced back to raw_items.raw_payload_json.",
+    "adoption_rule": "Recommendation creates draft daily_report_items with adoption_status = 2 for selected items. Editors may later change adoption_status on daily_report_items; news_items and raw_items are never overwritten.",
+    "workspace_scope_rule": "Daily reports are unique by workspace_code + domain_code + day_key so multiple workspaces can generate same-day reports independently."
+  },
   "soft_clustering_stage": {
     "status": "phase_2",
     "purpose": "Group same-topic items across different URLs without automatically deleting them.",
