@@ -9,7 +9,7 @@ from app.core.database import Base, get_engine
 from app.main import create_app
 from app.models.identity import Role, User
 from app.models.labels import Label, LabelSet
-from app.models.workspace import Workspace, WorkspaceMembership
+from app.models.workspace import Workspace, WorkspaceMembership, WorkspaceSection
 
 
 def make_client(monkeypatch, tmp_path, **env):
@@ -56,6 +56,54 @@ def test_auth_seed_creates_default_workspaces(monkeypatch, tmp_path):
         assert [workspace.code for workspace in workspaces] == ["ai_tools", "planning_intel"]
         memberships = session.scalars(select(WorkspaceMembership)).all()
         assert len(memberships) == 2
+        for workspace in workspaces:
+            enabled_sections = {
+                section.section_key
+                for section in session.scalars(
+                    select(WorkspaceSection).where(
+                        WorkspaceSection.workspace_id == workspace.id,
+                        WorkspaceSection.enabled.is_(True),
+                    ),
+                ).all()
+            }
+            assert {
+                "dashboard",
+                "source_management",
+                "candidate_pool",
+                "daily_reports",
+                "weekly_reports",
+                "exports",
+                "users",
+                "audit_logs",
+            }.issubset(enabled_sections)
+            assert {"sources", "topics", "tool_catalog", "tool_runs"}.isdisjoint(enabled_sections)
+
+
+def test_authenticated_user_can_load_workspace_sections(monkeypatch, tmp_path):
+    client, _ = make_client(monkeypatch, tmp_path, AUTH_MODE="public_password")
+    login = client.post("/api/auth/login", json={"username": "admin", "password": "password"})
+    assert login.status_code == 200
+
+    workspaces = client.get("/api/workspaces")
+    assert workspaces.status_code == 200
+    assert [item["code"] for item in workspaces.json()] == ["planning_intel", "ai_tools"]
+
+    sections = client.get("/api/workspaces/ai_tools/sections")
+    assert sections.status_code == 200
+    section_keys = [item["section_key"] for item in sections.json()]
+    assert section_keys == [
+        "dashboard",
+        "source_management",
+        "candidate_pool",
+        "daily_reports",
+        "weekly_reports",
+        "exports",
+        "users",
+        "audit_logs",
+    ]
+    assert "topics" not in section_keys
+    assert "tool_catalog" not in section_keys
+    assert "tool_runs" not in section_keys
 
 
 def test_auth_seed_creates_default_label_set(monkeypatch, tmp_path):

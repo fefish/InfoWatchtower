@@ -20,7 +20,7 @@ class SeedImportResult:
 
 
 def import_legacy_sources(session: Session, seed_root: Path) -> SeedImportResult:
-    workspace = _ensure_default_workspace(session)
+    workspaces = _enabled_workspaces(session)
     sources = [
         *_load_wiseflow_sources(seed_root / "wiseflow_sources.json"),
         *_load_rss_sources(seed_root / "rss_sources.json"),
@@ -35,11 +35,13 @@ def import_legacy_sources(session: Session, seed_root: Path) -> SeedImportResult
         if existing is None:
             session.add(source)
             session.flush()
-            _ensure_workspace_source_link(session, workspace, source)
+            for workspace in workspaces:
+                _ensure_workspace_source_link(session, workspace, source)
             created += 1
         else:
             _copy_source_fields(existing, source)
-            _ensure_workspace_source_link(session, workspace, existing)
+            for workspace in workspaces:
+                _ensure_workspace_source_link(session, workspace, existing)
             updated += 1
     session.flush()
     return SeedImportResult(created=created, updated=updated, total=len(sources))
@@ -204,6 +206,13 @@ def _ensure_default_workspace(session: Session) -> Workspace:
     return workspace
 
 
+def _enabled_workspaces(session: Session) -> list[Workspace]:
+    workspaces = session.scalars(select(Workspace).where(Workspace.enabled.is_(True))).all()
+    if workspaces:
+        return workspaces
+    return [_ensure_default_workspace(session)]
+
+
 def _ensure_workspace_source_link(
     session: Session,
     workspace: Workspace,
@@ -222,15 +231,23 @@ def _ensure_workspace_source_link(
             domain_code=source.domain_code,
             enabled=source.enabled,
             source_weight=1.0,
-            config_json={"label_set_codes": ["ai_sql_categories"], "origin": "legacy_seed"},
+            config_json={
+                "label_set_codes": ["ai_sql_categories"],
+                "default_label_paths": [],
+                "clustering_config": {},
+                "origin": "legacy_seed",
+            },
         )
         session.add(link)
     else:
+        config = link.config_json or {}
         link.domain_code = source.domain_code
         link.enabled = source.enabled
         link.config_json = {
-            **(link.config_json or {}),
-            "label_set_codes": (link.config_json or {}).get("label_set_codes", ["ai_sql_categories"]),
-            "origin": (link.config_json or {}).get("origin", "legacy_seed"),
+            **config,
+            "label_set_codes": config.get("label_set_codes", ["ai_sql_categories"]),
+            "default_label_paths": config.get("default_label_paths", []),
+            "clustering_config": config.get("clustering_config", {}),
+            "origin": config.get("origin", "legacy_seed"),
         }
     return link

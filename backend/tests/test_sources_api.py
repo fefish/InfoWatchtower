@@ -46,6 +46,8 @@ def test_super_admin_imports_and_lists_legacy_sources(monkeypatch, tmp_path):
     assert sources.status_code == 200
     payload = sources.json()
     assert len(payload) == 113
+    assert sum(1 for item in payload if item["workspace_link_enabled"]) == 79
+    assert {tuple(item["workspace_label_set_codes"]) for item in payload} == {("ai_sql_categories",)}
     assert {item["source_type"] for item in payload} == {
         "page_manual",
         "page_monitor",
@@ -53,6 +55,12 @@ def test_super_admin_imports_and_lists_legacy_sources(monkeypatch, tmp_path):
         "rss",
         "wiseflow",
     }
+
+    ai_tool_sources = client.get("/api/sources", params={"workspace_code": "ai_tools"})
+    assert ai_tool_sources.status_code == 200
+    ai_tool_payload = ai_tool_sources.json()
+    assert len(ai_tool_payload) == 113
+    assert sum(1 for item in ai_tool_payload if item["workspace_link_enabled"]) == 79
 
     repeated = client.post("/api/sources/import-legacy-seeds")
     assert repeated.status_code == 200

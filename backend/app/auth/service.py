@@ -50,27 +50,25 @@ WORKSPACE_DEFINITIONS = {
         "description": "行业信号、日报周报、专题洞察和内部需求闭环。",
         "workspace_type": "intelligence_workspace",
         "default_domain_code": "ai",
+        "sort_order": 10,
         "extra_sections": [],
     },
     "ai_tools": {
         "name": "AI 工具桌面",
-        "description": "同一套情报日报周报能力下，叠加 AI 工具目录和运行入口。",
+        "description": "同一套情报日报周报能力下的 AI 工具观察工作范围。",
         "workspace_type": "intelligence_workspace",
         "default_domain_code": "ai",
-        "extra_sections": [
-            ("tool_catalog", "工具目录", "tool_catalog", "/tools", 200),
-            ("tool_runs", "工具任务", "tool_run", "/tool-runs", 210),
-        ],
+        "sort_order": 20,
+        "extra_sections": [],
     },
 }
 
 CORE_WORKSPACE_SECTIONS = [
     ("dashboard", "工作台", "page", "/dashboard", 10),
-    ("sources", "数据源", "page", "/sources", 20),
+    ("source_management", "数据源管理", "page", "/sources", 20),
     ("candidate_pool", "候选池", "page", "/news", 30),
     ("daily_reports", "日报", "page", "/daily-reports", 40),
     ("weekly_reports", "周报", "page", "/weekly-reports", 50),
-    ("topics", "热点专题", "page", "/topics", 60),
     ("exports", "SQL导出", "page", "/exports", 70),
     ("users", "用户权限", "page", "/users", 80),
     ("audit_logs", "审计", "page", "/audit-logs", 90),
@@ -312,6 +310,10 @@ def _ensure_workspaces(session: Session) -> dict[str, Workspace]:
             workspace.workspace_type = definition["workspace_type"]
             workspace.default_domain_code = definition["default_domain_code"]
             workspace.enabled = True
+        workspace.config_json = {
+            **(workspace.config_json or {}),
+            "sort_order": definition["sort_order"],
+        }
         _ensure_workspace_sections(
             session,
             workspace,
@@ -327,6 +329,7 @@ def _ensure_workspace_sections(
     section_definitions: list[tuple[str, str, str, str, int]],
 ) -> None:
     existing = {section.section_key: section for section in workspace.sections}
+    desired_keys = {section_key for section_key, *_ in section_definitions}
     for section_key, name, section_type, route_path, sort_order in section_definitions:
         section = existing.get(section_key)
         if section is None:
@@ -345,6 +348,11 @@ def _ensure_workspace_sections(
             section.section_type = section_type
             section.route_path = route_path
             section.sort_order = sort_order
+            section.enabled = True
+
+    for section_key, section in existing.items():
+        if section_key not in desired_keys:
+            section.enabled = False
 
 
 def _ensure_super_admin_workspace_memberships(
@@ -417,11 +425,15 @@ def _ensure_default_label_sets(session: Session) -> None:
                 label_set=label_set,
                 code=category,
                 name=category,
+                label_level=1,
+                parent_label_id=None,
                 sort_order=index,
                 enabled=True,
             )
             session.add(label)
         else:
             label.name = category
+            label.label_level = 1
+            label.parent_label_id = None
             label.sort_order = index
             label.enabled = True

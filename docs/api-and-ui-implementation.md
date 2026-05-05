@@ -25,13 +25,15 @@ POST /api/auth/login
 POST /api/auth/logout
 GET  /api/auth/me
 
-GET  /api/data-sources
-POST /api/data-sources
+GET  /api/workspaces
+GET  /api/workspaces/{workspace_code}/sections
+
+GET  /api/sources?workspace_code={workspace_code}
+POST /api/sources/import-legacy-seeds
 GET  /api/data-sources/{id}
 PATCH /api/data-sources/{id}
 POST /api/data-sources/{id}/enable
 POST /api/data-sources/{id}/disable
-POST /api/data-sources/import-legacy
 
 POST /api/ingestion/runs
 GET  /api/ingestion/runs
@@ -66,8 +68,6 @@ POST /api/comments/{id}/replies
 
 GET  /api/weekly-reports
 POST /api/weekly-reports
-GET  /api/topics
-POST /api/topics
 GET  /api/requirements
 POST /api/requirements
 PATCH /api/requirements/{id}
@@ -98,6 +98,15 @@ GET  /api/audit-logs
 
 第一版打开后就是工作台，不做营销首页。
 
+第一版导航必须从后端工作台配置读取：
+
+```text
+workspaces             工作台列表
+workspace_sections     当前工作台启用的页面
+```
+
+前端可以保留短期静态 fallback，但不能把工具目录、工具任务、独立专题等页面硬编码为默认可见。
+
 ```text
 /login
 /dashboard
@@ -110,7 +119,6 @@ GET  /api/audit-logs
 /daily-reports/:id
 /daily-reports/:id/edit
 /weekly-reports
-/topics
 /requirements
 /tasks
 /exports
@@ -128,7 +136,8 @@ GET  /api/audit-logs
 `/sources`：
 
 - 数据源列表展示共享源池，以及当前工作台是否启用该源。
-- 数据源配置页支持工作台级启停、domain、权重、每日上限、标签集和自动打标策略。
+- `GET /api/sources?workspace_code=...` 返回共享源池，并附带当前工作台的 `workspace_link_enabled`、`workspace_source_weight`、`workspace_daily_limit`、`workspace_label_set_codes`、`workspace_default_label_paths`、`workspace_clustering_config`。
+- 数据源配置页支持工作台级启停、domain、权重、每日上限、一级标题、二级标题、聚类推荐配置和自动打标策略。
 - 数据源真实定义只保存一份；多个工作台复用时通过 `workspace_source_links` 配置差异。
 
 `/sources/:id`：
@@ -156,10 +165,6 @@ GET  /api/audit-logs
 `/weekly-reports`：
 
 - 周报候选、采信、排序、草稿生成、发布。
-
-`/topics`：
-
-- 热点专题、专题时间线、关联新闻、关联任务。
 
 `/requirements` 和 `/tasks`：
 

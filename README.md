@@ -2,7 +2,7 @@
 
 规划部全自动热点追踪与情报生产系统。
 
-当前状态：阶段 2 已完成登录、身份适配和 RBAC 最小闭环；已收束工作台共享主链路模型；阶段 3 正在实现共享数据源导入和 adapter 框架。
+当前状态：阶段 2 已完成登录、身份适配和 RBAC 最小闭环；阶段 3 已完成旧种子源导入、共享数据源池、默认工作台源链接和 adapter 框架；前端工作台导航已改为数据库驱动，数据源页已能展示当前工作台的源启用和标签/聚类配置入口。下一步继续阶段 3 的真实抓取任务，然后进入阶段 4 的 raw 入库、标准化与去重。
 
 ## 接手入口
 
@@ -39,7 +39,7 @@
 
 当前登录能力：支持 `local/public_password/intranet_header` 三种入口，统一落到本地 `users` 和 `roles`；本地 Docker 默认开发账号为 `admin/password`，生产环境必须替换 `AUTH_SESSION_SECRET` 和 `AUTH_BOOTSTRAP_ADMIN_PASSWORD`。
 
-当前工作台模型：`planning_intel` 和 `ai_tools` 都复用数据源、候选池、日报、周报、专题和导出主链路；数据源先进入共享池，再由 `workspace_source_links` 决定每个工作台如何启用。
+当前工作台模型：工作台列表和页面已由数据库 `workspaces/workspace_sections` 控制；所有工作台复用数据源管理、候选池、日报、周报和导出主链路。数据源先进入共享池，再由 `workspace_source_links` 决定每个工作台如何启用以及如何配置一级/二级标题和聚类推荐策略。
 
 ## 当前启动方式
 

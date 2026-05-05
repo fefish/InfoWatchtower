@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "description": "Workspace, section and domain model for supporting multiple work scopes without forking the intelligence pipeline.",
-  "core_rule": "Every workspace keeps the core intelligence modules: sources, candidate pool, daily reports, weekly reports, topics, exports, users and audit. Workspace-specific modules are additive only.",
+  "core_rule": "Every workspace keeps the core intelligence modules: source management, candidate pool, daily reports, weekly reports, SQL exports, users and audit. Optional modules are database-registered and disabled by default.",
   "concepts": {
     "workspace": {
-      "purpose": "A user-facing work scope, such as the planning intelligence workspace or an AI tools workspace that still uses the same intelligence pipeline.",
+      "purpose": "A user-facing work scope that still uses the same intelligence pipeline.",
       "stable_key": "workspace_code",
       "examples": [
         "planning_intel",
@@ -19,16 +19,14 @@
       ]
     },
     "section": {
-      "purpose": "A core page or optional additive module inside a workspace.",
+      "purpose": "A database-registered core page or optional plugin page inside a workspace.",
       "stable_key": "section_key",
       "examples": [
-        "sources",
+        "source_management",
         "candidate_pool",
         "daily_reports",
         "weekly_reports",
-        "exports",
-        "tool_catalog",
-        "tool_runs"
+        "exports"
       ]
     },
     "domain": {
@@ -45,14 +43,18 @@
   },
   "core_sections": [
     "dashboard",
-    "sources",
+    "source_management",
     "candidate_pool",
     "daily_reports",
     "weekly_reports",
-    "topics",
     "exports",
     "users",
     "audit_logs"
+  ],
+  "first_phase_disabled_sections": [
+    "tool_catalog",
+    "tool_runs",
+    "standalone_topics"
   ],
   "tables": {
     "workspaces": [
@@ -98,10 +100,13 @@
   },
   "rules": [
     "Do not use domain_code as a UI workspace boundary.",
-    "Do not create a separate frontend/backend for the AI tools workspace.",
-    "Do not remove sources, candidate pool, daily reports or weekly reports from any workspace.",
+    "Do not create a separate frontend/backend for any workspace.",
+    "Do not remove source management, candidate pool, daily reports or weekly reports from any workspace.",
     "Do not duplicate data source definitions per workspace; reuse data_sources through workspace_source_links.",
-    "New work scopes are workspaces; optional pages/tools are sections; new subject areas are domains/domain packs.",
+    "New work scopes are workspaces; optional pages/tools are workspace_sections with enabled=false by default.",
+    "The frontend must load workspace list and enabled sections from backend APIs; hard-coded navigation is only a temporary scaffold.",
+    "Do not show tool_catalog, tool_runs or standalone_topics unless workspace_sections explicitly enables them.",
+    "First-level and second-level labels are the directory for clustering and recommendation; do not add a separate tool management page for that.",
     "Data APIs that list reusable sources may filter by workspace_code through workspace_source_links.",
     "Workspace membership controls access to a desktop, while global roles still control privileged actions."
   ]

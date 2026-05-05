@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Activity, CalendarDays, Database, FileText, Layers, LogOut, Radio, ShieldCheck, SquareStack, Users } from "lucide-vue-next";
-import { computed } from "vue";
+import { computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
 
 import { useSessionStore } from "../stores/session";
@@ -10,26 +10,28 @@ const router = useRouter();
 const session = useSessionStore();
 const workspace = useWorkspaceStore();
 
-const coreNavItems = [
-  { label: "工作台", icon: Activity, path: "/dashboard" },
-  { label: "数据源", icon: Radio, path: "/sources" },
-  { label: "候选池", icon: Layers, path: "/news" },
-  { label: "日报", icon: FileText, path: "/daily-reports" },
-  { label: "周报", icon: CalendarDays, path: "/weekly-reports" },
-  { label: "热点专题", icon: SquareStack, path: "/topics" },
-  { label: "SQL导出", icon: Database, path: "/exports" },
-  { label: "用户权限", icon: Users, path: "/users" },
-  { label: "审计", icon: ShieldCheck, path: "/audit-logs" }
-];
+const sectionIcons = {
+  dashboard: Activity,
+  source_management: Radio,
+  candidate_pool: Layers,
+  daily_reports: FileText,
+  weekly_reports: CalendarDays,
+  exports: Database,
+  users: Users,
+  audit_logs: ShieldCheck
+} as const;
 
-const toolNavItems = [
-  { label: "工具目录", icon: SquareStack, path: "/tools" },
-  { label: "工具任务", icon: Layers, path: "/tool-runs" }
-];
+const navItems = computed(() =>
+  workspace.sections.map((section) => ({
+    key: section.section_key,
+    label: section.name,
+    icon: sectionIcons[section.section_key as keyof typeof sectionIcons] ?? SquareStack,
+    path: section.route_path
+  }))
+);
 
-const navItems = computed(() => {
-  const extraItems = (workspace.current?.extraModules ?? []).includes("tools") ? toolNavItems : [];
-  return [...coreNavItems, ...extraItems];
+onMounted(() => {
+  void workspace.loadWorkspaces();
 });
 
 async function logout() {
@@ -59,7 +61,7 @@ async function logout() {
       </label>
 
       <nav class="nav-list" aria-label="主导航">
-        <RouterLink v-for="item in navItems" :key="item.label" class="nav-item" :to="item.path">
+        <RouterLink v-for="item in navItems" :key="item.key" class="nav-item" :to="item.path">
           <component :is="item.icon" :size="18" />
           <span>{{ item.label }}</span>
         </RouterLink>
@@ -74,8 +76,8 @@ async function logout() {
       <header class="topbar">
         <div>
           <p class="eyebrow">产业情报操作系统</p>
-          <h1>{{ workspace.current?.name }}</h1>
-          <p class="topbar-subtitle">{{ workspace.current?.description }}</p>
+          <h1>{{ workspace.current?.name || "工作台" }}</h1>
+          <p class="topbar-subtitle">{{ workspace.error || workspace.current?.description || "正在加载工作台配置" }}</p>
         </div>
         <div class="user-chip">
           <span>{{ session.user?.display_name }}</span>

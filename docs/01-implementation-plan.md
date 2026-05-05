@@ -29,9 +29,9 @@
 - 数据库迁移、后端模型、API schema、前端类型和测试必须同步更新。
 - 所有业务对象必须保留追溯链路，不能为了前端展示压扁数据。
 - adapter 可插拔，新增数据源类型不应修改 dedupe/report/export 主链路。
-- 工作台可插拔，但必须共享数据源、候选池、日报、周报、专题和导出主链路。
-- 新工作台不复制数据源定义；通过 `workspace_source_links` 启用共享源并配置权重、默认板块和标签策略。
-- 新 AI 工具入口只能作为附加模块接入，不应 fork 前端或后端，也不应移除核心情报模块。
+- 工作台可插拔，但必须共享数据源管理、候选池、日报、周报和导出主链路。
+- 新工作台不复制数据源定义；通过 `workspace_source_links` 启用共享源并配置权重、默认板块、一级/二级标题和聚类推荐策略。
+- 工具目录、工具任务、独立专题等只能作为数据库注册的插件模块接入，第一版默认不显示。
 - `workspace_code` 是产品桌面和权限边界，`domain_code` 是内容主题板块，不得混用。
 - 标签体系统一走 `label_sets/labels/content_labels`，不在每个工作台写一套自定义字段。
 - 公网和内网共用一套代码，差异只通过配置、认证 adapter 和同步策略控制。
@@ -66,7 +66,7 @@
 - weekly report 草稿骨架。
 - sync outbox/inbox 同步包骨架。
 - domain pack 扩展目录和注册点。
-- workspace/module 扩展，支持规划部情报工作台之外的 AI 工具桌面。
+- workspace/module 扩展，支持规划部情报工作台之外的新工作范围；附加模块默认关闭。
 
 ## 4. 阶段 0：仓库可运行骨架
 
@@ -235,7 +235,7 @@ PATCH /api/users/{id}/roles
 
 前置调整：工作台模型按共享主链路收束。`workspaces/workspace_sections/workspace_memberships` 管工作范围、页面和权限；`workspace_source_links` 管工作台启用哪些共享数据源；`domain_code` 继续只表达情报主题板块。
 
-当前实现状态：已开始。`backend/app/adapters/` 已有统一 `SourceAdapter`、RSS adapter 和 wiseflow/page/paper/manual 等骨架。
+当前实现状态：导入和 adapter 框架已完成，真实抓取任务待继续。`backend/app/adapters/` 已有统一 `SourceAdapter`、RSS adapter 和 wiseflow/page/paper/manual 等骨架；`/api/sources/import-legacy-seeds` 可以导入 113 个旧源；`/api/sources?workspace_code=...` 可以展示共享源池及当前工作台配置；`workspace_source_links` 会为所有已启用默认工作台建立链接。
 
 实现：
 
@@ -244,7 +244,7 @@ PATCH /api/users/{id}/roles
 - 导入 `config/seeds/legacy/page_sources.json`。
 - 按 `config/contracts/source_fields.json` 映射字段。
 - `folo_metadata.info_category = 学术论文` 的 RSS 源导入为 `paper_rss`。
-- 导入后默认写入共享数据源池，并为 `planning_intel` 创建启用链接。
+- 导入后默认写入共享数据源池，并为所有已启用默认工作台创建 `workspace_source_links`。
 
 adapter 接口：
 
@@ -268,6 +268,7 @@ class SourceAdapter:
 
 - 数据源导入数量与 contract 的 seed counts 对齐。
 - 旧 wiseflow 不被混成 RSS。
+- `planning_intel` 和 `ai_tools` 都能看到 113 个共享源链接，其中 79 个启用。
 - 新增 source_type 只需注册 adapter。
 - adapter 输出满足 `adapter_pipeline.json` 的 raw 字段要求。
 
@@ -383,6 +384,8 @@ daily_report_items.adoption_status = 2
 
 目标：让主链路变成可操作看板，不做营销首页。
 
+当前实现状态：工作台壳、登录页、用户权限页和数据源列表页已可用。工作台列表与左侧导航已从后端 `workspaces/workspace_sections` 读取，不再前端硬编码；第一版默认不显示工具目录、工具任务、独立热点专题等插件页。数据源列表已能展示共享源池、当前工作台启用数、源类型分布、工作台启用状态、标签集、默认一级/二级标题和权重。
+
 页面顺序：
 
 ```text
@@ -396,7 +399,6 @@ daily_report_items.adoption_status = 2
 /daily-reports/:id
 /daily-reports/:id/edit
 /weekly-reports
-/topics
 /requirements
 /tasks
 /exports
@@ -421,6 +423,8 @@ daily_report_items.adoption_status = 2
 
 - 登录后进入工作台。
 - 可以导入旧种子源并看到数据源列表。
+- 切换工作台后左侧导航仍来自后端 section 配置，且不会默认出现工具目录、工具任务或独立热点专题。
+- 数据源页能看到当前工作台启用 79 个源，并能区分共享源定义和工作台配置。
 - 可以触发一次抓取和推荐。
 - 可以查看 winner/loser 和推荐原因。
 - 可以编辑并发布日报。

@@ -48,10 +48,10 @@
 - 当前 AI 标签不是长期业务上限。长期以 domain/domain pack 扩展板块。
 - `domain_code`、`visibility_scope`、`sync_policy` 是横切字段，数据源、raw、news 和同步都要保留。
 - `workspace_code` 是工作台边界，不要用 `domain_code` 代替工作台。
-- AI 工具桌面、规划部情报工作台等工作台必须复用同一套前后端和同一套情报主链路。
-- 所有工作台默认都有数据源、候选池、日报、周报、专题和导出；可选模块只能做加法。
+- 规划部情报工作台等工作台必须复用同一套前后端和同一套情报主链路。
+- 所有工作台默认都有数据源管理、候选池、日报、周报和导出；可选模块只能做加法，且默认关闭。
 - 数据源先进入共享池 `data_sources`，工作台通过 `workspace_source_links` 启用和配置，不复制数据源定义。
-- 标签统一走 `label_sets/labels/content_labels`，不要给每个工作台或 source_type 增加专用标签字段。
+- 一级/二级标题统一走 `label_sets/labels/content_labels`，不要给每个工作台或 source_type 增加专用标签字段，也不要为它们新增工具管理页面。
 - 原始数据必须进入 `raw_items.raw_payload_json`，不能只保存清洗后的字段。
 - 去重必须发生在 `news_items` 之后、推荐之前。
 - 标准公司 SQL 只导出已发布日报里 `adoption_status = 2` 的条目。
@@ -220,6 +220,8 @@ AuthAdapter -> ExternalIdentity -> IdentityResolver -> users -> session/JWT -> R
 
 ### 5.4 数据源导入
 
+当前进度：已实现旧种子源导入 API 和数据源列表 API。导入后 113 个源进入共享数据源池，并为 `planning_intel`、`ai_tools` 等已启用默认工作台创建 `workspace_source_links`；每个工作台当前 79 个源启用、34 个源停用，继承旧源 enabled 状态。
+
 从这些文件导入初始源：
 
 - `config/seeds/legacy/wiseflow_sources.json`
@@ -229,7 +231,7 @@ AuthAdapter -> ExternalIdentity -> IdentityResolver -> users -> session/JWT -> R
 验收：
 
 - 导入后数量与 `config/contracts/source_fields.json` 的 `seed_counts` 对齐。
-- 导入后旧源进入共享数据源池，并为默认规划部工作台创建启用链接。
+- 导入后旧源进入共享数据源池，并为所有已启用的默认工作台创建 `workspace_source_links`；源定义仍只保存一份。
 - `folo_metadata.info_category = 学术论文` 的 RSS 源导入为 `paper_rss`。
 - wiseflow 作为 `source_type=wiseflow` 单独存在，不要混成 RSS。
 

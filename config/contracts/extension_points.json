@@ -101,7 +101,7 @@
       "rule": "Every workspace keeps core intelligence modules. Optional modules are additive; shared sources are enabled through workspace_source_links."
     },
     "label_set": {
-      "purpose": "Add configurable labels for source configuration, candidate pool review, reports, topics and future domains.",
+      "purpose": "Add configurable first-level and second-level labels for source configuration, candidate pool review, reports and future domains.",
       "registry_key": "label_set_code",
       "first_phase_label_sets": [
         "ai_sql_categories"

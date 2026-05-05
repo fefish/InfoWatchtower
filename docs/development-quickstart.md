@@ -4,7 +4,7 @@
 
 ## 1. 当前状态
 
-当前已完成阶段 0、阶段 1、阶段 2，并已开始阶段 3：
+当前已完成阶段 0、阶段 1、阶段 2，并完成阶段 3 的导入和 adapter 框架部分：
 
 - 后端 FastAPI 骨架。
 - `/healthz` 健康检查。
@@ -18,10 +18,10 @@
 - 登录已接入 `local/public_password/intranet_header`，本地开发账号为 `admin/password`。
 - 用户权限页面已能读取用户、读取角色并保存用户角色。
 - 公网安全和 SSO 后续计划见 `docs/auth-security-roadmap.md`。
-- 工作台模型按共享主链路预留 `planning_intel` 和 `ai_tools`；所有工作台共享数据源、候选池、日报、周报、专题和导出能力，差异配置通过 `workspace_source_links` 和可选模块完成。
-- 阶段 3 已有共享数据源导入 API、数据源页面、adapter registry、RSS adapter 和 wiseflow/page/paper/manual 骨架。
+- 工作台模型按共享主链路实现；工作台列表来自 `workspaces`，页面来自 `workspace_sections`，所有工作台共享数据源管理、候选池、日报、周报和导出能力。差异配置通过 `workspace_source_links` 的一级/二级标题、聚类推荐配置和可选插件模块完成。
+- 阶段 3 已有共享数据源导入 API、数据源页面、adapter registry、RSS adapter 和 wiseflow/page/paper/manual 骨架；旧种子源导入后会为所有已启用默认工作台创建源链接。
 
-业务流程 API 还未实现：RSS 抓取任务、raw 到 news 标准化、去重执行、推荐执行、日报编辑页面和 SQL 导出会在后续阶段逐步补齐。
+业务流程 API 还未实现：RSS 抓取任务调度、raw 到 news 标准化、去重执行、推荐执行、日报编辑页面和 SQL 导出会在后续阶段逐步补齐。
 
 ## 2. 后端本地运行
 

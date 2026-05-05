@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { DownloadCloud, RefreshCw } from "lucide-vue-next";
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 
 import { fetchSources, importLegacySources, type DataSourceRecord } from "../api/sources";
 import { useWorkspaceStore } from "../stores/workspace";
@@ -20,11 +20,15 @@ const counts = computed(() => {
   return Array.from(next.entries()).sort(([left], [right]) => left.localeCompare(right));
 });
 
+const enabledInWorkspaceCount = computed(
+  () => sources.value.filter((source) => source.workspace_link_enabled).length
+);
+
 async function loadSources() {
   loading.value = true;
   error.value = "";
   try {
-    sources.value = await fetchSources();
+    sources.value = await fetchSources(workspace.currentCode || undefined);
   } catch (exc) {
     error.value = exc instanceof Error ? exc.message : "加载数据源失败";
   } finally {
@@ -47,8 +51,15 @@ async function importSeeds() {
   }
 }
 
-onMounted(loadSources);
-watch(() => workspace.currentCode, loadSources);
+watch(
+  () => workspace.currentCode,
+  (code) => {
+    if (code) {
+      void loadSources();
+    }
+  },
+  { immediate: true }
+);
 </script>
 
 <template>
@@ -82,6 +93,10 @@ watch(() => workspace.currentCode, loadSources);
       <span>共享源</span>
       <strong>{{ sources.length }}</strong>
     </div>
+    <div>
+      <span>当前工作台启用</span>
+      <strong>{{ enabledInWorkspaceCount }}</strong>
+    </div>
     <div v-for="[type, count] in counts" :key="type">
       <span>{{ type }}</span>
       <strong>{{ count }}</strong>
@@ -95,6 +110,7 @@ watch(() => workspace.currentCode, loadSources);
           <th>名称</th>
           <th>类型</th>
           <th>标签线索</th>
+          <th>工作台配置</th>
           <th>抓取配置</th>
           <th>状态</th>
         </tr>
@@ -111,11 +127,15 @@ watch(() => workspace.currentCode, loadSources);
           </td>
           <td>
             <strong>{{ source.info_category || "未设置" }}</strong>
-            <span>{{ source.primary_category || "默认标签集：ai_sql_categories" }}</span>
+            <span>{{ source.primary_category || source.workspace_label_set_codes.join(" / ") || "默认标签集：ai_sql_categories" }}</span>
+          </td>
+          <td>
+            <strong>{{ source.workspace_link_enabled ? "当前工作台启用" : "当前工作台未启用" }}</strong>
+            <span>{{ source.workspace_default_label_paths.join(" / ") || "未配置默认一级/二级标题" }}</span>
           </td>
           <td>
             <strong>{{ source.backfill_days }} 天回溯</strong>
-            <span>focus {{ source.default_focus_id }}</span>
+            <span>focus {{ source.default_focus_id }} · 权重 {{ source.workspace_source_weight ?? 1 }}</span>
           </td>
           <td>
             <strong>{{ source.enabled ? "启用" : "停用" }}</strong>

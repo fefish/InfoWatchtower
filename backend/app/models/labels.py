@@ -28,6 +28,8 @@ class Label(IdMixin, TimestampMixin, Base):
     __table_args__ = (UniqueConstraint("label_set_id", "code", name="uq_labels_set_code"),)
 
     label_set_id: Mapped[str] = mapped_column(ForeignKey("label_sets.id"), index=True)
+    parent_label_id: Mapped[str | None] = mapped_column(ForeignKey("labels.id"), nullable=True)
+    label_level: Mapped[int] = mapped_column(Integer, default=1, index=True)
     code: Mapped[str] = mapped_column(String(64), index=True)
     name: Mapped[str] = mapped_column(String(128), index=True)
     color: Mapped[str] = mapped_column(String(32), default="")
@@ -37,6 +39,7 @@ class Label(IdMixin, TimestampMixin, Base):
     metadata_json: Mapped[JsonDict] = mapped_column(JsonColumn, default=dict)
 
     label_set: Mapped[LabelSet] = relationship(back_populates="labels")
+    parent_label: Mapped[Label | None] = relationship(remote_side="Label.id")
     bindings: Mapped[list[ContentLabel]] = relationship(back_populates="label")
 
 
