@@ -1,0 +1,86 @@
+from datetime import UTC, datetime
+
+import pytest
+from sqlalchemy import create_engine, func, select
+from sqlalchemy.orm import sessionmaker
+
+from app.adapters.base import AdapterRegistry, RawItemInput
+from app.core.database import Base
+from app.ingestion.fetch import fetch_source_to_raw_items
+from app.models.content import DataSource, RawItem
+
+
+class FakeRssAdapter:
+    source_type = "rss"
+
+    async def fetch(self, data_source: DataSource) -> list[RawItemInput]:
+        return [
+            RawItemInput(
+                entry_key="rss:1",
+                source_title="First title",
+                source_url="https://example.com/1",
+                raw_content="First body",
+                published_at=datetime(2026, 5, 5, 8, tzinfo=UTC),
+                raw_payload_json={"title": "First title", "source": data_source.name},
+            ),
+            RawItemInput(
+                entry_key="rss:2",
+                source_title="Second title",
+                source_url="https://example.com/2",
+                raw_content="Second body",
+                published_at=None,
+                raw_payload_json={"title": "Second title", "source": data_source.name},
+            ),
+        ]
+
+
+def make_session():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    return sessionmaker(bind=engine)()
+
+
+@pytest.mark.asyncio
+async def test_fetch_source_persists_raw_items_idempotently():
+    session = make_session()
+    data_source = DataSource(
+        workspace_code="shared",
+        domain_code="ai",
+        source_type="rss",
+        name="Example RSS",
+        url="https://example.com/rss.xml",
+    )
+    session.add(data_source)
+    session.commit()
+
+    registry = AdapterRegistry()
+    registry.register(FakeRssAdapter())
+    fetched_at = datetime(2026, 5, 5, 9, tzinfo=UTC)
+
+    first = await fetch_source_to_raw_items(session, data_source.id, registry, fetched_at)
+    session.commit()
+
+    assert first.fetched == 2
+    assert first.created == 2
+    assert first.updated == 0
+    assert session.scalar(select(func.count(RawItem.id))) == 2
+
+    raw_item = session.scalar(select(RawItem).where(RawItem.entry_key == "rss:1"))
+    assert raw_item is not None
+    assert raw_item.data_source_id == data_source.id
+    assert raw_item.workspace_code == "shared"
+    assert raw_item.domain_code == "ai"
+    assert raw_item.source_title == "First title"
+    assert raw_item.raw_payload_json["source"] == "Example RSS"
+
+    second = await fetch_source_to_raw_items(session, data_source.id, registry, fetched_at)
+    session.commit()
+
+    assert second.fetched == 2
+    assert second.created == 0
+    assert second.updated == 2
+    assert session.scalar(select(func.count(RawItem.id))) == 2
+
+    session.refresh(data_source)
+    assert data_source.last_success_at == fetched_at.replace(tzinfo=None)
+    assert data_source.last_error == ""

@@ -9,11 +9,12 @@ from sqlalchemy.orm import Session
 from app.api.routes.auth import get_current_user, require_super_admin
 from app.core.config import Settings, get_settings
 from app.core.database import get_db_session
+from app.ingestion.fetch import SourceFetchError, SourceNotFoundError, fetch_source_to_raw_items
 from app.ingestion.source_seeds import import_legacy_sources
 from app.models.content import DataSource
-from app.models.workspace import Workspace, WorkspaceSourceLink
 from app.models.identity import User
-from app.schemas.sources import DataSourceRead, LegacySeedImportRead
+from app.models.workspace import Workspace, WorkspaceSourceLink
+from app.schemas.sources import DataSourceRead, LegacySeedImportRead, SourceFetchRead
 
 router = APIRouter(prefix="/api/sources", tags=["sources"])
 
@@ -50,6 +51,32 @@ def import_legacy_seed_sources(
     result = import_legacy_sources(session, seed_root)
     session.commit()
     return LegacySeedImportRead(created=result.created, updated=result.updated, total=result.total)
+
+
+@router.post("/{source_id}/fetch", response_model=SourceFetchRead)
+async def fetch_source(
+    source_id: str,
+    _: User = Depends(require_super_admin),
+    session: Session = Depends(get_db_session),
+) -> SourceFetchRead:
+    try:
+        result = await fetch_source_to_raw_items(session, source_id)
+    except SourceNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except SourceFetchError as exc:
+        session.commit()
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    session.commit()
+    return SourceFetchRead(
+        data_source_id=result.data_source_id,
+        source_type=result.source_type,
+        fetched=result.fetched,
+        created=result.created,
+        updated=result.updated,
+    )
 
 
 def _workspace_links_by_source_id(

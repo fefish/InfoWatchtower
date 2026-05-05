@@ -28,6 +28,14 @@ export interface LegacySeedImportResult {
   total: number;
 }
 
+export interface SourceFetchResult {
+  data_source_id: string;
+  source_type: string;
+  fetched: number;
+  created: number;
+  updated: number;
+}
+
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     credentials: "same-origin",
@@ -52,6 +60,12 @@ export async function fetchSources(workspaceCode?: string): Promise<DataSourceRe
 
 export async function importLegacySources(): Promise<LegacySeedImportResult> {
   return requestJson<LegacySeedImportResult>("/api/sources/import-legacy-seeds", {
+    method: "POST"
+  });
+}
+
+export async function fetchSource(sourceId: string): Promise<SourceFetchResult> {
+  return requestJson<SourceFetchResult>(`/api/sources/${sourceId}/fetch`, {
     method: "POST"
   });
 }

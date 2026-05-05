@@ -34,3 +34,11 @@ class LegacySeedImportRead(BaseModel):
     created: int
     updated: int
     total: int
+
+
+class SourceFetchRead(BaseModel):
+    data_source_id: str
+    source_type: str
+    fetched: int
+    created: int
+    updated: int

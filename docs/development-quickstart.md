@@ -19,7 +19,7 @@
 - 用户权限页面已能读取用户、读取角色并保存用户角色。
 - 公网安全和 SSO 后续计划见 `docs/auth-security-roadmap.md`。
 - 工作台模型按共享主链路实现；工作台列表来自 `workspaces`，页面来自 `workspace_sections`，所有工作台共享数据源管理、候选池、日报、周报和导出能力。差异配置通过 `workspace_source_links` 的一级/二级标题、聚类推荐配置和可选插件模块完成。
-- 阶段 3 已有共享数据源导入 API、数据源页面、adapter registry、RSS adapter 和 wiseflow/page/paper/manual 骨架；旧种子源导入后会为所有已启用默认工作台创建源链接。
+- 阶段 3 已有共享数据源导入 API、数据源页面、adapter registry、RSS adapter 和 wiseflow/page/paper/manual 骨架；旧种子源导入后会为所有已启用默认工作台创建源链接；RSS/paper RSS 源可通过手动 API 抓取并幂等写入 `raw_items`。
 
 业务流程 API 还未实现：RSS 抓取任务调度、raw 到 news 标准化、去重执行、推荐执行、日报编辑页面和 SQL 导出会在后续阶段逐步补齐。
 

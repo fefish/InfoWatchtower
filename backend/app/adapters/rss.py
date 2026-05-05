@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import json
+from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Any
 
@@ -39,7 +40,7 @@ class RssFeedAdapter:
             source_url=source_url,
             raw_content=content or summary,
             published_at=published_at,
-            raw_payload_json=dict(entry),
+            raw_payload_json=_json_safe(dict(entry)),
         )
 
 
@@ -55,5 +56,9 @@ def _parse_feed_datetime(value: str | None) -> datetime | None:
     except (TypeError, ValueError):
         return None
     if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
+        return parsed.replace(tzinfo=UTC)
     return parsed
+
+
+def _json_safe(value: Any) -> dict[str, Any]:
+    return json.loads(json.dumps(value, default=str))

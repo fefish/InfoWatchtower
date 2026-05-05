@@ -220,7 +220,7 @@ AuthAdapter -> ExternalIdentity -> IdentityResolver -> users -> session/JWT -> R
 
 ### 5.4 数据源导入
 
-当前进度：已实现旧种子源导入 API 和数据源列表 API。导入后 113 个源进入共享数据源池，并为 `planning_intel`、`ai_tools` 等已启用默认工作台创建 `workspace_source_links`；每个工作台当前 79 个源启用、34 个源停用，继承旧源 enabled 状态。
+当前进度：已实现旧种子源导入 API、数据源列表 API 和单源手动抓取 API。导入后 113 个源进入共享数据源池，并为 `planning_intel`、`ai_tools` 等已启用默认工作台创建 `workspace_source_links`；每个工作台当前 79 个源启用、34 个源停用，继承旧源 enabled 状态。RSS/paper RSS 源可手动触发抓取到 `raw_items`，重复抓取按 `(data_source_id, entry_key)` 幂等更新。
 
 从这些文件导入初始源：
 

@@ -2,13 +2,14 @@
 import { DownloadCloud, RefreshCw } from "lucide-vue-next";
 import { computed, ref, watch } from "vue";
 
-import { fetchSources, importLegacySources, type DataSourceRecord } from "../api/sources";
+import { fetchSource, fetchSources, importLegacySources, type DataSourceRecord } from "../api/sources";
 import { useWorkspaceStore } from "../stores/workspace";
 
 const workspace = useWorkspaceStore();
 const sources = ref<DataSourceRecord[]>([]);
 const loading = ref(false);
 const importing = ref(false);
+const fetchingSourceId = ref("");
 const error = ref("");
 const lastImportMessage = ref("");
 
@@ -48,6 +49,25 @@ async function importSeeds() {
     error.value = exc instanceof Error ? exc.message : "导入旧种子源失败";
   } finally {
     importing.value = false;
+  }
+}
+
+function canFetchSource(source: DataSourceRecord) {
+  return source.enabled && source.workspace_link_enabled && ["rss", "paper_rss"].includes(source.source_type);
+}
+
+async function fetchOneSource(source: DataSourceRecord) {
+  fetchingSourceId.value = source.id;
+  error.value = "";
+  lastImportMessage.value = "";
+  try {
+    const result = await fetchSource(source.id);
+    lastImportMessage.value = `抓取完成：${source.name}，拉取 ${result.fetched}，新增 ${result.created}，更新 ${result.updated}`;
+    await loadSources();
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "抓取数据源失败";
+  } finally {
+    fetchingSourceId.value = "";
   }
 }
 
@@ -140,6 +160,17 @@ watch(
           <td>
             <strong>{{ source.enabled ? "启用" : "停用" }}</strong>
             <span>{{ source.last_error || "暂无错误" }}</span>
+            <button
+              v-if="canFetchSource(source)"
+              type="button"
+              class="table-action"
+              :disabled="fetchingSourceId === source.id"
+              @click="fetchOneSource(source)"
+              title="抓取 RSS"
+            >
+              <RefreshCw :size="14" />
+              <span>{{ fetchingSourceId === source.id ? "抓取中" : "抓取" }}</span>
+            </button>
           </td>
         </tr>
       </tbody>
