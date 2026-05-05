@@ -186,12 +186,12 @@ workspace ingestion run
 第一版已实现：
 
 - `POST /api/ingestion/runs` 创建同步执行的工作台级 run。
-- scheduler 可按环境变量定时把同一任务入队，worker 从 Redis/RQ 执行。
+- scheduler 可按环境变量定时把每日完整流水线入队，worker 从 Redis/RQ 执行。
 - 默认处理当前工作台已启用、且源本身启用的 `rss/paper_rss`。
 - `ingestion_runs` 保存 run 参数、状态、处理源数量、成功/失败、拉取数、raw 新增数和 raw 更新数。
 - `summary_json.sources` 保存每个源的结果摘要。
 
-尚未实现：失败源重试队列，以及 ingestion run 结束后自动触发阶段 4 标准化和阶段 5 推荐。
+尚未实现：失败源重试队列。已实现 scheduler 默认触发 `ingestion -> normalize/dedupe -> recommendation -> daily_report_draft`；如需只抓取，可设置 `SCHEDULER_JOB_MODE=ingestion_only`。
 
 ## 6.2 标准化与硬去重 API
 

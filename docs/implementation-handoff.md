@@ -221,7 +221,7 @@ AuthAdapter -> ExternalIdentity -> IdentityResolver -> users -> session/JWT -> R
 
 ### 5.4 数据源导入
 
-当前进度：已实现旧种子源导入 API、数据源列表 API、工作台统一标签策略 API、工作台源链接配置 API、单源手动抓取 API、工作台级 ingestion run API 和 Redis/RQ worker + scheduler 调度入口。导入后 113 个源进入共享数据源池，并为 `planning_intel`、`ai_tools` 等已启用默认工作台创建 `workspace_source_links`；每个工作台当前 79 个源启用、34 个源停用，继承旧源 enabled 状态。管理员可在数据源页增删改当前工作台统一一级/二级标签策略；该策略是模型生成新闻结构和去重后标签定稿的合法标签列表。单个源只配置启用、权重和日限。RSS/paper RSS 源可手动触发抓取到 `raw_items`，重复抓取按 `(data_source_id, entry_key)` 幂等更新。`/api/ingestion/runs` 当前同步执行工作台级抓取，默认抓该工作台启用的 `rss/paper_rss` 源，并写入 `ingestion_runs` 的成功/失败和 raw 新增/更新摘要；scheduler 默认关闭自动抓取，开启后定时把同一任务入队给 worker 执行。前端已改为浅色工作台壳、数据库驱动分组导航、信息流式数据源列表和紧凑工作台标签策略面板；占位页使用统一内容容器，避免常见桌面宽度下横向显示不全。
+当前进度：已实现旧种子源导入 API、数据源列表 API、工作台统一标签策略 API、工作台源链接配置 API、单源手动抓取 API、工作台级 ingestion run API 和 Redis/RQ worker + scheduler 调度入口。导入后 113 个源进入共享数据源池，并为 `planning_intel`、`ai_tools` 等已启用默认工作台创建 `workspace_source_links`；每个工作台当前 79 个源启用、34 个源停用，继承旧源 enabled 状态。管理员可在数据源页增删改当前工作台统一一级/二级标签策略；该策略是模型生成新闻结构和去重后标签定稿的合法标签列表。单个源只配置启用、权重和日限。RSS/paper RSS 源可手动触发抓取到 `raw_items`，重复抓取按 `(data_source_id, entry_key)` 幂等更新。`/api/ingestion/runs` 当前同步执行工作台级抓取，默认抓该工作台启用的 `rss/paper_rss` 源，并写入 `ingestion_runs` 的成功/失败和 raw 新增/更新摘要；scheduler 默认关闭自动任务，开启后定时把每日完整流水线入队给 worker 执行。前端已改为浅色工作台壳、数据库驱动分组导航、信息流式数据源列表和紧凑工作台标签策略面板；占位页使用统一内容容器，避免常见桌面宽度下横向显示不全。
 
 从这些文件导入初始源：
 
@@ -305,6 +305,8 @@ class SourceAdapter:
 ### 5.8 推荐
 
 当前进度：已实现最小闭环。`POST /api/recommendation/runs` 可按工作台读取 `dedupe_groups` winner，写入 `recommendation_runs/recommendation_items`，并为 selected 推荐生成 `generated_news`。推荐分数包含 `quality_score/topic_score/freshness_score/feedback_score/diversity_score/source_score/heat_score/final_score` 和 `recommendation_reason`。
+
+`backend/app/pipeline/daily.py` 已提供每日完整流水线：可选抓取、标准化/去重、推荐和日报草稿。scheduler 开启后默认执行该流水线；如果只想抓取，设置 `SCHEDULER_JOB_MODE=ingestion_only`。
 
 实现可重跑的推荐 run。
 

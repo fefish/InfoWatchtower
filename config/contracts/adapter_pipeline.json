@@ -124,6 +124,26 @@
     "adoption_rule": "Recommendation creates draft daily_report_items with adoption_status = 2 for selected items. Editors may later change adoption_status on daily_report_items; news_items and raw_items are never overwritten.",
     "workspace_scope_rule": "Daily reports are unique by workspace_code + domain_code + day_key so multiple workspaces can generate same-day reports independently."
   },
+  "scheduled_daily_pipeline": {
+    "current_job": "app.pipeline.daily.run_daily_pipeline_job",
+    "scheduler_default_mode": "daily_pipeline",
+    "legacy_ingestion_only_mode": "ingestion_only",
+    "enabled_by": "INGESTION_SCHEDULER_ENABLED=true",
+    "uses_scope_settings": [
+      "INGESTION_SCHEDULER_WORKSPACE_CODE",
+      "INGESTION_SCHEDULER_SOURCE_TYPES",
+      "INGESTION_SCHEDULER_LIMIT"
+    ],
+    "ordered_steps": [
+      "optional workspace_ingestion_run",
+      "normalize_to_news_item",
+      "dedupe_grouping",
+      "scoring_and_recommendation",
+      "generate_structured_news",
+      "daily_report_draft"
+    ],
+    "rule": "The scheduled job must call the same service functions as the manual APIs. It must not bypass adapter, normalization, dedupe or recommendation contracts."
+  },
   "soft_clustering_stage": {
     "status": "phase_2",
     "purpose": "Group same-topic items across different URLs without automatically deleting them.",

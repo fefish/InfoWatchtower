@@ -67,6 +67,11 @@ services:
       DATABASE_URL: postgresql+psycopg://infowatchtower:change_me@postgres:5432/infowatchtower
       REDIS_URL: redis://redis:6379/0
       INGESTION_SCHEDULER_ENABLED: "false"
+      SCHEDULER_JOB_MODE: daily_pipeline
+      DAILY_PIPELINE_RUN_INGESTION: "true"
+      DAILY_PIPELINE_CREATE_DAILY_DRAFT: "true"
+      DAILY_PIPELINE_RECOMMENDATION_LIMIT: "15"
+      DAILY_PIPELINE_SOURCE_DAILY_LIMIT: "2"
     volumes:
       - ../config:/config:ro
     depends_on:

@@ -34,7 +34,10 @@ class Settings(BaseSettings):
     auth_session_ttl_seconds: int = Field(default=60 * 60 * 12, alias="AUTH_SESSION_TTL_SECONDS")
     auth_auto_provision: bool = Field(default=False, alias="AUTH_AUTO_PROVISION")
     auth_default_role: str = Field(default="viewer", alias="AUTH_DEFAULT_ROLE")
-    auth_bootstrap_admin_username: str = Field(default="admin", alias="AUTH_BOOTSTRAP_ADMIN_USERNAME")
+    auth_bootstrap_admin_username: str = Field(
+        default="admin",
+        alias="AUTH_BOOTSTRAP_ADMIN_USERNAME",
+    )
     auth_bootstrap_admin_password: str = Field(default="", alias="AUTH_BOOTSTRAP_ADMIN_PASSWORD")
     auth_bootstrap_admin_display_name: str = Field(
         default="规划部管理员",
@@ -66,6 +69,20 @@ class Settings(BaseSettings):
         alias="INGESTION_SCHEDULER_SOURCE_TYPES",
     )
     ingestion_scheduler_limit: int | None = Field(default=None, alias="INGESTION_SCHEDULER_LIMIT")
+    scheduler_job_mode: str = Field(default="daily_pipeline", alias="SCHEDULER_JOB_MODE")
+    daily_pipeline_run_ingestion: bool = Field(default=True, alias="DAILY_PIPELINE_RUN_INGESTION")
+    daily_pipeline_create_daily_draft: bool = Field(
+        default=True,
+        alias="DAILY_PIPELINE_CREATE_DAILY_DRAFT",
+    )
+    daily_pipeline_recommendation_limit: int = Field(
+        default=15,
+        alias="DAILY_PIPELINE_RECOMMENDATION_LIMIT",
+    )
+    daily_pipeline_source_daily_limit: int = Field(
+        default=2,
+        alias="DAILY_PIPELINE_SOURCE_DAILY_LIMIT",
+    )
 
     @property
     def cors_origin_list(self) -> list[str]:

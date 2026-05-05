@@ -31,6 +31,7 @@ test:
 	cd frontend && npm run build
 
 migrate:
+	$(COMPOSE) build backend
 	$(COMPOSE) run --rm backend alembic upgrade head
 
 migration-check:

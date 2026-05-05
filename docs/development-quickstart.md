@@ -21,7 +21,7 @@
 - 工作台模型按共享主链路实现；工作台列表来自 `workspaces`，页面来自 `workspace_sections`，所有工作台共享数据源管理、候选池、日报、周报和导出能力。差异配置通过 `workspaces.config_json.label_policy` 的工作台统一一级/二级标签策略、`workspace_source_links` 的源启用/权重/日限和可选插件模块完成。
 - 阶段 3 已有共享数据源导入 API、数据源页面、工作台统一标签策略 API、工作台源链接配置 API、工作台级 ingestion run API、Redis/RQ worker + scheduler 调度入口、adapter registry、RSS adapter 和 wiseflow/page/paper/manual 骨架；旧种子源导入后会为所有已启用默认工作台创建源链接；RSS/paper RSS 源可通过手动 API 抓取并幂等写入 `raw_items`，也可通过 ingestion run 按工作台批量触发。前端已切到浅色工作台壳、数据库驱动导航、信息流式数据源列表和紧凑工作台标签策略面板。
 - 阶段 4 已有 raw 到 news 标准化与硬去重 API：`POST /api/news-items/normalize`、`GET /api/news-items`、`GET /api/dedupe-groups`。同一共享 raw 可以被不同工作台各自标准化；去重组按 `workspace_code + dedupe_key` 隔离；winner/loser 会回写到 `news_items.active` 和 `duplicate_of_id`。
-- 阶段 5 已有推荐 run、可解释推荐分、`generated_news`、日报草稿、发布、条目编辑和点赞/评分/评论最小 API；前端 `/daily-reports` 可点击生成日报草稿并展示条目。
+- 阶段 5 已有推荐 run、可解释推荐分、`generated_news`、日报草稿、发布、条目编辑和点赞/评分/评论最小 API；前端 `/daily-reports` 可点击生成日报草稿并展示条目；scheduler 开启后默认执行每日完整流水线：抓取、标准化/去重、推荐和日报草稿。
 
 业务流程 API 还未实现：候选池完整页面、日报深度编辑页面、周报和 SQL 导出会在后续阶段逐步补齐。
 

@@ -2,7 +2,7 @@
 
 规划部全自动热点追踪与情报生产系统。
 
-当前状态：阶段 0-5 已完成最小闭环。阶段 3 已完成旧种子源导入、共享数据源池、默认工作台源链接、工作台统一标签策略、adapter 框架、手动 RSS 抓取到 `raw_items`、工作台级 ingestion run API，以及 Redis/RQ worker + scheduler 调度入口。阶段 4 已完成 `raw_items -> news_items -> dedupe_groups`：可按工作台标准化 raw、生成 canonical URL 与 dedupe key、执行工作台隔离硬去重，并查询 winner/loser。阶段 5 已完成推荐 run、可解释推荐分、`generated_news`、日报草稿、发布、日报条目编辑和点赞/评分/评论最小 API；前端 `/daily-reports` 已可生成并查看日报草稿。`planning_intel` 与 `ai_tools` 的标签策略已在后端隔离。下一步进入候选池/日报编辑体验增强和阶段 6 公司 SQL 导出。
+当前状态：阶段 0-5 已完成最小闭环。阶段 3 已完成旧种子源导入、共享数据源池、默认工作台源链接、工作台统一标签策略、adapter 框架、手动 RSS 抓取到 `raw_items`、工作台级 ingestion run API，以及 Redis/RQ worker + scheduler 调度入口。阶段 4 已完成 `raw_items -> news_items -> dedupe_groups`：可按工作台标准化 raw、生成 canonical URL 与 dedupe key、执行工作台隔离硬去重，并查询 winner/loser。阶段 5 已完成推荐 run、可解释推荐分、`generated_news`、日报草稿、发布、日报条目编辑和点赞/评分/评论最小 API；前端 `/daily-reports` 已可生成并查看日报草稿。scheduler 开启后默认执行每日完整流水线：抓取、标准化/去重、推荐和日报草稿。`planning_intel` 与 `ai_tools` 的标签策略已在后端隔离。下一步进入候选池/日报编辑体验增强和阶段 6 公司 SQL 导出。
 
 ## 接手入口
 
@@ -95,7 +95,7 @@ make build
 - 数据源列表和右侧标签策略在桌面宽度下不应被横向截断；其他占位页应使用统一内容容器，不出现显示不全。
 - 对任意启用的 `rss` 或 `paper_rss` 源点击“抓取”，成功后会提示拉取、新增、更新数量。
 - 重复抓取同一个 RSS 源时，`raw_items` 不重复插入，应表现为新增 0、更新大于 0。
-- `POST /api/ingestion/runs` 可创建工作台级抓取 run；scheduler/worker 已接入同一服务层，默认关闭定时抓取，设置 `INGESTION_SCHEDULER_ENABLED=true` 后按环境变量定时入队。
+- `POST /api/ingestion/runs` 可创建工作台级抓取 run；scheduler/worker 默认关闭，设置 `INGESTION_SCHEDULER_ENABLED=true` 后按环境变量定时执行每日完整流水线。
 - `POST /api/news-items/normalize` 可把当前工作台已启用源的 raw 标准化为 news，并重建去重组。
 - `GET /api/news-items?workspace_code=planning_intel` 可看到标准化新闻和 `raw_item_id` 追溯 ID。
 - `GET /api/dedupe-groups?workspace_code=planning_intel` 可看到去重 winner/loser。

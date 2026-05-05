@@ -39,16 +39,29 @@ internet / intranet
 
 因此内网快速上线的目标是：拉同一个 Git 仓库，换一份内网 `.env.production`，执行迁移和 Compose 启动。
 
-当前 scheduler 已接入 ingestion run，默认关闭自动抓取。需要开启时在生产环境变量中设置：
+当前 scheduler 已接入每日完整流水线，默认关闭自动任务。开启后默认执行：
+
+```text
+ingestion -> normalize/dedupe -> recommendation -> daily_report_draft
+```
+
+需要开启时在生产环境变量中设置：
 
 ```text
 INGESTION_SCHEDULER_ENABLED=true
 INGESTION_SCHEDULER_INTERVAL_SECONDS=86400
 INGESTION_SCHEDULER_WORKSPACE_CODE=planning_intel
 INGESTION_SCHEDULER_SOURCE_TYPES=rss,paper_rss
+SCHEDULER_JOB_MODE=daily_pipeline
+DAILY_PIPELINE_RUN_INGESTION=true
+DAILY_PIPELINE_CREATE_DAILY_DRAFT=true
+DAILY_PIPELINE_RECOMMENDATION_LIMIT=15
+DAILY_PIPELINE_SOURCE_DAILY_LIMIT=2
 ```
 
 如果要限制单次调度处理源数量，可设置 `INGESTION_SCHEDULER_LIMIT=10`。
+
+如果只想执行抓取、不生成日报草稿，可设置 `SCHEDULER_JOB_MODE=ingestion_only`。
 
 ## 2. 数据库放在哪里
 
