@@ -2,7 +2,7 @@
 
 规划部全自动热点追踪与情报生产系统。
 
-当前状态：阶段 1 已完成数据库模型、初始迁移和追溯链路测试；业务流程 API、登录、抓取、推荐和 SQL 导出仍在开发中。
+当前状态：阶段 2 已完成登录、身份适配和 RBAC 最小闭环；已收束工作台共享主链路模型；阶段 3 正在实现共享数据源导入和 adapter 框架。
 
 ## 接手入口
 
@@ -24,7 +24,7 @@
 
 - `config/seeds/legacy/`：新系统可导入的旧种子源。
 - `config/taxonomy/`：AI 兼容标签和长期产业情报板块。
-- `config/contracts/`：数据源、adapter、SQL、登录、扩展点、战略闭环、同步策略契约。
+- `config/contracts/`：数据源、adapter、SQL、登录、工作台、标签、扩展点、战略闭环、同步策略契约。
 - `config/domain_packs/`：后续扩展硬件、半导体、政策、竞品等板块的配置包。
 - `docs/`：总纲和专题附录。
 - `references/README.md`：私有参考仓拉取说明。
@@ -35,7 +35,11 @@
 
 当前种子源统计：wiseflow 1 个、RSS 108 个、页面源 4 个，合并索引 113 个。
 
-当前数据库骨架：33 张业务表，覆盖用户/RBAC、数据源、raw/news、去重、推荐、日报/周报、互动反馈、SQL 导出、同步回流和战略需求闭环。任意日报条目应能沿外键追回 `raw_items.raw_payload_json`。
+当前数据库骨架：40 张业务表，覆盖用户/RBAC、工作台、共享数据源、标签、raw/news、去重、推荐、日报/周报、互动反馈、SQL 导出、同步回流和战略需求闭环。任意日报条目应能沿外键追回 `raw_items.raw_payload_json`。
+
+当前登录能力：支持 `local/public_password/intranet_header` 三种入口，统一落到本地 `users` 和 `roles`；本地 Docker 默认开发账号为 `admin/password`，生产环境必须替换 `AUTH_SESSION_SECRET` 和 `AUTH_BOOTSTRAP_ADMIN_PASSWORD`。
+
+当前工作台模型：`planning_intel` 和 `ai_tools` 都复用数据源、候选池、日报、周报、专题和导出主链路；数据源先进入共享池，再由 `workspace_source_links` 决定每个工作台如何启用。
 
 ## 当前启动方式
 

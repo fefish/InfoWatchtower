@@ -28,6 +28,8 @@
 - `config/contracts/adapter_pipeline.json`
 - `config/contracts/news_sql_mapping.json`
 - `config/contracts/auth_modes.json`
+- `config/contracts/workspace_model.json`
+- `config/contracts/label_model.json`
 - `config/contracts/extension_points.json`
 - `config/contracts/strategic_loop.json`
 - `config/contracts/sync_strategy.json`
@@ -45,6 +47,11 @@
 - 前后端同一个 monorepo。
 - 当前 AI 标签不是长期业务上限。长期以 domain/domain pack 扩展板块。
 - `domain_code`、`visibility_scope`、`sync_policy` 是横切字段，数据源、raw、news 和同步都要保留。
+- `workspace_code` 是工作台边界，不要用 `domain_code` 代替工作台。
+- AI 工具桌面、规划部情报工作台等工作台必须复用同一套前后端和同一套情报主链路。
+- 所有工作台默认都有数据源、候选池、日报、周报、专题和导出；可选模块只能做加法。
+- 数据源先进入共享池 `data_sources`，工作台通过 `workspace_source_links` 启用和配置，不复制数据源定义。
+- 标签统一走 `label_sets/labels/content_labels`，不要给每个工作台或 source_type 增加专用标签字段。
 - 原始数据必须进入 `raw_items.raw_payload_json`，不能只保存清洗后的字段。
 - 去重必须发生在 `news_items` 之后、推荐之前。
 - 标准公司 SQL 只导出已发布日报里 `adoption_status = 2` 的条目。
@@ -136,6 +143,10 @@ alembic upgrade head
 - `permissions`
 - `user_roles`
 - `data_sources`
+- `workspace_source_links`
+- `label_sets`
+- `labels`
+- `content_labels`
 - `raw_items`
 - `news_items`
 - `dedupe_groups`
@@ -163,6 +174,9 @@ alembic upgrade head
 - `requirements`
 - `requirement_source_links`
 - `topic_tasks`
+- `workspaces`
+- `workspace_sections`
+- `workspace_memberships`
 
 如果第一版工期紧，`insights/requirements/topic_tasks` 可以先做最小字段，但表和外键必须预留，避免系统停在“新闻展示”层。
 
@@ -215,6 +229,7 @@ AuthAdapter -> ExternalIdentity -> IdentityResolver -> users -> session/JWT -> R
 验收：
 
 - 导入后数量与 `config/contracts/source_fields.json` 的 `seed_counts` 对齐。
+- 导入后旧源进入共享数据源池，并为默认规划部工作台创建启用链接。
 - `folo_metadata.info_category = 学术论文` 的 RSS 源导入为 `paper_rss`。
 - wiseflow 作为 `source_type=wiseflow` 单独存在，不要混成 RSS。
 

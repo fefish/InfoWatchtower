@@ -1,0 +1,51 @@
+export interface DataSourceRecord {
+  id: string;
+  workspace_code: string;
+  domain_code: string;
+  source_type: string;
+  name: string;
+  url: string | null;
+  enabled: boolean;
+  default_focus_id: number;
+  backfill_days: number;
+  source_score: number;
+  last_fetch_at: string | null;
+  last_success_at: string | null;
+  last_error: string;
+  primary_category: string;
+  info_category: string;
+}
+
+export interface LegacySeedImportResult {
+  created: number;
+  updated: number;
+  total: number;
+}
+
+async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(path, {
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      ...(init?.headers ?? {})
+    },
+    ...init
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    const detail = typeof body.detail === "string" ? body.detail : `HTTP ${response.status}`;
+    throw new Error(detail);
+  }
+  return response.json() as Promise<T>;
+}
+
+export async function fetchSources(workspaceCode?: string): Promise<DataSourceRecord[]> {
+  const params = workspaceCode ? `?${new URLSearchParams({ workspace_code: workspaceCode }).toString()}` : "";
+  return requestJson<DataSourceRecord[]>(`/api/sources${params}`);
+}
+
+export async function importLegacySources(): Promise<LegacySeedImportResult> {
+  return requestJson<LegacySeedImportResult>("/api/sources/import-legacy-seeds", {
+    method: "POST"
+  });
+}

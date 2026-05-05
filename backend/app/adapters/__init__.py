@@ -1,1 +1,48 @@
-"""Source adapter registry."""
+from app.adapters.base import AdapterRegistry, RawItemInput, SourceAdapter
+from app.adapters.rss import PaperRssFeedAdapter, RssFeedAdapter
+from app.adapters.stubs import (
+    CustomCrawlerAdapter,
+    InternalSourceAdapter,
+    ManualNewsAdapter,
+    ManualPageAdapter,
+    PageListingAdapter,
+    PaperApiAdapter,
+    PaperPageAdapter,
+    WiseflowReadInfoAdapter,
+)
+
+
+def create_default_registry() -> AdapterRegistry:
+    registry = AdapterRegistry()
+    for adapter in [
+        RssFeedAdapter(),
+        PaperRssFeedAdapter(),
+        WiseflowReadInfoAdapter(),
+        PageListingAdapter(),
+        ManualPageAdapter(),
+        CustomCrawlerAdapter(),
+        PaperApiAdapter(),
+        PaperPageAdapter(),
+        ManualNewsAdapter(),
+        InternalSourceAdapter(),
+    ]:
+        registry.register(adapter)
+    return registry
+
+
+__all__ = [
+    "AdapterRegistry",
+    "CustomCrawlerAdapter",
+    "InternalSourceAdapter",
+    "ManualNewsAdapter",
+    "ManualPageAdapter",
+    "PageListingAdapter",
+    "PaperApiAdapter",
+    "PaperPageAdapter",
+    "PaperRssFeedAdapter",
+    "RawItemInput",
+    "RssFeedAdapter",
+    "SourceAdapter",
+    "WiseflowReadInfoAdapter",
+    "create_default_registry",
+]

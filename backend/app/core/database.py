@@ -28,6 +28,18 @@ def get_session_factory() -> sessionmaker | None:
     return sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
+def get_db_session():
+    session_factory = get_session_factory()
+    if session_factory is None:
+        raise RuntimeError("DATABASE_URL is required for database-backed API routes.")
+
+    session = session_factory()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
 def check_database() -> dict[str, Any]:
     engine = get_engine()
     if engine is None:

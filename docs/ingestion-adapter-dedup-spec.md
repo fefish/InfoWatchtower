@@ -162,6 +162,7 @@ Adapter 抓取
 -> 正文抽取
 -> normalize_to_news_item
 -> dedupe_grouping
+-> candidate_pool
 -> scoring_and_recommendation
 -> daily_report_draft
 ```
@@ -173,6 +174,20 @@ Adapter 抓取
 - 不同源的原始结构不同，不能在 Adapter 内各自去重后就丢数据。
 - 只有映射到统一的 `news_items` 后，wiseflow、RSS、页面源、论文源才能公平比较。
 - 推荐评分应该只对去重 winner 进行，否则日报会被重复新闻刷屏。
+
+## 6.1 候选池是什么
+
+候选池不是新的表族，也不是一个新的信息源。它是 `dedupe_groups` 和 winner `news_items` 的工作视图。
+
+候选池页面应展示：
+
+- 每个去重组的 winner。
+- 同组重复项数量和来源列表。
+- 命中的标签、来源分、热度分和推荐分。
+- 管理员采信、剔除、待观察状态。
+- 从候选项追溯到 `raw_items.raw_payload_json` 的链路。
+
+日报和周报都从候选池采信，不直接从 raw 原始数据里挑。
 
 ## 7. 去重逻辑
 

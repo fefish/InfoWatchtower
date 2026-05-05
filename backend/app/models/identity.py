@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from sqlalchemy import Boolean, Column, ForeignKey, String, Table, Text
+from datetime import datetime
+
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, Table, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -23,6 +25,9 @@ role_permissions = Table(
 
 class User(IdMixin, SyncMixin, TimestampMixin, Base):
     __tablename__ = "users"
+    __table_args__ = (
+        UniqueConstraint("external_provider", "external_id", name="uq_users_external_identity"),
+    )
 
     external_provider: Mapped[str] = mapped_column(String(64), default="local", index=True)
     external_id: Mapped[str] = mapped_column(String(128), default="", index=True)
@@ -32,6 +37,8 @@ class User(IdMixin, SyncMixin, TimestampMixin, Base):
     department: Mapped[str | None] = mapped_column(String(128), nullable=True)
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="active")
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     roles: Mapped[list[Role]] = relationship(

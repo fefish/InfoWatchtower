@@ -1,15 +1,24 @@
 <script setup lang="ts">
 import { LogIn } from "lucide-vue-next";
+import { ref } from "vue";
 import { useRouter } from "vue-router";
 
 import { useSessionStore } from "../stores/session";
 
 const router = useRouter();
 const session = useSessionStore();
+const username = ref("admin");
+const password = ref("password");
+const error = ref("");
 
-function login() {
-  session.setDemoUser();
-  router.push("/dashboard");
+async function submitLogin() {
+  error.value = "";
+  try {
+    await session.login(username.value, password.value);
+    router.push("/dashboard");
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "登录失败";
+  }
 }
 </script>
 
@@ -21,18 +30,19 @@ function login() {
         <h1>登录工作台</h1>
       </div>
 
-      <form class="login-form" @submit.prevent="login">
+      <form class="login-form" @submit.prevent="submitLogin">
         <label>
           <span>账号</span>
-          <input autocomplete="username" value="admin" />
+          <input v-model="username" autocomplete="username" />
         </label>
         <label>
           <span>密码</span>
-          <input autocomplete="current-password" type="password" value="password" />
+          <input v-model="password" autocomplete="current-password" type="password" />
         </label>
-        <button type="submit">
+        <p v-if="error" class="form-error">{{ error }}</p>
+        <button type="submit" :disabled="session.loading">
           <LogIn :size="18" />
-          <span>进入</span>
+          <span>{{ session.loading ? "登录中" : "进入" }}</span>
         </button>
       </form>
     </section>

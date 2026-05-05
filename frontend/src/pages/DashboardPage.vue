@@ -2,16 +2,18 @@
 import { computed, onMounted, ref } from "vue";
 
 import { fetchHealth, type HealthResponse } from "../api/health";
+import { useWorkspaceStore } from "../stores/workspace";
 
 const health = ref<HealthResponse | null>(null);
 const loading = ref(false);
 const error = ref("");
+const workspace = useWorkspaceStore();
 
 const metrics = computed(() => [
   { label: "种子源", value: "113", detail: "wiseflow/RSS/page" },
   { label: "论文源", value: "17", detail: "14 个启用" },
   { label: "SQL标签", value: "10", detail: "兼容内网导出" },
-  { label: "当前阶段", value: "1", detail: "数据库追溯链路" }
+  { label: "当前阶段", value: "2", detail: "登录与 RBAC" }
 ]);
 
 onMounted(async () => {
@@ -37,11 +39,11 @@ onMounted(async () => {
 
   <section class="work-band">
     <div>
-      <p class="eyebrow">阶段 1</p>
-      <h2>数据库模型与追溯链路</h2>
+      <p class="eyebrow">阶段 2</p>
+      <h2>登录与 RBAC</h2>
       <p>
-        当前已建好 33 张业务表和 Alembic 初始迁移，日报条目可以沿外键追回 raw 原始数据。
-        下一步接入登录、身份适配和 RBAC。
+        当前工作台：{{ workspace.current?.name }}。系统已接入公网账号密码登录、签名会话、
+        内网 header 身份适配和本地角色权限。下一步进入数据源导入与 adapter 框架。
       </p>
     </div>
 

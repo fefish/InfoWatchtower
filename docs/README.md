@@ -38,6 +38,8 @@
 - `docs/feedback-heat-scoring.md`：点赞、评论、评分、热度和来源评分。
 - `docs/api-and-ui-implementation.md`：后端 API、前端页面和验收。
 - `docs/auth-unified-login.md`：公网/内网统一登录。
+- `docs/auth-security-roadmap.md`：公网登录安全、Google SSO、公司 IDaaS 接入计划。
+- `docs/workspace-module-model.md`：工作台、共享数据源、候选池、标签和情报板块设计。
 - `docs/deployment-ops.md`：部署、备份、自动发布。
 - `docs/development-quickstart.md`：当前工程骨架的本地启动说明。
 - `docs/multi-environment-sync.md`：公网/内网多数据库同步。
@@ -52,7 +54,9 @@
 - 改某个模块：更新对应模块文档和相关 contract。
 - 改字段：更新 contract、模块文档、数据样例。
 - 改 SQL 导出：更新 `config/contracts/news_sql_mapping.json`、`docs/data-format-mapping.md`、`docs/data-examples.md`。
-- 改登录：更新 `config/contracts/auth_modes.json`、`docs/auth-unified-login.md`、`docs/deployment-ops.md`。
+- 改登录：更新 `config/contracts/auth_modes.json`、`docs/auth-unified-login.md`、`docs/auth-security-roadmap.md`、`docs/deployment-ops.md`。
+- 改工作台/模块/共享源：更新 `config/contracts/workspace_model.json`、`config/contracts/source_fields.json`、`docs/workspace-module-model.md`、`docs/00-system-design.md`。
+- 改标签体系：更新 `config/contracts/label_model.json`、`config/taxonomy/*.json`、对应模块文档和数据样例。
 - 改公网/内网同步：更新 `config/contracts/sync_strategy.json`、`docs/multi-environment-sync.md`。
 
 不要只改一处，让另一个文档保留旧逻辑。

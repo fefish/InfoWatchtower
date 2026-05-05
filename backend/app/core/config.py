@@ -6,6 +6,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_ENV_FILE = REPO_ROOT / "config" / ".env"
+DEFAULT_LEGACY_SEED_ROOT = (
+    REPO_ROOT / "config" / "seeds" / "legacy"
+    if (REPO_ROOT / "config" / "seeds" / "legacy").exists()
+    else Path("/config/seeds/legacy")
+)
 
 
 class Settings(BaseSettings):
@@ -25,8 +30,16 @@ class Settings(BaseSettings):
 
     auth_mode: str = Field(default="public_password", alias="AUTH_MODE")
     auth_session_secret: str = Field(default="", alias="AUTH_SESSION_SECRET")
+    auth_session_cookie: str = Field(default="infowatchtower_session", alias="AUTH_SESSION_COOKIE")
+    auth_session_ttl_seconds: int = Field(default=60 * 60 * 12, alias="AUTH_SESSION_TTL_SECONDS")
     auth_auto_provision: bool = Field(default=False, alias="AUTH_AUTO_PROVISION")
     auth_default_role: str = Field(default="viewer", alias="AUTH_DEFAULT_ROLE")
+    auth_bootstrap_admin_username: str = Field(default="admin", alias="AUTH_BOOTSTRAP_ADMIN_USERNAME")
+    auth_bootstrap_admin_password: str = Field(default="", alias="AUTH_BOOTSTRAP_ADMIN_PASSWORD")
+    auth_bootstrap_admin_display_name: str = Field(
+        default="规划部管理员",
+        alias="AUTH_BOOTSTRAP_ADMIN_DISPLAY_NAME",
+    )
 
     auth_header_employee_no: str = Field(default="X-Employee-No", alias="AUTH_HEADER_EMPLOYEE_NO")
     auth_header_display_name: str = Field(
@@ -37,6 +50,7 @@ class Settings(BaseSettings):
     auth_header_email: str = Field(default="X-Email", alias="AUTH_HEADER_EMAIL")
 
     cors_origins: str = Field(default="", alias="CORS_ORIGINS")
+    legacy_seed_root: str = Field(default=str(DEFAULT_LEGACY_SEED_ROOT), alias="LEGACY_SEED_ROOT")
 
     @property
     def cors_origin_list(self) -> list[str]:

@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "description": "Configurable label model for sources, candidate pool items, reports, topics and future domains.",
+  "core_rule": "Labels are configured once and attached generically. Do not hard-code a separate label field set per workspace or per source type.",
+  "tables": {
+    "label_sets": [
+      "workspace_code",
+      "domain_code",
+      "code",
+      "name",
+      "scope_type",
+      "target_types",
+      "enabled",
+      "config_json"
+    ],
+    "labels": [
+      "label_set_id",
+      "code",
+      "name",
+      "color",
+      "description",
+      "sort_order",
+      "enabled",
+      "metadata_json"
+    ],
+    "content_labels": [
+      "label_id",
+      "target_type",
+      "target_id",
+      "assigned_by_user_id",
+      "assignment_source",
+      "confidence",
+      "metadata_json"
+    ]
+  },
+  "first_phase_label_sets": {
+    "ai_sql_categories": {
+      "source": "config/taxonomy/news_categories.json",
+      "purpose": "The 10 first-level labels required by the current company SQL export."
+    }
+  },
+  "target_types": [
+    "data_source",
+    "workspace_source_link",
+    "raw_item",
+    "news_item",
+    "dedupe_group",
+    "recommendation_item",
+    "daily_report_item",
+    "weekly_report_item",
+    "topic",
+    "requirement",
+    "journal_entry"
+  ],
+  "assignment_sources": [
+    "manual",
+    "seed",
+    "rule",
+    "model",
+    "import"
+  ],
+  "rules": [
+    "Source configuration pages may choose label sets and default label rules.",
+    "Candidate pool pages should display labels attached to the dedupe winner and its group.",
+    "Company SQL export must map adopted daily report items to config/taxonomy/news_categories.json until the internal platform supports broader taxonomies.",
+    "Adding hardware or semiconductor labels should add a label set or domain pack, not new columns."
+  ]
+}

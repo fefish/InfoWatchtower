@@ -29,6 +29,11 @@
 - 数据库迁移、后端模型、API schema、前端类型和测试必须同步更新。
 - 所有业务对象必须保留追溯链路，不能为了前端展示压扁数据。
 - adapter 可插拔，新增数据源类型不应修改 dedupe/report/export 主链路。
+- 工作台可插拔，但必须共享数据源、候选池、日报、周报、专题和导出主链路。
+- 新工作台不复制数据源定义；通过 `workspace_source_links` 启用共享源并配置权重、默认板块和标签策略。
+- 新 AI 工具入口只能作为附加模块接入，不应 fork 前端或后端，也不应移除核心情报模块。
+- `workspace_code` 是产品桌面和权限边界，`domain_code` 是内容主题板块，不得混用。
+- 标签体系统一走 `label_sets/labels/content_labels`，不在每个工作台写一套自定义字段。
 - 公网和内网共用一套代码，差异只通过配置、认证 adapter 和同步策略控制。
 - 密钥、token、cookie、`.env` 不进入 Git，不进入同步包，不写入日志。
 - 当前开发默认每轮只形成一个逻辑 commit；临时提交在推送前 squash。
@@ -61,6 +66,7 @@
 - weekly report 草稿骨架。
 - sync outbox/inbox 同步包骨架。
 - domain pack 扩展目录和注册点。
+- workspace/module 扩展，支持规划部情报工作台之外的 AI 工具桌面。
 
 ## 4. 阶段 0：仓库可运行骨架
 
@@ -165,6 +171,8 @@ curl http://127.0.0.1:5173/healthz
 
 目标：公网能登录，内网能快速接 header 身份。
 
+当前实现状态：已完成最小闭环。后端代码位于 `backend/app/auth/` 和 `backend/app/api/routes/auth.py`，前端登录与用户权限页面位于 `frontend/src/pages/LoginPage.vue` 和 `frontend/src/pages/UsersPage.vue`，迁移为 `backend/alembic/versions/21c4a64d4e6b_add_stage_2_auth_fields.py`。
+
 实现：
 
 ```text
@@ -201,9 +209,33 @@ PATCH /api/users/{id}/roles
 - 角色至少有 `super_admin`、`editor_admin`、`analyst`、`viewer`。
 - 登录、登出、授权变更写 `audit_logs`。
 
+已验证：
+
+```text
+make test
+make migration-check
+make migrate
+POST /api/auth/login
+GET  /api/auth/me
+GET  /api/users
+GET  /api/roles
+PATCH /api/users/{id}/roles
+```
+
+后续加固计划：
+
+- 公网部署前补登录限流、CSRF、服务端 session、HTTPS Secure Cookie 和默认密码禁用。
+- 新增 `public_oidc`，优先实现 Google OIDC。
+- 新增 `intranet_oidc`，通过公司 IDaaS code flow 换取工号、姓名、部门和邮箱。
+- 保持所有外部身份只映射到 `ExternalIdentity`，业务层继续只认本地 `user_id` 和 `roles`。
+
 ## 7. 阶段 3：数据源导入与 adapter 框架
 
 目标：旧种子源进入数据库，adapter 注册机制固定。
+
+前置调整：工作台模型按共享主链路收束。`workspaces/workspace_sections/workspace_memberships` 管工作范围、页面和权限；`workspace_source_links` 管工作台启用哪些共享数据源；`domain_code` 继续只表达情报主题板块。
+
+当前实现状态：已开始。`backend/app/adapters/` 已有统一 `SourceAdapter`、RSS adapter 和 wiseflow/page/paper/manual 等骨架。
 
 实现：
 
@@ -212,6 +244,7 @@ PATCH /api/users/{id}/roles
 - 导入 `config/seeds/legacy/page_sources.json`。
 - 按 `config/contracts/source_fields.json` 映射字段。
 - `folo_metadata.info_category = 学术论文` 的 RSS 源导入为 `paper_rss`。
+- 导入后默认写入共享数据源池，并为 `planning_intel` 创建启用链接。
 
 adapter 接口：
 
@@ -377,7 +410,7 @@ daily_report_items.adoption_status = 2
 - 登录页。
 - 工作台首页。
 - 数据源列表和详情。
-- 候选新闻列表。
+- 候选池列表。
 - 推荐 run 页面。
 - 日报时间线页。
 - 日报编辑页。

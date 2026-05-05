@@ -127,7 +127,9 @@ GET  /api/audit-logs
 
 `/sources`：
 
-- 数据源列表、启停、类型、domain、最近抓取、成功率、来源评分。
+- 数据源列表展示共享源池，以及当前工作台是否启用该源。
+- 数据源配置页支持工作台级启停、domain、权重、每日上限、标签集和自动打标策略。
+- 数据源真实定义只保存一份；多个工作台复用时通过 `workspace_source_links` 配置差异。
 
 `/sources/:id`：
 
@@ -135,7 +137,9 @@ GET  /api/audit-logs
 
 `/news`：
 
-- 统一候选新闻，支持按 domain、source_type、active、日期、关键词筛选。
+- 统一候选池，展示 `dedupe_groups` 的 winner，不直接展示未去重 raw 流。
+- 支持按 workspace、domain、source_type、标签、推荐状态、采信状态、日期、关键词筛选。
+- 候选项必须能展开同组来源、重复项、标签、推荐分、热度分和追溯链路。
 
 `/recommendations`：
 
@@ -221,4 +225,3 @@ viewer
 - 管理员可以导出公司 SQL。
 - 可以生成公网到内网同步包，并在内网导入。
 - 所有关键操作能在 audit logs 查到。
-

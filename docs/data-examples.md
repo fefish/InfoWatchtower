@@ -68,7 +68,7 @@ RSS adapter 从 feed 里拿到的单条 entry 通常类似这样：
 
 ## 3. 标准化成 news_items
 
-`news_items` 是统一候选新闻。不同源都会变成这个结构后再去重和推荐。
+`news_items` 是统一标准化新闻。不同源都会变成这个结构后再去重，去重 winner 进入候选池，再进入推荐和日报/周报采信。
 
 ```json
 {

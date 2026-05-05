@@ -4,7 +4,7 @@
 
 ## 1. 当前状态
 
-当前已完成阶段 0 和阶段 1：
+当前已完成阶段 0、阶段 1、阶段 2，并已开始阶段 3：
 
 - 后端 FastAPI 骨架。
 - `/healthz` 健康检查。
@@ -13,10 +13,15 @@
 - 前端 Vue/Vite 工作台骨架。
 - 本地和生产 Docker Compose 草案。
 - GitHub Actions CI 草案。
-- PostgreSQL 中已能创建 33 张业务表。
+- PostgreSQL 中已能创建 40 张业务表。
 - 测试已覆盖 `daily_report_items -> generated_news -> recommendation_items -> dedupe_group_items -> news_items -> raw_items.raw_payload_json` 追溯链路。
+- 登录已接入 `local/public_password/intranet_header`，本地开发账号为 `admin/password`。
+- 用户权限页面已能读取用户、读取角色并保存用户角色。
+- 公网安全和 SSO 后续计划见 `docs/auth-security-roadmap.md`。
+- 工作台模型按共享主链路预留 `planning_intel` 和 `ai_tools`；所有工作台共享数据源、候选池、日报、周报、专题和导出能力，差异配置通过 `workspace_source_links` 和可选模块完成。
+- 阶段 3 已有共享数据源导入 API、数据源页面、adapter registry、RSS adapter 和 wiseflow/page/paper/manual 骨架。
 
-业务流程 API 还未实现：登录、数据源导入、RSS 抓取任务、去重执行、推荐执行、日报编辑页面和 SQL 导出会在后续阶段逐步补齐。
+业务流程 API 还未实现：RSS 抓取任务、raw 到 news 标准化、去重执行、推荐执行、日报编辑页面和 SQL 导出会在后续阶段逐步补齐。
 
 ## 2. 后端本地运行
 
@@ -69,6 +74,7 @@ VITE_API_PROXY_TARGET=http://backend:8000
 
 ```bash
 make up
+make migrate
 ```
 
 首次构建或改过 Dockerfile/依赖时：
@@ -96,6 +102,8 @@ docker compose -f deploy/docker-compose.local.yml up --build
 ```
 
 日常开发不要每次都加 `--build`。改普通 Python/Vue 代码后，优先用 `make up` 或 `make restart`。
+
+WSL2 建议把仓库放在 Linux 文件系统内，例如 `~/projects/InfoWatchtower`，不要放在 `/mnt/c/...`，否则前端热更新和 `node_modules` 会明显变慢。
 
 ## 5. 阶段 0 验收
 
@@ -126,4 +134,4 @@ curl http://localhost:5173/healthz
 
 ## 6. 下一阶段
 
-阶段 2 开始实现登录、身份适配和 RBAC。先做 `local/public_password/intranet_header` 三种模式的后端闭环，再接前端登录页面。
+阶段 3 开始实现数据源导入与 adapter 框架。先导入旧种子源并固定 adapter 注册机制，再实现真实 RSS 抓取。

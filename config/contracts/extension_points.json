@@ -91,6 +91,23 @@
       "output": "ExternalIdentity",
       "rule": "Auth adapter only proves identity. Local RBAC decides permissions."
     },
+    "workspace_module": {
+      "purpose": "Add a new work scope or optional additive module such as AI tools without forking the app.",
+      "registry_key": "workspace_code plus section_key",
+      "first_phase_workspaces": [
+        "planning_intel",
+        "ai_tools"
+      ],
+      "rule": "Every workspace keeps core intelligence modules. Optional modules are additive; shared sources are enabled through workspace_source_links."
+    },
+    "label_set": {
+      "purpose": "Add configurable labels for source configuration, candidate pool review, reports, topics and future domains.",
+      "registry_key": "label_set_code",
+      "first_phase_label_sets": [
+        "ai_sql_categories"
+      ],
+      "rule": "Labels attach through content_labels. Do not add custom per-workspace label columns."
+    },
     "domain_pack": {
       "purpose": "Add a new strategic intelligence board such as hardware, semiconductor, robotics, policy, market, or competitor without changing the core pipeline.",
       "registry_key": "domain_code",

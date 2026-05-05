@@ -12,6 +12,7 @@ from app.models.content import (
 from app.models.export import ExportJob, ExportJobItem
 from app.models.feedback import AuditLog, Comment, EditorialAction, Rating, Reaction
 from app.models.identity import Permission, Role, User, role_permissions, user_roles
+from app.models.labels import ContentLabel, Label, LabelSet
 from app.models.reports import DailyReport, DailyReportItem, WeeklyReport, WeeklyReportItem
 from app.models.strategy import (
     Insight,
@@ -21,11 +22,13 @@ from app.models.strategy import (
     TopicTask,
 )
 from app.models.sync import SyncConflict, SyncInbox, SyncOutbox, SyncRun
+from app.models.workspace import Workspace, WorkspaceMembership, WorkspaceSection, WorkspaceSourceLink
 
 __all__ = [
     "AuditLog",
     "Base",
     "Comment",
+    "ContentLabel",
     "DailyReport",
     "DailyReportItem",
     "DataSource",
@@ -36,6 +39,8 @@ __all__ = [
     "ExportJobItem",
     "GeneratedNews",
     "Insight",
+    "Label",
+    "LabelSet",
     "NewsItem",
     "Permission",
     "Rating",
@@ -55,6 +60,10 @@ __all__ = [
     "User",
     "WeeklyReport",
     "WeeklyReportItem",
+    "Workspace",
+    "WorkspaceMembership",
+    "WorkspaceSection",
+    "WorkspaceSourceLink",
     "role_permissions",
     "user_roles",
 ]

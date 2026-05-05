@@ -23,6 +23,7 @@ from app.models import (
 EXPECTED_STAGE1_TABLES = {
     "audit_logs",
     "comments",
+    "content_labels",
     "daily_report_items",
     "daily_reports",
     "data_sources",
@@ -33,6 +34,8 @@ EXPECTED_STAGE1_TABLES = {
     "export_jobs",
     "generated_news",
     "insights",
+    "label_sets",
+    "labels",
     "news_items",
     "permissions",
     "ratings",
@@ -54,6 +57,10 @@ EXPECTED_STAGE1_TABLES = {
     "users",
     "weekly_report_items",
     "weekly_reports",
+    "workspace_memberships",
+    "workspace_sections",
+    "workspace_source_links",
+    "workspaces",
 }
 
 

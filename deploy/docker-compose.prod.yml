@@ -26,6 +26,8 @@ services:
     restart: unless-stopped
     env_file:
       - ${INFOWATCHTOWER_ENV_FILE:-/srv/infowatchtower/.env.production}
+    volumes:
+      - ../config:/config:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -39,6 +41,8 @@ services:
     command: ["python", "-m", "app.workers.worker"]
     env_file:
       - ${INFOWATCHTOWER_ENV_FILE:-/srv/infowatchtower/.env.production}
+    volumes:
+      - ../config:/config:ro
     depends_on:
       - backend
       - redis
@@ -50,6 +54,8 @@ services:
     command: ["python", "-m", "app.workers.scheduler"]
     env_file:
       - ${INFOWATCHTOWER_ENV_FILE:-/srv/infowatchtower/.env.production}
+    volumes:
+      - ../config:/config:ro
     depends_on:
       - backend
       - redis

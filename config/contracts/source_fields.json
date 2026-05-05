@@ -23,7 +23,8 @@
   ],
   "canonical_data_source_fields": [
     {"name": "id", "type": "uuid", "required": true, "notes": "Internal primary key."},
-    {"name": "domain_code", "type": "string", "required": true, "default": "ai", "notes": "Strategic intelligence board. Examples: ai, hardware, semiconductor, robotics, policy_market, competitor."},
+    {"name": "workspace_code", "type": "string", "required": false, "default": "shared", "notes": "Source definition owner/origin only. Workspace enablement must use workspace_source_links."},
+    {"name": "domain_code", "type": "string", "required": true, "default": "ai", "notes": "Default strategic intelligence board. Per-workspace domain can be overridden by workspace_source_links."},
     {"name": "source_type", "type": "enum", "required": true, "notes": "wiseflow/rss/page_monitor/page_manual/crawler/paper_rss/paper_api/paper_page/manual/internal."},
     {"name": "name", "type": "string", "required": true, "legacy_rss": "name", "legacy_page": "name"},
     {"name": "url", "type": "string", "required": false, "legacy_rss": "feed_url", "legacy_page": "page_url or articles[].url", "legacy_wiseflow": "SOURCE_READ_INFO_URL or derived from SOURCE_API_BASE"},
@@ -45,6 +46,17 @@
     {"name": "metadata", "type": "json", "required": false, "legacy_rss": "folo_metadata plus origin", "legacy_page": "full page source object"},
     {"name": "created_at", "type": "datetime", "required": true},
     {"name": "updated_at", "type": "datetime", "required": true}
+  ],
+  "workspace_source_link_fields": [
+    {"name": "id", "type": "uuid", "required": true, "notes": "Internal primary key."},
+    {"name": "workspace_id", "type": "uuid", "required": true, "notes": "Work scope that enables the shared source."},
+    {"name": "data_source_id", "type": "uuid", "required": true, "notes": "Reusable source definition."},
+    {"name": "domain_code", "type": "string", "required": true, "default": "ai", "notes": "Domain used when this workspace runs the source."},
+    {"name": "enabled", "type": "boolean", "required": true, "default": true},
+    {"name": "source_weight", "type": "float", "required": true, "default": 1.0, "notes": "Workspace-specific scoring multiplier."},
+    {"name": "daily_limit", "type": "integer", "required": false, "notes": "Optional per-workspace cap for this source."},
+    {"name": "label_set_codes", "type": "array", "required": false, "notes": "Label sets applied when processing this source in this workspace."},
+    {"name": "config_json", "type": "json", "required": false, "notes": "Workspace-specific overrides. Must not contain secrets."}
   ],
   "legacy_wiseflow_mapping": {
     "domain_code": "ai",

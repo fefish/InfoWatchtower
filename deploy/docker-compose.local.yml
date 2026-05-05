@@ -29,6 +29,9 @@ services:
       DATABASE_URL: postgresql+psycopg://infowatchtower:change_me@postgres:5432/infowatchtower
       REDIS_URL: redis://redis:6379/0
       CORS_ORIGINS: http://localhost:5173
+      AUTH_BOOTSTRAP_ADMIN_PASSWORD: password
+    volumes:
+      - ../config:/config:ro
     ports:
       - "8000:8000"
     depends_on:

@@ -43,6 +43,7 @@ class SyncMixin:
 
 
 class ScopeMixin:
+    workspace_code: Mapped[str] = mapped_column(String(64), default="planning_intel", index=True)
     domain_code: Mapped[str] = mapped_column(String(64), default="ai", index=True)
     visibility_scope: Mapped[str] = mapped_column(String(32), default="public", index=True)
     sync_policy: Mapped[str] = mapped_column(String(32), default="public_to_intranet", index=True)

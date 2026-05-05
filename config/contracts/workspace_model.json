@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "description": "Workspace, section and domain model for supporting multiple work scopes without forking the intelligence pipeline.",
+  "core_rule": "Every workspace keeps the core intelligence modules: sources, candidate pool, daily reports, weekly reports, topics, exports, users and audit. Workspace-specific modules are additive only.",
+  "concepts": {
+    "workspace": {
+      "purpose": "A user-facing work scope, such as the planning intelligence workspace or an AI tools workspace that still uses the same intelligence pipeline.",
+      "stable_key": "workspace_code",
+      "examples": [
+        "planning_intel",
+        "ai_tools"
+      ],
+      "owns": [
+        "navigation context",
+        "workspace memberships",
+        "source enablement through workspace_source_links",
+        "default domain visibility",
+        "label set configuration"
+      ]
+    },
+    "section": {
+      "purpose": "A core page or optional additive module inside a workspace.",
+      "stable_key": "section_key",
+      "examples": [
+        "sources",
+        "candidate_pool",
+        "daily_reports",
+        "weekly_reports",
+        "exports",
+        "tool_catalog",
+        "tool_runs"
+      ]
+    },
+    "domain": {
+      "purpose": "The subject matter of intelligence content, such as AI, hardware, semiconductor, robotics or policy.",
+      "stable_key": "domain_code",
+      "examples": [
+        "ai",
+        "hardware",
+        "semiconductor",
+        "robotics",
+        "policy"
+      ]
+    }
+  },
+  "core_sections": [
+    "dashboard",
+    "sources",
+    "candidate_pool",
+    "daily_reports",
+    "weekly_reports",
+    "topics",
+    "exports",
+    "users",
+    "audit_logs"
+  ],
+  "tables": {
+    "workspaces": [
+      "code",
+      "name",
+      "description",
+      "workspace_type",
+      "default_domain_code",
+      "enabled",
+      "config_json"
+    ],
+    "workspace_sections": [
+      "workspace_id",
+      "section_key",
+      "name",
+      "section_type",
+      "route_path",
+      "sort_order",
+      "enabled",
+      "config_json"
+    ],
+    "workspace_memberships": [
+      "workspace_id",
+      "user_id",
+      "workspace_role",
+      "enabled"
+    ],
+    "workspace_source_links": [
+      "workspace_id",
+      "data_source_id",
+      "domain_code",
+      "enabled",
+      "source_weight",
+      "daily_limit",
+      "config_json"
+    ]
+  },
+  "scope_fields": {
+    "workspace_code": "Which workspace a processed object belongs to. Data source definitions are reusable and are enabled through workspace_source_links.",
+    "domain_code": "Which intelligence domain the content belongs to.",
+    "visibility_scope": "Who can see or sync the object.",
+    "sync_policy": "How the object moves between public, intranet and local deployments."
+  },
+  "rules": [
+    "Do not use domain_code as a UI workspace boundary.",
+    "Do not create a separate frontend/backend for the AI tools workspace.",
+    "Do not remove sources, candidate pool, daily reports or weekly reports from any workspace.",
+    "Do not duplicate data source definitions per workspace; reuse data_sources through workspace_source_links.",
+    "New work scopes are workspaces; optional pages/tools are sections; new subject areas are domains/domain packs.",
+    "Data APIs that list reusable sources may filter by workspace_code through workspace_source_links.",
+    "Workspace membership controls access to a desktop, while global roles still control privileged actions."
+  ]
+}
