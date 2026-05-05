@@ -476,7 +476,10 @@ watch(
           v-for="source in sources"
           :key="source.id"
           class="source-row"
-          :class="{ inactive: !source.workspace_link_enabled }"
+          :class="{
+            inactive: !source.workspace_link_enabled,
+            selected: selectedSource?.id === source.id
+          }"
         >
           <div class="source-icon">
             <component :is="sourceIcon(source.source_type)" :size="18" />
@@ -661,37 +664,39 @@ watch(
         </div>
       </section>
 
-      <aside v-if="selectedSource" class="config-panel">
-        <header>
-          <div>
-            <p class="eyebrow">数据源配置</p>
-            <h3>{{ selectedSource.name }}</h3>
-          </div>
-          <button type="button" class="panel-close" @click="closeConfig" title="关闭">
-            <X :size="18" />
-          </button>
-        </header>
-
-        <label class="switch-row">
-          <input v-model="configForm.enabled" type="checkbox" />
-          <span>启用</span>
-        </label>
-
-        <div class="config-grid">
-          <label>
-            <span>权重</span>
-            <input v-model.number="configForm.sourceWeight" type="number" min="0" step="0.1" />
-          </label>
-          <label>
-            <span>日报日限</span>
-            <input v-model="configForm.dailyLimit" type="number" min="0" placeholder="不限" />
-          </label>
-        </div>
-
-        <button type="button" class="config-save" :disabled="savingConfig" @click="saveConfig">
-          {{ savingConfig ? "保存中" : "保存配置" }}
-        </button>
-      </aside>
     </aside>
   </section>
+
+  <div v-if="selectedSource" class="config-backdrop" @click="closeConfig"></div>
+  <aside v-if="selectedSource" class="config-panel" aria-label="数据源配置">
+    <header>
+      <div>
+        <p class="eyebrow">数据源配置</p>
+        <h3>{{ selectedSource.name }}</h3>
+      </div>
+      <button type="button" class="panel-close" @click="closeConfig" title="关闭">
+        <X :size="18" />
+      </button>
+    </header>
+
+    <label class="switch-row">
+      <input v-model="configForm.enabled" type="checkbox" />
+      <span>启用</span>
+    </label>
+
+    <div class="config-grid">
+      <label>
+        <span>权重</span>
+        <input v-model.number="configForm.sourceWeight" type="number" min="0" step="0.1" />
+      </label>
+      <label>
+        <span>日报日限</span>
+        <input v-model="configForm.dailyLimit" type="number" min="0" placeholder="不限" />
+      </label>
+    </div>
+
+    <button type="button" class="config-save" :disabled="savingConfig" @click="saveConfig">
+      {{ savingConfig ? "保存中" : "保存配置" }}
+    </button>
+  </aside>
 </template>
