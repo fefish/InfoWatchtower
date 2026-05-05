@@ -55,9 +55,7 @@
     {"name": "enabled", "type": "boolean", "required": true, "default": true},
     {"name": "source_weight", "type": "float", "required": true, "default": 1.0, "notes": "Workspace-specific scoring multiplier."},
     {"name": "daily_limit", "type": "integer", "required": false, "notes": "Optional per-workspace cap for this source."},
-    {"name": "label_set_codes", "type": "array", "required": false, "notes": "Optional source hint label sets. The legal label list comes from workspaces.config_json.label_policy."},
-    {"name": "default_label_paths", "type": "array", "required": false, "notes": "Optional first-level/second-level source hint paths, such as AI 应用/办公工具. They do not replace workspace label policy."},
-    {"name": "clustering_config", "type": "json", "required": false, "notes": "Workspace-specific clustering and recommendation settings for this source and label paths."},
+    {"name": "clustering_config", "type": "json", "required": false, "notes": "Workspace-specific clustering and recommendation settings. It must not define label paths; labels come from the workspace label policy."},
     {"name": "config_json", "type": "json", "required": false, "notes": "Workspace-specific overrides. Must not contain secrets."}
   ],
   "legacy_wiseflow_mapping": {

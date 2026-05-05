@@ -21,7 +21,6 @@ export interface WorkspaceLabelPolicy {
   default_category: string;
   fallback_category: string;
   tagging_stages: string[];
-  source_hint_policy: string;
 }
 
 export interface WorkspaceLabelPolicyUpdate {
@@ -29,7 +28,6 @@ export interface WorkspaceLabelPolicyUpdate {
   allowed_primary_categories: string[];
   default_category: string;
   fallback_category: string;
-  source_hint_policy: string;
 }
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {

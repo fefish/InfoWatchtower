@@ -75,5 +75,6 @@ contracts 管字段、流程、映射和接口边界。
 - `adoption_status` 属于日报/周报采信层，不属于 `news_items`。
 - 日报编辑不覆盖 `raw_items` 和 `generated_news`。
 - 标准公司 SQL 只导出已发布日报中 `daily_report_items.adoption_status = 2` 的条目。
+- 一级/二级标签由工作台统一策略管理，不在单个数据源配置，因为一个数据源可能覆盖多个关注方向。
 - 密钥、token、cookie 和 `.env` 不进入 Git，不进入同步包。
 - 私有参考仓 `InfoWatchtower-References` 是参考资料，不是新系统运行入口。

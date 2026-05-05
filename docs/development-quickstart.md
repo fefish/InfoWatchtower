@@ -134,7 +134,7 @@ curl http://localhost:5173/healthz
 
 ## 5.1 当前阶段 3 验收
 
-本阶段已经做到：旧种子源导入、工作台源链接、工作台统一一级标签策略、单源可选来源提示、数据库驱动导航、单源 RSS 抓取到 `raw_items`。
+本阶段已经做到：旧种子源导入、工作台源链接、工作台统一一级标签策略、数据库驱动导航、单源 RSS 抓取到 `raw_items`。
 
 前端验收：
 
@@ -142,9 +142,9 @@ curl http://localhost:5173/healthz
 2. 使用 `admin/password` 登录。
 3. 首页应显示当前阶段为阶段 3。
 4. 数据源页标题应为“数据源、标签配置与 RSS raw 入库”。
-5. 数据源页顶部应显示“工作台统一标签策略”，规划部默认含旧系统兼容的 10 个一级标签。
+5. 数据源页顶部应显示“工作台统一标签策略”，规划部默认含旧系统兼容的 10 个一级标签，并支持新增、重命名、删除。
 6. 数据源页应显示共享源 113、当前工作台启用 79。
-7. 点击任意源的“配置”，应出现来源配置面板，可设置启用状态、权重、日限和可选来源提示。
+7. 点击任意源的“配置”，应出现数据源配置面板，可设置启用状态、权重和日限。
 8. 对启用的 `rss` 或 `paper_rss` 源点击“抓取”，页面应提示拉取、新增、更新数量。
 
 API 验收：
@@ -165,12 +165,12 @@ curl -fsS -b /tmp/iw_cookie.txt \
 curl -fsS -b /tmp/iw_cookie.txt \
   -H 'Content-Type: application/json' \
   -X PATCH 'http://127.0.0.1:8000/api/workspaces/planning_intel/label-policy' \
-  -d '{"label_set_code":"ai_sql_categories","allowed_primary_categories":["AI Infra","AI 应用","测评技术","大厂动态","模型","算法","推理加速","训练技术","智能体","基础竞争力"],"default_category":"AI 应用","fallback_category":"AI 应用","source_hint_policy":"hint_only"}'
+  -d '{"label_set_code":"ai_sql_categories","allowed_primary_categories":["AI Infra","AI 应用","测评技术","大厂动态","模型","算法","推理加速","训练技术","智能体","基础竞争力"],"default_category":"AI 应用","fallback_category":"AI 应用"}'
 
 curl -fsS -b /tmp/iw_cookie.txt \
   -H 'Content-Type: application/json' \
   -X PATCH 'http://127.0.0.1:8000/api/sources/{source_id}/workspace-link' \
-  -d '{"workspace_code":"planning_intel","enabled":true,"source_weight":1.2,"daily_limit":3,"label_set_codes":["ai_sql_categories"],"default_label_paths":["模型/闭源模型"],"clustering_config":{}}'
+  -d '{"workspace_code":"planning_intel","enabled":true,"source_weight":1.2,"daily_limit":3}'
 
 curl -fsS -b /tmp/iw_cookie.txt \
   -X POST 'http://127.0.0.1:8000/api/sources/{source_id}/fetch'

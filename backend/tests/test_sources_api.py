@@ -47,7 +47,8 @@ def test_super_admin_imports_and_lists_legacy_sources(monkeypatch, tmp_path):
     payload = sources.json()
     assert len(payload) == 113
     assert sum(1 for item in payload if item["workspace_link_enabled"]) == 79
-    assert {tuple(item["workspace_label_set_codes"]) for item in payload} == {("ai_sql_categories",)}
+    assert "workspace_label_set_codes" not in payload[0]
+    assert "workspace_default_label_paths" not in payload[0]
     assert {item["source_type"] for item in payload} == {
         "page_manual",
         "page_monitor",
@@ -69,17 +70,14 @@ def test_super_admin_imports_and_lists_legacy_sources(monkeypatch, tmp_path):
             "enabled": True,
             "source_weight": 1.5,
             "daily_limit": 3,
-            "label_set_codes": ["ai_sql_categories"],
-            "default_label_paths": ["模型/闭源模型", "AI 应用"],
-            "clustering_config": {"min_group_size": 2},
         },
     )
     assert updated.status_code == 200
     updated_payload = updated.json()
     assert updated_payload["workspace_source_weight"] == 1.5
     assert updated_payload["workspace_daily_limit"] == 3
-    assert updated_payload["workspace_default_label_paths"] == ["模型/闭源模型", "AI 应用"]
-    assert updated_payload["workspace_clustering_config"] == {"min_group_size": 2}
+    assert "workspace_label_set_codes" not in updated_payload
+    assert "workspace_default_label_paths" not in updated_payload
 
     repeated = client.post("/api/sources/import-legacy-seeds")
     assert repeated.status_code == 200

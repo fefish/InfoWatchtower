@@ -68,7 +68,6 @@ DEFAULT_WORKSPACE_LABEL_POLICY = {
     "default_category": "AI 应用",
     "fallback_category": "AI 应用",
     "tagging_stages": ["news_generation", "post_dedupe_labeling"],
-    "source_hint_policy": "hint_only",
 }
 
 CORE_WORKSPACE_SECTIONS = [

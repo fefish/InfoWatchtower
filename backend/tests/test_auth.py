@@ -59,7 +59,6 @@ def test_auth_seed_creates_default_workspaces(monkeypatch, tmp_path):
         for workspace in workspaces:
             label_policy = workspace.config_json["label_policy"]
             assert label_policy["label_set_code"] == "ai_sql_categories"
-            assert label_policy["source_hint_policy"] == "hint_only"
             assert label_policy["tagging_stages"] == ["news_generation", "post_dedupe_labeling"]
             assert label_policy["allowed_primary_categories"] == [
                 "AI Infra",
@@ -140,15 +139,14 @@ def test_authenticated_user_can_load_workspace_sections(monkeypatch, tmp_path):
         "/api/workspaces/planning_intel/label-policy",
         json={
             "label_set_code": "ai_sql_categories",
-            "allowed_primary_categories": ["模型", "智能体", "AI 应用"],
+            "allowed_primary_categories": ["模型", "智能体", "AI 应用", "具身智能"],
             "default_category": "AI 应用",
-            "fallback_category": "智能体",
-            "source_hint_policy": "hint_only",
+            "fallback_category": "具身智能",
         },
     )
     assert updated_policy.status_code == 200
-    assert updated_policy.json()["allowed_primary_categories"] == ["模型", "智能体", "AI 应用"]
-    assert updated_policy.json()["fallback_category"] == "智能体"
+    assert updated_policy.json()["allowed_primary_categories"] == ["模型", "智能体", "AI 应用", "具身智能"]
+    assert updated_policy.json()["fallback_category"] == "具身智能"
 
 
 def test_auth_seed_creates_default_label_set(monkeypatch, tmp_path):

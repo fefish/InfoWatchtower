@@ -82,14 +82,9 @@ def update_workspace_label_policy(
     session: Session = Depends(get_db_session),
 ) -> WorkspaceLabelPolicyRead:
     workspace = _get_enabled_workspace(session, workspace_code)
-    taxonomy_categories = _taxonomy_categories()
-    allowed_categories = payload.allowed_primary_categories or taxonomy_categories
-    invalid_categories = sorted(set(allowed_categories) - set(taxonomy_categories))
-    if invalid_categories:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unknown categories: {', '.join(invalid_categories)}",
-        )
+    allowed_categories = _normalize_policy_categories(payload.allowed_primary_categories)
+    if not allowed_categories:
+        allowed_categories = _taxonomy_categories()
     if payload.default_category not in allowed_categories:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -108,7 +103,6 @@ def update_workspace_label_policy(
         "default_category": payload.default_category,
         "fallback_category": payload.fallback_category,
         "tagging_stages": ["news_generation", "post_dedupe_labeling"],
-        "source_hint_policy": payload.source_hint_policy,
     }
     workspace.config_json = config
     session.commit()
@@ -154,6 +148,17 @@ def _taxonomy_categories() -> list[str]:
     return list(taxonomy.get("categories") or [])
 
 
+def _normalize_policy_categories(categories: list[str]) -> list[str]:
+    normalized: list[str] = []
+    for category in categories:
+        value = category.strip()
+        if not value:
+            continue
+        if value not in normalized:
+            normalized.append(value)
+    return normalized
+
+
 def _workspace_label_policy_to_read(workspace: Workspace) -> WorkspaceLabelPolicyRead:
     categories = _taxonomy_categories()
     config = workspace.config_json or {}
@@ -172,5 +177,4 @@ def _workspace_label_policy_to_read(workspace: Workspace) -> WorkspaceLabelPolic
         default_category=default_category,
         fallback_category=fallback_category,
         tagging_stages=list(policy.get("tagging_stages") or ["news_generation", "post_dedupe_labeling"]),
-        source_hint_policy=str(policy.get("source_hint_policy") or "hint_only"),
     )

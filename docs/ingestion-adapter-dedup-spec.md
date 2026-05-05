@@ -152,7 +152,7 @@ model_name
 prompt_version
 ```
 
-生成 `generated_news.category` 时必须读取当前工作台的 `workspaces.config_json.label_policy.allowed_primary_categories`。第一阶段规划部默认使用 `config/taxonomy/news_categories.json` 的 10 个旧系统兼容一级标签。单个数据源上的 `default_label_paths` 只能作为来源提示进入 prompt 或规则特征，不得替代工作台统一标签策略。
+生成 `generated_news.category` 时必须读取当前工作台的 `workspaces.config_json.label_policy.allowed_primary_categories`。第一阶段规划部默认使用 `config/taxonomy/news_categories.json` 的 10 个旧系统兼容一级标签。单个数据源不配置标签；同一个信息源可能覆盖多个关注方向，最终标签由新闻内容和工作台统一策略共同决定。
 
 ## 6. 去重在哪一步做
 

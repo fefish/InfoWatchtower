@@ -97,12 +97,13 @@ def update_source_workspace_link(
     link.daily_limit = payload.daily_limit
     link.domain_code = source.domain_code
     existing_config = link.config_json or {}
-    link.config_json = {
+    link_config = {
         **existing_config,
-        "label_set_codes": payload.label_set_codes or ["ai_sql_categories"],
-        "default_label_paths": payload.default_label_paths,
-        "clustering_config": payload.clustering_config,
+        "clustering_config": existing_config.get("clustering_config", {}),
     }
+    link_config.pop("label_set_codes", None)
+    link_config.pop("default_label_paths", None)
+    link.config_json = link_config
     session.commit()
     session.refresh(link)
     return _source_to_read(source, link)
@@ -176,7 +177,5 @@ def _source_to_read(source: DataSource, workspace_link: WorkspaceSourceLink | No
         workspace_link_enabled=workspace_link.enabled if workspace_link else False,
         workspace_source_weight=workspace_link.source_weight if workspace_link else None,
         workspace_daily_limit=workspace_link.daily_limit if workspace_link else None,
-        workspace_label_set_codes=list(link_config.get("label_set_codes") or []),
-        workspace_default_label_paths=list(link_config.get("default_label_paths") or []),
         workspace_clustering_config=dict(link_config.get("clustering_config") or {}),
     )

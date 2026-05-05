@@ -26,7 +26,6 @@ class WorkspaceLabelPolicyRead(BaseModel):
     default_category: str
     fallback_category: str
     tagging_stages: list[str]
-    source_hint_policy: str
 
 
 class WorkspaceLabelPolicyUpdate(BaseModel):
@@ -34,4 +33,3 @@ class WorkspaceLabelPolicyUpdate(BaseModel):
     allowed_primary_categories: list[str] = Field(default_factory=list)
     default_category: str = "AI 应用"
     fallback_category: str = "AI 应用"
-    source_hint_policy: str = "hint_only"

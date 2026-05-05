@@ -25,8 +25,6 @@ class DataSourceRead(BaseModel):
     workspace_link_enabled: bool | None = None
     workspace_source_weight: float | None = None
     workspace_daily_limit: int | None = None
-    workspace_label_set_codes: list[str] = Field(default_factory=list)
-    workspace_default_label_paths: list[str] = Field(default_factory=list)
     workspace_clustering_config: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -35,9 +33,6 @@ class DataSourceWorkspaceConfigUpdate(BaseModel):
     enabled: bool
     source_weight: float = Field(default=1.0, ge=0)
     daily_limit: int | None = Field(default=None, ge=0)
-    label_set_codes: list[str] = Field(default_factory=list)
-    default_label_paths: list[str] = Field(default_factory=list)
-    clustering_config: dict[str, Any] = Field(default_factory=dict)
 
 
 class LegacySeedImportRead(BaseModel):

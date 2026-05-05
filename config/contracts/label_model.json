@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "description": "Configurable first-level and second-level label model for model tagging, candidate pool items, reports and future domains.",
-  "core_rule": "A workspace owns one unified label policy. The first-level labels constrain model-generated news structure and post-dedupe label finalization; per-source label paths are optional hints only.",
+  "core_rule": "A workspace owns one unified label policy. The first-level labels constrain model-generated news structure and post-dedupe label finalization; per-source label configuration is not used because one source may contain multiple directions.",
   "tables": {
     "label_sets": [
       "workspace_code",
@@ -49,7 +49,7 @@
       "news_generation",
       "post_dedupe_labeling"
     ],
-    "source_hint_policy": "hint_only"
+    "source_label_config": "disabled"
   },
   "target_types": [
     "data_source",
@@ -74,7 +74,7 @@
     "Source management pages must expose the workspace unified label policy before per-source controls.",
     "Model prompts for raw-to-news generation must use workspaces.config_json.label_policy.allowed_primary_categories as the legal category list.",
     "After dedupe, model/rule label finalization must use the same workspace label policy, not per-source labels.",
-    "Source management pages may configure per-source label paths only as source hints; they must not shrink or replace the workspace legal label list.",
+    "Source management pages must not configure labels per source in the first phase; one source can contain multiple strategic directions.",
     "Second-level labels are stored as labels with parent_label_id pointing to a first-level label.",
     "Clustering and recommendation rules should reference label_set_code, label code and optional parent/child label paths.",
     "Candidate pool pages should display labels attached to the dedupe winner and its group.",

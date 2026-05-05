@@ -232,8 +232,6 @@ def _ensure_workspace_source_link(
             enabled=source.enabled,
             source_weight=1.0,
             config_json={
-                "label_set_codes": ["ai_sql_categories"],
-                "default_label_paths": [],
                 "clustering_config": {},
                 "origin": "legacy_seed",
             },
@@ -243,11 +241,12 @@ def _ensure_workspace_source_link(
         config = link.config_json or {}
         link.domain_code = source.domain_code
         link.enabled = source.enabled
-        link.config_json = {
+        link_config = {
             **config,
-            "label_set_codes": config.get("label_set_codes", ["ai_sql_categories"]),
-            "default_label_paths": config.get("default_label_paths", []),
             "clustering_config": config.get("clustering_config", {}),
             "origin": config.get("origin", "legacy_seed"),
         }
+        link_config.pop("label_set_codes", None)
+        link_config.pop("default_label_paths", None)
+        link.config_json = link_config
     return link

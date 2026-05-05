@@ -137,9 +137,9 @@ workspace_sections     当前工作台启用的页面
 `/sources`：
 
 - 数据源列表展示共享源池，以及当前工作台是否启用该源。
-- `GET /api/sources?workspace_code=...` 返回共享源池，并附带当前工作台的 `workspace_link_enabled`、`workspace_source_weight`、`workspace_daily_limit`、`workspace_label_set_codes`、`workspace_default_label_paths`、`workspace_clustering_config`。
+- `GET /api/sources?workspace_code=...` 返回共享源池，并附带当前工作台的 `workspace_link_enabled`、`workspace_source_weight`、`workspace_daily_limit` 和抓取状态；标签策略从 `GET /api/workspaces/{workspace_code}/label-policy` 读取。
 - `POST /api/sources/{source_id}/fetch` 第一版只做单源手动抓取，调用对应 adapter，把结果幂等写入 `raw_items`，并更新 `data_sources.last_fetch_at/last_success_at/last_error`。
-- 数据源配置页支持工作台级启停、domain、权重、每日上限、一级标题、二级标题、聚类推荐配置和自动打标策略。
+- 数据源配置页支持工作台统一标签策略的增删改，并支持单源启停、权重和每日上限；不要在单源配置里维护标签。
 - 数据源真实定义只保存一份；多个工作台复用时通过 `workspace_source_links` 配置差异。
 
 `/sources/:id`：

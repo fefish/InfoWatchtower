@@ -17,8 +17,6 @@ export interface DataSourceRecord {
   workspace_link_enabled: boolean | null;
   workspace_source_weight: number | null;
   workspace_daily_limit: number | null;
-  workspace_label_set_codes: string[];
-  workspace_default_label_paths: string[];
   workspace_clustering_config: Record<string, unknown>;
 }
 
@@ -33,9 +31,6 @@ export interface SourceWorkspaceConfigUpdate {
   enabled: boolean;
   source_weight: number;
   daily_limit: number | null;
-  label_set_codes: string[];
-  default_label_paths: string[];
-  clustering_config: Record<string, unknown>;
 }
 
 export interface SourceFetchResult {
