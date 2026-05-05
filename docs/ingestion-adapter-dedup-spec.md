@@ -20,7 +20,7 @@
 - 登录设计：`docs/auth-unified-login.md`
 - 旧系统规格：`docs/legacy-system-spec.md`
 
-当前仓库已经有可运行的 `backend/`、`frontend/`、数据库迁移和测试；采集侧已完成 adapter 框架、单源 RSS/paper RSS 抓取、工作台级 ingestion run API，以及 Redis/RQ worker + scheduler 调度入口。下一步应继续实现 raw 到 news 标准化与去重。
+当前仓库已经有可运行的 `backend/`、`frontend/`、数据库迁移和测试；采集侧已完成 adapter 框架、单源 RSS/paper RSS 抓取、工作台级 ingestion run API，以及 Redis/RQ worker + scheduler 调度入口。标准化与去重侧已完成 `POST /api/news-items/normalize`、`GET /api/news-items`、`GET /api/dedupe-groups` 的阶段 4 最小闭环。
 
 ## 2. Adapter 的职责
 
@@ -191,9 +191,24 @@ workspace ingestion run
 - `ingestion_runs` 保存 run 参数、状态、处理源数量、成功/失败、拉取数、raw 新增数和 raw 更新数。
 - `summary_json.sources` 保存每个源的结果摘要。
 
-尚未实现：失败源重试队列，以及 run 结束后自动进入 raw 到 news 标准化。
+尚未实现：失败源重试队列，以及 ingestion run 结束后自动触发阶段 4 标准化。
 
-## 6.2 候选池是什么
+## 6.2 标准化与硬去重 API
+
+阶段 4 已实现：
+
+- `POST /api/news-items/normalize`：按工作台选取该工作台已启用源的 raw，幂等创建或更新 `news_items`，并重建受影响的去重组。
+- `GET /api/news-items`：查看标准化新闻、`raw_item_id`、canonical URL、dedupe key 和 active/duplicate 状态。
+- `GET /api/dedupe-groups`：查看去重组 winner、loser、重复原因和 rank score。
+
+重要边界：
+
+- `raw_items` 属于共享原始事实层，不因去重删除。
+- `news_items.workspace_code` 使用处理工作台的 code；同一共享 raw 可以被不同工作台各自标准化。
+- `dedupe_groups` 按 `workspace_code + dedupe_key` 唯一，避免不同工作台互相覆盖 winner。
+- URL、标题和日期都不足以生成 dedupe key 的 raw 只停留在 raw 层，不进入推荐链路。
+
+## 6.3 候选池是什么
 
 候选池不是新的表族，也不是一个新的信息源。它是 `dedupe_groups` 和 winner `news_items` 的工作视图。
 

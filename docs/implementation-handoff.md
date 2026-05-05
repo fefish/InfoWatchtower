@@ -235,7 +235,7 @@ AuthAdapter -> ExternalIdentity -> IdentityResolver -> users -> session/JWT -> R
 - 导入后旧源进入共享数据源池，并为所有已启用的默认工作台创建 `workspace_source_links`；源定义仍只保存一份。
 - `folo_metadata.info_category = 学术论文` 的 RSS 源导入为 `paper_rss`。
 - wiseflow 作为 `source_type=wiseflow` 单独存在，不要混成 RSS。
-- 前端首页和数据源页必须显示当前阶段 3 进度；数据源页应能增删改工作台统一一级/二级标签策略，并能配置单源启用/权重/日限、手动触发 RSS/paper RSS 抓取；单源配置里不得维护标签。
+- 前端首页当前显示阶段 4 进度；数据源页应能继续验收阶段 3 的增删改工作台统一一级/二级标签策略、单源启用/权重/日限、手动触发 RSS/paper RSS 抓取；单源配置里不得维护标签。
 - 重复抓取同一个 RSS 源时，`raw_items` 按 `(data_source_id, entry_key)` 更新，不重复插入。
 - `POST /api/ingestion/runs` 能创建工作台级抓取 run；`GET /api/ingestion/runs` 和 `GET /api/ingestion/runs/{id}` 能查看历史与详情。
 
@@ -266,6 +266,8 @@ class SourceAdapter:
 
 ### 5.6 raw 到 news 标准化
 
+当前进度：已实现最小闭环。`backend/app/normalization/news.py` 提供 `normalize_workspace_raw_items()`，`POST /api/news-items/normalize` 可按工作台把已启用源的 raw 标准化成 news。标准化结果继承 `workspace_code`、`domain_code`、`visibility_scope`、`sync_policy`，保留 `raw_item_id` 和 `data_source_id` 追溯链路，生成 canonical URL、normalized title、summary、content、author 和 dedupe key。URL、标题和日期都不足以生成 dedupe key 的 raw 会被跳过，不进入推荐链路。
+
 实现 `normalize_to_news_item(raw_item)`。
 
 规则：
@@ -280,8 +282,11 @@ class SourceAdapter:
 
 - `docs/data-examples.md` 里的 RSS 样例可以变成对应 `news_items`。
 - URL、标题、时间都缺失的 raw item 不进入推荐链路。
+- `GET /api/news-items?workspace_code=planning_intel` 能看到 `raw_item_id`、`canonical_url`、`dedupe_key` 和 `active`。
 
 ### 5.7 去重
+
+当前进度：已实现保守硬去重。`dedupe_groups` 按 `workspace_code + dedupe_key` 唯一，避免不同工作台争夺同一个 winner；同一共享 raw 可被多个工作台各自标准化和去重。
 
 实现硬去重：
 
@@ -295,6 +300,7 @@ class SourceAdapter:
 - 同 canonical URL 的两条新闻只保留一个 active winner。
 - loser 的 raw 数据仍可追溯，不删除。
 - 不同 URL 的相似主题第一版不要自动删除。
+- `GET /api/dedupe-groups?workspace_code=planning_intel` 能看到 winner、loser、`duplicate_reason` 和 `rank_score`。
 
 ### 5.8 推荐
 

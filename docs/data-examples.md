@@ -73,6 +73,7 @@ RSS adapter 从 feed 里拿到的单条 entry 通常类似这样：
 ```json
 {
   "id": "news_001",
+  "workspace_code": "planning_intel",
   "raw_item_id": "raw_001",
   "domain_code": "ai",
   "visibility_scope": "public",
@@ -80,15 +81,17 @@ RSS adapter 从 feed 里拿到的单条 entry 通常类似这样：
   "source_url": "https://openai.com/index/introducing-workspace-agents-in-chatgpt",
   "canonical_url": "https://openai.com/index/introducing-workspace-agents-in-chatgpt",
   "source_title": "Introducing workspace agents in ChatGPT",
+  "normalized_title": "introducing workspace agents in chatgpt",
+  "summary": "Workspace agents in ChatGPT are Codex-powered agents that automate complex workflows...",
   "content": "Workspace agents in ChatGPT are Codex-powered agents that automate complex workflows...",
-  "created_at": "2026-04-22T10:00:00Z",
+  "published_at": "2026-04-22T10:00:00Z",
   "focus_id": 1,
-  "source_kind": "rss",
+  "source_type": "rss",
   "source_name": "OpenAI News",
   "dedupe_key": "url:https://openai.com/index/introducing-workspace-agents-in-chatgpt",
-  "duplicate_of": null,
+  "duplicate_of_id": null,
   "active": true,
-  "normalization_status": "ready"
+  "normalization_status": "normalized"
 }
 ```
 
@@ -105,12 +108,13 @@ title:introducing workspace agents in chatgpt|date:2026-04-22
 ```json
 {
   "id": "news_002",
-  "source_kind": "page_monitor",
+  "workspace_code": "planning_intel",
+  "source_type": "page_monitor",
   "source_name": "OpenAI Official Pages",
   "canonical_url": "https://openai.com/index/introducing-workspace-agents-in-chatgpt",
   "dedupe_key": "url:https://openai.com/index/introducing-workspace-agents-in-chatgpt",
   "active": false,
-  "duplicate_of": "news_001"
+  "duplicate_of_id": "news_001"
 }
 ```
 
@@ -120,17 +124,28 @@ title:introducing workspace agents in chatgpt|date:2026-04-22
 {
   "dedupe_group": {
     "id": "dedupe_001",
+    "workspace_code": "planning_intel",
     "dedupe_key": "url:https://openai.com/index/introducing-workspace-agents-in-chatgpt",
-    "representative_news_item_id": "news_001"
+    "winner_news_item_id": "news_001",
+    "item_count": 2,
+    "status": "active"
   },
   "items": [
-    {"news_item_id": "news_001", "is_representative": true},
-    {"news_item_id": "news_002", "is_representative": false, "duplicate_reason": "same canonical_url"}
+    {"news_item_id": "news_001", "is_winner": true, "duplicate_reason": "winner"},
+    {"news_item_id": "news_002", "is_winner": false, "duplicate_reason": "same canonical URL"}
   ]
 }
 ```
 
 原始 `raw_items` 都保留，不物理删除。
+
+阶段 4 可用这些接口验收：
+
+```text
+POST /api/news-items/normalize
+GET  /api/news-items?workspace_code=planning_intel
+GET  /api/dedupe-groups?workspace_code=planning_intel
+```
 
 ## 5. 推荐评分
 

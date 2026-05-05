@@ -272,13 +272,15 @@ class SourceAdapter:
 - 单个 RSS 源可以手动触发抓取，首次创建 `raw_items`，重复抓取更新已有 raw 记录而不重复插入。
 - 可以创建工作台级 ingestion run，run 记录 source 成功/失败、拉取数、raw 新增数和 raw 更新数；`limit=0` 可用于无网络验收 API。
 - 可以启动 worker/scheduler 容器；默认 `INGESTION_SCHEDULER_ENABLED=false` 不会自动抓取，设为 `true` 后按 `INGESTION_SCHEDULER_INTERVAL_SECONDS` 入队。
-- 前端首页显示阶段 3，数据源页显示数据源管理能力，并能增删改工作台统一一级/二级标签策略、通过“配置”修改单源启用/权重/日限、通过“抓取”按钮触发单源抓取。
+- 前端首页当前显示阶段 4；数据源页仍可验收阶段 3 的数据源管理能力，并能增删改工作台统一一级/二级标签策略、通过“配置”修改单源启用/权重/日限、通过“抓取”按钮触发单源抓取。
 - 新增 source_type 只需注册 adapter。
 - adapter 输出满足 `adapter_pipeline.json` 的 raw 字段要求。
 
 ## 8. 阶段 4：raw 入库、标准化与去重
 
 目标：把不同来源统一进 `raw_items -> news_items -> dedupe_groups`。
+
+当前实现状态：已完成最小闭环。服务位于 `backend/app/normalization/news.py`，API 位于 `backend/app/api/routes/news.py`，schema 位于 `backend/app/schemas/news.py`；`dedupe_groups` 已改为按 `workspace_code + dedupe_key` 唯一，迁移为 `backend/alembic/versions/d7e8f9a0b1c2_scope_dedupe_groups_by_workspace.py`。同一个共享 raw 可以被不同工作台各自标准化，winner/loser 状态不会跨工作台互相污染。
 
 实现：
 
@@ -287,6 +289,9 @@ class SourceAdapter:
 - `canonical_url` 统一规范化。
 - `dedupe_key` 在 news 标准层生成。
 - 去重发生在 `news_items` 之后、推荐之前。
+- `POST /api/news-items/normalize` 按工作台处理该工作台已启用源的 raw，幂等创建或更新 news，并重建受影响的 dedupe group。
+- `GET /api/news-items` 查看标准化 news 和 raw 追溯 ID。
+- `GET /api/dedupe-groups` 查看去重组、winner、loser 和重复原因。
 
 硬去重规则：
 
@@ -308,6 +313,14 @@ winner 选择顺序：
 - loser 写入 `duplicate_of`，但 raw 不删除。
 - 不同 URL 的相似主题第一版不自动删除。
 - `docs/data-examples.md` 中的 RSS 样例能转成 news item。
+- 同一条共享 raw 在 `planning_intel` 和 `ai_tools` 下可各自生成 news item 和 dedupe group。
+
+已验证：
+
+```text
+cd backend && DATABASE_URL="" pytest tests/test_news_normalization.py tests/test_news_api.py
+cd backend && ruff check app/normalization app/schemas/news.py app/api/routes/news.py tests/test_news_normalization.py tests/test_news_api.py
+```
 
 ## 9. 阶段 5：推荐、日报草稿和反馈链路
 

@@ -73,6 +73,7 @@
     "runs_after": "normalize_to_news_item",
     "runs_before": "scoring_and_recommendation",
     "reason": "Different source structures must first be normalized before they can be compared fairly. Scoring should only run on deduped winners.",
+    "workspace_scope_rule": "dedupe_groups are unique by workspace_code + dedupe_key. Shared raw_items may be normalized independently into each enabled workspace, and each workspace owns its own winner/loser state.",
     "hard_dedupe_key_order": [
       "canonical_url",
       "normalized_title + published_date_bucket when canonical_url is missing"

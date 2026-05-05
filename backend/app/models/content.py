@@ -100,8 +100,11 @@ class NewsItem(IdMixin, ScopeMixin, SyncMixin, TimestampMixin, Base):
 
 class DedupeGroup(IdMixin, ScopeMixin, SyncMixin, TimestampMixin, Base):
     __tablename__ = "dedupe_groups"
+    __table_args__ = (
+        UniqueConstraint("workspace_code", "dedupe_key", name="uq_dedupe_groups_workspace_key"),
+    )
 
-    dedupe_key: Mapped[str] = mapped_column(String(512), unique=True, index=True)
+    dedupe_key: Mapped[str] = mapped_column(String(512), index=True)
     winner_news_item_id: Mapped[str | None] = mapped_column(ForeignKey("news_items.id"), nullable=True)
     item_count: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(32), default="active")

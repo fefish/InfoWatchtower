@@ -4,7 +4,7 @@
 
 ## 1. 当前状态
 
-当前已完成阶段 0、阶段 1、阶段 2，并完成阶段 3 的导入、工作台统一标签策略、adapter 框架和手动 RSS raw 入库部分：
+当前已完成阶段 0、阶段 1、阶段 2、阶段 3 和阶段 4：
 
 - 后端 FastAPI 骨架。
 - `/healthz` 健康检查。
@@ -20,8 +20,9 @@
 - 公网安全和 SSO 后续计划见 `docs/auth-security-roadmap.md`。
 - 工作台模型按共享主链路实现；工作台列表来自 `workspaces`，页面来自 `workspace_sections`，所有工作台共享数据源管理、候选池、日报、周报和导出能力。差异配置通过 `workspaces.config_json.label_policy` 的工作台统一一级/二级标签策略、`workspace_source_links` 的源启用/权重/日限和可选插件模块完成。
 - 阶段 3 已有共享数据源导入 API、数据源页面、工作台统一标签策略 API、工作台源链接配置 API、工作台级 ingestion run API、Redis/RQ worker + scheduler 调度入口、adapter registry、RSS adapter 和 wiseflow/page/paper/manual 骨架；旧种子源导入后会为所有已启用默认工作台创建源链接；RSS/paper RSS 源可通过手动 API 抓取并幂等写入 `raw_items`，也可通过 ingestion run 按工作台批量触发。前端已切到浅色工作台壳、数据库驱动导航、信息流式数据源列表和紧凑工作台标签策略面板。
+- 阶段 4 已有 raw 到 news 标准化与硬去重 API：`POST /api/news-items/normalize`、`GET /api/news-items`、`GET /api/dedupe-groups`。同一共享 raw 可以被不同工作台各自标准化；去重组按 `workspace_code + dedupe_key` 隔离；winner/loser 会回写到 `news_items.active` 和 `duplicate_of_id`。
 
-业务流程 API 还未实现：raw 到 news 标准化、去重执行、推荐执行、日报编辑页面和 SQL 导出会在后续阶段逐步补齐。
+业务流程 API 还未实现：推荐执行、日报编辑页面和 SQL 导出会在后续阶段逐步补齐。
 
 ## 2. 后端本地运行
 
@@ -132,7 +133,7 @@ curl http://localhost:8000/healthz
 curl http://localhost:5173/healthz
 ```
 
-## 5.1 当前阶段 3 验收
+## 5.1 阶段 3 能力验收
 
 本阶段已经做到：旧种子源导入、工作台源链接、工作台统一一级/二级标签策略、数据库驱动导航、单源 RSS 抓取到 `raw_items`、工作台级 ingestion run API、worker/scheduler 调度入口。
 
@@ -140,7 +141,7 @@ curl http://localhost:5173/healthz
 
 1. 打开 `http://127.0.0.1:5173/sources`。
 2. 使用 `admin/password` 登录。
-3. 首页应显示当前阶段为阶段 3。
+3. 首页应显示当前阶段为阶段 4；本节验收的是仍然可用的数据源与抓取能力。
 4. 数据源页标题应为“数据源管理”，共享源列表标题应为“活跃数据源”。
 5. 数据源页右侧应显示工作台统一标签策略，规划部默认含旧系统兼容的 10 个一级标签；AI 工具桌面默认含“工具新功能、工具新案例、工具新技术”，且每个一级标签下都有 `cursor/claude code/opencode/codex` 二级标签；一级/二级标签都支持新增、重命名、删除，且单个源配置里不出现标签维护。
 6. 数据源页应显示共享源 113、当前工作台启用 79。
@@ -195,6 +196,38 @@ docker compose -p infowatchtower -f deploy/docker-compose.local.yml exec -T post
 
 同一个 RSS 源重复抓取时，第一次应新增 raw 记录；第二次应更新已有记录，不应重复插入。
 
+## 5.2 当前阶段 4 验收
+
+本阶段已经做到：按工作台把已启用源的 `raw_items` 标准化成 `news_items`，生成 canonical URL、normalized title 和 dedupe key，并在 `dedupe_groups/dedupe_group_items` 中记录 winner/loser。去重组按 `workspace_code + dedupe_key` 隔离。
+
+API 验收：
+
+```bash
+rm -f /tmp/iw_cookie.txt
+curl -fsS -c /tmp/iw_cookie.txt \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"password"}' \
+  http://127.0.0.1:8000/api/auth/login
+
+curl -fsS -b /tmp/iw_cookie.txt \
+  -H 'Content-Type: application/json' \
+  -X POST 'http://127.0.0.1:8000/api/news-items/normalize' \
+  -d '{"workspace_code":"planning_intel","source_types":["rss","paper_rss"],"limit":50}'
+
+curl -fsS -b /tmp/iw_cookie.txt \
+  'http://127.0.0.1:8000/api/news-items?workspace_code=planning_intel&active=true'
+
+curl -fsS -b /tmp/iw_cookie.txt \
+  'http://127.0.0.1:8000/api/dedupe-groups?workspace_code=planning_intel'
+```
+
+通过标准：
+
+- 同 canonical URL 的多条 news 只保留一个 `active=true`。
+- loser 写入 `duplicate_of_id`，但关联的 `raw_items` 仍保留。
+- 不同 URL 的相似标题第一版不自动合并。
+- 列表返回中必须带 `raw_item_id`，后续日报和 SQL 导出可沿链路追溯回 `raw_items.raw_payload_json`。
+
 ## 6. 下一阶段
 
-阶段 3 已完成工作台统一标签策略、手动 RSS 抓取到 raw 入库、工作台级 ingestion run API 和 worker/scheduler 调度入口。下一步进入阶段 4 的 raw 到 news 标准化与去重。
+阶段 4 已完成 raw 到 news 标准化与工作台隔离硬去重。下一步进入阶段 5 的推荐、日报草稿和反馈链路。
