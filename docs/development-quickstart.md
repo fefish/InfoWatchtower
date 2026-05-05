@@ -4,7 +4,7 @@
 
 ## 1. 当前状态
 
-当前已完成阶段 0、阶段 1、阶段 2，并完成阶段 3 的导入和 adapter 框架部分：
+当前已完成阶段 0、阶段 1、阶段 2，并完成阶段 3 的导入、adapter 框架和手动 RSS raw 入库部分：
 
 - 后端 FastAPI 骨架。
 - `/healthz` 健康检查。
@@ -132,6 +132,45 @@ curl http://localhost:8000/healthz
 curl http://localhost:5173/healthz
 ```
 
+## 5.1 当前阶段 3 验收
+
+本阶段已经做到：旧种子源导入、工作台源链接、数据库驱动导航、单源 RSS 抓取到 `raw_items`。
+
+前端验收：
+
+1. 打开 `http://127.0.0.1:5173/sources`。
+2. 使用 `admin/password` 登录。
+3. 首页应显示当前阶段为阶段 3。
+4. 数据源页标题应为“数据源与 RSS raw 入库”。
+5. 数据源页应显示共享源 113、当前工作台启用 79。
+6. 对启用的 `rss` 或 `paper_rss` 源点击“抓取”，页面应提示拉取、新增、更新数量。
+
+API 验收：
+
+```bash
+rm -f /tmp/iw_cookie.txt
+curl -fsS -c /tmp/iw_cookie.txt \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"password"}' \
+  http://127.0.0.1:8000/api/auth/login
+
+curl -fsS -b /tmp/iw_cookie.txt \
+  'http://127.0.0.1:8000/api/sources?workspace_code=planning_intel'
+
+curl -fsS -b /tmp/iw_cookie.txt \
+  -X POST 'http://127.0.0.1:8000/api/sources/{source_id}/fetch'
+```
+
+数据库验收：
+
+```bash
+docker compose -p infowatchtower -f deploy/docker-compose.local.yml exec -T postgres \
+  psql -U infowatchtower -d infowatchtower \
+  -c "select count(*) from raw_items where data_source_id = '{source_id}';"
+```
+
+同一个 RSS 源重复抓取时，第一次应新增 raw 记录；第二次应更新已有记录，不应重复插入。
+
 ## 6. 下一阶段
 
-阶段 3 开始实现数据源导入与 adapter 框架。先导入旧种子源并固定 adapter 注册机制，再实现真实 RSS 抓取。
+阶段 3 已完成手动 RSS 抓取到 raw 入库的最小链路。下一步先补抓取调度，再进入阶段 4 的 raw 到 news 标准化与去重。

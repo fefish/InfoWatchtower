@@ -12,8 +12,8 @@ const workspace = useWorkspaceStore();
 const metrics = computed(() => [
   { label: "种子源", value: "113", detail: "wiseflow/RSS/page" },
   { label: "论文源", value: "17", detail: "14 个启用" },
-  { label: "SQL标签", value: "10", detail: "兼容内网导出" },
-  { label: "当前阶段", value: "2", detail: "登录与 RBAC" }
+  { label: "工作台源链接", value: "113", detail: "每个默认工作台" },
+  { label: "当前阶段", value: "3", detail: "RSS raw 入库" }
 ]);
 
 onMounted(async () => {
@@ -39,11 +39,12 @@ onMounted(async () => {
 
   <section class="work-band">
     <div>
-      <p class="eyebrow">阶段 2</p>
-      <h2>登录与 RBAC</h2>
+      <p class="eyebrow">阶段 3</p>
+      <h2>数据源与 RSS raw 入库</h2>
       <p>
-        当前工作台：{{ workspace.current?.name }}。系统已接入公网账号密码登录、签名会话、
-        内网 header 身份适配和本地角色权限。下一步进入数据源导入与 adapter 框架。
+        当前工作台：{{ workspace.current?.name }}。系统已完成登录与 RBAC、数据库驱动工作台、
+        共享数据源导入、adapter 注册，以及 RSS/paper RSS 手动抓取到 raw_items 的最小链路。
+        下一步补抓取调度，再进入 raw 到 news 的标准化和去重。
       </p>
     </div>
 

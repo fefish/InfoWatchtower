@@ -270,6 +270,7 @@ class SourceAdapter:
 - 旧 wiseflow 不被混成 RSS。
 - `planning_intel` 和 `ai_tools` 都能看到 113 个共享源链接，其中 79 个启用。
 - 单个 RSS 源可以手动触发抓取，首次创建 `raw_items`，重复抓取更新已有 raw 记录而不重复插入。
+- 前端首页显示阶段 3，数据源页显示“数据源与 RSS raw 入库”，并能通过“抓取”按钮触发单源抓取。
 - 新增 source_type 只需注册 adapter。
 - adapter 输出满足 `adapter_pipeline.json` 的 raw 字段要求。
 

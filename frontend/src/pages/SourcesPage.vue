@@ -56,6 +56,19 @@ function canFetchSource(source: DataSourceRecord) {
   return source.enabled && source.workspace_link_enabled && ["rss", "paper_rss"].includes(source.source_type);
 }
 
+function formatDateTime(value: string | null) {
+  if (!value) {
+    return "";
+  }
+  return new Date(value).toLocaleString("zh-CN", {
+    hour12: false,
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
 async function fetchOneSource(source: DataSourceRecord) {
   fetchingSourceId.value = source.id;
   error.value = "";
@@ -86,8 +99,8 @@ watch(
   <section class="toolbar-band">
     <div>
       <p class="eyebrow">阶段 3</p>
-      <h2>数据源</h2>
-      <p>数据源先进入共享池，各工作台通过启用链接复用这些源并配置标签策略。</p>
+      <h2>数据源与 RSS raw 入库</h2>
+      <p>数据源先进入共享池，各工作台通过启用链接复用这些源；RSS/paper RSS 可手动抓取并幂等写入 raw_items。</p>
     </div>
     <div class="toolbar-actions">
       <button type="button" class="icon-button" :disabled="loading" @click="loadSources" title="刷新">
@@ -159,6 +172,7 @@ watch(
           </td>
           <td>
             <strong>{{ source.enabled ? "启用" : "停用" }}</strong>
+            <span>{{ source.last_success_at ? `最近成功 ${formatDateTime(source.last_success_at)}` : "暂无成功抓取" }}</span>
             <span>{{ source.last_error || "暂无错误" }}</span>
             <button
               v-if="canFetchSource(source)"

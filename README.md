@@ -75,3 +75,20 @@ make up
 ```bash
 make build
 ```
+
+## 当前能力验收
+
+```bash
+make test
+make migration-check
+make build
+```
+
+浏览器访问 `http://127.0.0.1:5173/sources`，使用 `admin/password` 登录。验收点：
+
+- 首页显示当前阶段为阶段 3。
+- 数据源页标题为“数据源与 RSS raw 入库”。
+- 左侧导航来自数据库，不出现工具目录、工具任务或独立热点专题。
+- 数据源页显示共享源 113、当前工作台启用 79。
+- 对任意启用的 `rss` 或 `paper_rss` 源点击“抓取”，成功后会提示拉取、新增、更新数量。
+- 重复抓取同一个 RSS 源时，`raw_items` 不重复插入，应表现为新增 0、更新大于 0。
