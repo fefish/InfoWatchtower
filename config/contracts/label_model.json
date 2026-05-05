@@ -39,12 +39,30 @@
     "ai_sql_categories": {
       "source": "config/taxonomy/news_categories.json",
       "purpose": "The 10 first-level labels required by the current company SQL export and first-phase clustering/recommendation directory."
+    },
+    "ai_tools_categories": {
+      "workspace_code": "ai_tools",
+      "primary_categories": ["工具新功能", "工具新案例", "工具新技术"],
+      "secondary_labels_by_primary": {
+        "工具新功能": ["cursor", "claude code", "opencode", "codex"],
+        "工具新案例": ["cursor", "claude code", "opencode", "codex"],
+        "工具新技术": ["cursor", "claude code", "opencode", "codex"]
+      },
+      "purpose": "The AI tools workspace label set. It is intentionally isolated from planning_intel's company SQL categories."
     }
   },
   "workspace_label_policy": {
     "storage": "workspaces.config_json.label_policy",
-    "default_label_set_code": "ai_sql_categories",
-    "default_allowed_primary_categories_source": "config/taxonomy/news_categories.json",
+    "fields": [
+      "label_set_code",
+      "allowed_primary_categories",
+      "secondary_labels_by_primary",
+      "default_category",
+      "fallback_category",
+      "tagging_stages"
+    ],
+    "planning_intel_default_label_set_code": "ai_sql_categories",
+    "ai_tools_default_label_set_code": "ai_tools_categories",
     "tagging_stages": [
       "news_generation",
       "post_dedupe_labeling"
@@ -73,6 +91,7 @@
   "rules": [
     "Source management pages must expose the workspace unified label policy before per-source controls.",
     "Model prompts for raw-to-news generation must use workspaces.config_json.label_policy.allowed_primary_categories as the legal category list.",
+    "Model prompts may use workspaces.config_json.label_policy.secondary_labels_by_primary as optional second-level labels under the selected primary category.",
     "After dedupe, model/rule label finalization must use the same workspace label policy, not per-source labels.",
     "Source management pages must not configure labels per source in the first phase; one source can contain multiple strategic directions.",
     "Second-level labels are stored as labels with parent_label_id pointing to a first-level label.",

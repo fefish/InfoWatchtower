@@ -85,6 +85,7 @@ def update_workspace_label_policy(
     allowed_categories = _normalize_policy_categories(payload.allowed_primary_categories)
     if not allowed_categories:
         allowed_categories = _taxonomy_categories()
+    secondary_labels = _normalize_secondary_labels(payload.secondary_labels_by_primary, allowed_categories)
     if payload.default_category not in allowed_categories:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -100,6 +101,7 @@ def update_workspace_label_policy(
     config["label_policy"] = {
         "label_set_code": payload.label_set_code,
         "allowed_primary_categories": allowed_categories,
+        "secondary_labels_by_primary": secondary_labels,
         "default_category": payload.default_category,
         "fallback_category": payload.fallback_category,
         "tagging_stages": ["news_generation", "post_dedupe_labeling"],
@@ -159,11 +161,32 @@ def _normalize_policy_categories(categories: list[str]) -> list[str]:
     return normalized
 
 
+def _normalize_secondary_labels(labels_by_primary: dict[str, list[str]], allowed_categories: list[str]) -> dict[str, list[str]]:
+    normalized: dict[str, list[str]] = {}
+    allowed = set(allowed_categories)
+    for primary, labels in labels_by_primary.items():
+        primary_value = primary.strip()
+        if primary_value not in allowed:
+            continue
+        clean_labels: list[str] = []
+        for label in labels:
+            value = label.strip()
+            if value and value not in clean_labels:
+                clean_labels.append(value)
+        if clean_labels:
+            normalized[primary_value] = clean_labels
+    return normalized
+
+
 def _workspace_label_policy_to_read(workspace: Workspace) -> WorkspaceLabelPolicyRead:
     categories = _taxonomy_categories()
     config = workspace.config_json or {}
     policy = config.get("label_policy") or {}
     allowed_categories = list(policy.get("allowed_primary_categories") or categories)
+    secondary_labels = _normalize_secondary_labels(
+        dict(policy.get("secondary_labels_by_primary") or {}),
+        allowed_categories,
+    )
     default_category = str(policy.get("default_category") or "AI 应用")
     fallback_category = str(policy.get("fallback_category") or "AI 应用")
     if default_category not in allowed_categories:
@@ -174,6 +197,7 @@ def _workspace_label_policy_to_read(workspace: Workspace) -> WorkspaceLabelPolic
         workspace_code=workspace.code,
         label_set_code=str(policy.get("label_set_code") or "ai_sql_categories"),
         allowed_primary_categories=allowed_categories,
+        secondary_labels_by_primary=secondary_labels,
         default_category=default_category,
         fallback_category=fallback_category,
         tagging_stages=list(policy.get("tagging_stages") or ["news_generation", "post_dedupe_labeling"]),

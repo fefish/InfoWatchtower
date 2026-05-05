@@ -52,7 +52,7 @@
 - 所有工作台默认都有数据源管理、候选池、日报、周报和导出；可选模块只能做加法，且默认关闭。
 - 数据源先进入共享池 `data_sources`，工作台通过 `workspace_source_links` 启用和配置，不复制数据源定义。
 - 一级/二级标题统一走 `label_sets/labels/content_labels`，不要给每个工作台或 source_type 增加专用标签字段，也不要为它们新增工具管理页面。
-- 工作台统一标签策略保存在 `workspaces.config_json.label_policy`。模型生成新闻结构和去重后标签定稿都必须读取这套策略；单个数据源不配置标签，只配置启用、权重、日限和抓取相关信息。
+- 工作台统一标签策略保存在 `workspaces.config_json.label_policy`。模型生成新闻结构和去重后标签定稿都必须读取这套策略；单个数据源不配置标签，只配置启用、权重、日限和抓取相关信息。`planning_intel` 默认是旧公司 SQL 兼容的 10 个一级标签；`ai_tools` 默认是“工具新功能、工具新案例、工具新技术”，且每个一级标签下都有 `cursor/claude code/opencode/codex` 二级标签。
 - 原始数据必须进入 `raw_items.raw_payload_json`，不能只保存清洗后的字段。
 - 去重必须发生在 `news_items` 之后、推荐之前。
 - 标准公司 SQL 只导出已发布日报里 `adoption_status = 2` 的条目。
@@ -221,7 +221,7 @@ AuthAdapter -> ExternalIdentity -> IdentityResolver -> users -> session/JWT -> R
 
 ### 5.4 数据源导入
 
-当前进度：已实现旧种子源导入 API、数据源列表 API、工作台统一标签策略 API、工作台源链接配置 API 和单源手动抓取 API。导入后 113 个源进入共享数据源池，并为 `planning_intel`、`ai_tools` 等已启用默认工作台创建 `workspace_source_links`；每个工作台当前 79 个源启用、34 个源停用，继承旧源 enabled 状态。管理员可在数据源页增删改当前工作台统一一级标签策略；该策略是模型生成新闻结构和去重后标签定稿的合法标签列表。单个源只配置启用、权重和日限。RSS/paper RSS 源可手动触发抓取到 `raw_items`，重复抓取按 `(data_source_id, entry_key)` 幂等更新。
+当前进度：已实现旧种子源导入 API、数据源列表 API、工作台统一标签策略 API、工作台源链接配置 API 和单源手动抓取 API。导入后 113 个源进入共享数据源池，并为 `planning_intel`、`ai_tools` 等已启用默认工作台创建 `workspace_source_links`；每个工作台当前 79 个源启用、34 个源停用，继承旧源 enabled 状态。管理员可在数据源页增删改当前工作台统一一级/二级标签策略；该策略是模型生成新闻结构和去重后标签定稿的合法标签列表。单个源只配置启用、权重和日限。RSS/paper RSS 源可手动触发抓取到 `raw_items`，重复抓取按 `(data_source_id, entry_key)` 幂等更新。前端已改为浅色工作台壳、数据库驱动分组导航、信息流式数据源列表和紧凑工作台标签策略面板；占位页使用统一内容容器，避免常见桌面宽度下横向显示不全。
 
 从这些文件导入初始源：
 
@@ -235,7 +235,7 @@ AuthAdapter -> ExternalIdentity -> IdentityResolver -> users -> session/JWT -> R
 - 导入后旧源进入共享数据源池，并为所有已启用的默认工作台创建 `workspace_source_links`；源定义仍只保存一份。
 - `folo_metadata.info_category = 学术论文` 的 RSS 源导入为 `paper_rss`。
 - wiseflow 作为 `source_type=wiseflow` 单独存在，不要混成 RSS。
-- 前端首页和数据源页必须显示当前阶段 3 进度；数据源页应能增删改工作台统一一级标签策略，并能配置单源启用/权重/日限、手动触发 RSS/paper RSS 抓取。
+- 前端首页和数据源页必须显示当前阶段 3 进度；数据源页应能增删改工作台统一一级/二级标签策略，并能配置单源启用/权重/日限、手动触发 RSS/paper RSS 抓取；单源配置里不得维护标签。
 - 重复抓取同一个 RSS 源时，`raw_items` 按 `(data_source_id, entry_key)` 更新，不重复插入。
 
 ### 5.5 Adapter 注册

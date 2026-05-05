@@ -15,7 +15,7 @@
         "workspace memberships",
         "source enablement through workspace_source_links",
         "default domain visibility",
-        "unified label policy for model tagging"
+        "isolated unified label policy for model tagging"
       ]
     },
     "section": {
@@ -106,7 +106,8 @@
     "New work scopes are workspaces; optional pages/tools are workspace_sections with enabled=false by default.",
     "The frontend must load workspace list and enabled sections from backend APIs; hard-coded navigation is only a temporary scaffold.",
     "Do not show tool_catalog, tool_runs or standalone_topics unless workspace_sections explicitly enables them.",
-    "First-level labels are configured once per workspace in workspaces.config_json.label_policy and constrain model-generated news categories.",
+    "First-level and second-level labels are configured once per workspace in workspaces.config_json.label_policy and constrain model-generated news categories.",
+    "planning_intel defaults to ai_sql_categories; ai_tools defaults to ai_tools_categories with 工具新功能/工具新案例/工具新技术 and cursor/claude code/opencode/codex as second-level labels under each primary label.",
     "Do not configure labels per source in the first phase; one source may contain multiple strategic directions.",
     "First-level and second-level labels are the directory for clustering and recommendation; do not add a separate tool management page for that.",
     "Data APIs that list reusable sources may filter by workspace_code through workspace_source_links.",

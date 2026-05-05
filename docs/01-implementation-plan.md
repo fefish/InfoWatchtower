@@ -30,7 +30,7 @@
 - 所有业务对象必须保留追溯链路，不能为了前端展示压扁数据。
 - adapter 可插拔，新增数据源类型不应修改 dedupe/report/export 主链路。
 - 工作台可插拔，但必须共享数据源管理、候选池、日报、周报和导出主链路。
-- 新工作台不复制数据源定义；通过 `workspace_source_links` 启用共享源并配置权重、默认板块、一级/二级标题和聚类推荐策略。
+- 新工作台不复制数据源定义；通过 `workspace_source_links` 启用共享源并配置权重、默认板块、日限和抓取相关信息。一级/二级标题由 `workspaces.config_json.label_policy` 统一管理，不在单个源配置。
 - 工具目录、工具任务、独立专题等只能作为数据库注册的插件模块接入，第一版默认不显示。
 - `workspace_code` 是产品桌面和权限边界，`domain_code` 是内容主题板块，不得混用。
 - 标签体系统一走 `label_sets/labels/content_labels`，不在每个工作台写一套自定义字段。
@@ -235,7 +235,7 @@ PATCH /api/users/{id}/roles
 
 前置调整：工作台模型按共享主链路收束。`workspaces/workspace_sections/workspace_memberships` 管工作范围、页面和权限；`workspace_source_links` 管工作台启用哪些共享数据源；`domain_code` 继续只表达情报主题板块。
 
-当前实现状态：导入、工作台统一标签策略、adapter 框架和手动 RSS 抓取到 raw 入库的最小链路已完成，抓取调度待继续。`backend/app/adapters/` 已有统一 `SourceAdapter`、RSS adapter 和 wiseflow/page/paper/manual 等骨架；`/api/sources/import-legacy-seeds` 可以导入 113 个旧源；`/api/sources?workspace_code=...` 可以展示共享源池及当前工作台配置；`/api/workspaces/{workspace_code}/label-policy` 可以增删改工作台统一一级标签策略；`/api/sources/{source_id}/workspace-link` 可以更新当前工作台对单源的启用状态、权重和日限；`/api/sources/{source_id}/fetch` 可以触发单个 RSS/paper RSS 源抓取并幂等写入 `raw_items`；`workspace_source_links` 会为所有已启用默认工作台建立链接。
+当前实现状态：导入、工作台统一标签策略、adapter 框架和手动 RSS 抓取到 raw 入库的最小链路已完成，抓取调度待继续。`backend/app/adapters/` 已有统一 `SourceAdapter`、RSS adapter 和 wiseflow/page/paper/manual 等骨架；`/api/sources/import-legacy-seeds` 可以导入 113 个旧源；`/api/sources?workspace_code=...` 可以展示共享源池及当前工作台配置；`/api/workspaces/{workspace_code}/label-policy` 可以增删改工作台统一一级/二级标签策略；`planning_intel` 默认 `ai_sql_categories`，`ai_tools` 默认 `ai_tools_categories`；`/api/sources/{source_id}/workspace-link` 可以更新当前工作台对单源的启用状态、权重和日限；`/api/sources/{source_id}/fetch` 可以触发单个 RSS/paper RSS 源抓取并幂等写入 `raw_items`；`workspace_source_links` 会为所有已启用默认工作台建立链接。
 
 实现：
 
@@ -270,7 +270,7 @@ class SourceAdapter:
 - 旧 wiseflow 不被混成 RSS。
 - `planning_intel` 和 `ai_tools` 都能看到 113 个共享源链接，其中 79 个启用。
 - 单个 RSS 源可以手动触发抓取，首次创建 `raw_items`，重复抓取更新已有 raw 记录而不重复插入。
-- 前端首页显示阶段 3，数据源页显示“数据源、标签配置与 RSS raw 入库”，并能增删改工作台统一一级标签策略、通过“配置”修改单源启用/权重/日限、通过“抓取”按钮触发单源抓取。
+- 前端首页显示阶段 3，数据源页显示数据源管理能力，并能增删改工作台统一一级/二级标签策略、通过“配置”修改单源启用/权重/日限、通过“抓取”按钮触发单源抓取。
 - 新增 source_type 只需注册 adapter。
 - adapter 输出满足 `adapter_pipeline.json` 的 raw 字段要求。
 
@@ -386,7 +386,7 @@ daily_report_items.adoption_status = 2
 
 目标：让主链路变成可操作看板，不做营销首页。
 
-当前实现状态：工作台壳、登录页、用户权限页和数据源列表页已可用。工作台列表与左侧导航已从后端 `workspaces/workspace_sections` 读取，不再前端硬编码；第一版默认不显示工具目录、工具任务、独立热点专题等插件页。数据源列表已能展示共享源池、当前工作台启用数、源类型分布、工作台启用状态、标签集、默认一级/二级标题和权重。
+当前实现状态：浅色工作台壳、登录页、用户权限页和数据源管理页已可用。工作台列表与左侧导航已从后端 `workspaces/workspace_sections` 读取，不再前端硬编码；第一版默认不显示工具目录、工具任务、独立热点专题等插件页。数据源页采用信息流式共享源列表，展示共享源池、当前工作台启用数、源类型分布、工作台启用状态和抓取状态；右侧标签面板展示工作台统一一级/二级标签策略。单个源配置只包含启用、权重和日限，不维护标签。
 
 页面顺序：
 
@@ -427,6 +427,8 @@ daily_report_items.adoption_status = 2
 - 可以导入旧种子源并看到数据源列表。
 - 切换工作台后左侧导航仍来自后端 section 配置，且不会默认出现工具目录、工具任务或独立热点专题。
 - 数据源页能看到当前工作台启用 79 个源，并能区分共享源定义和工作台配置。
+- `planning_intel` 默认展示旧公司 SQL 兼容的 10 个一级标签；`ai_tools` 默认展示“工具新功能、工具新案例、工具新技术”，且每个一级下有 `cursor/claude code/opencode/codex` 二级标签。
+- 数据源页和其他占位页在常见桌面宽度下不应出现横向截断；标签策略不应依赖难发现的内部滚动条。
 - 可以触发一次抓取和推荐。
 - 可以查看 winner/loser 和推荐原因。
 - 可以编辑并发布日报。

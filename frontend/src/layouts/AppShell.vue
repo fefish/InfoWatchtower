@@ -30,6 +30,11 @@ const navItems = computed(() =>
   }))
 );
 
+const primaryNavKeys = new Set(["dashboard", "source_management", "candidate_pool", "daily_reports", "weekly_reports"]);
+
+const primaryNavItems = computed(() => navItems.value.filter((item) => primaryNavKeys.has(item.key)));
+const systemNavItems = computed(() => navItems.value.filter((item) => !primaryNavKeys.has(item.key)));
+
 onMounted(() => {
   void workspace.loadWorkspaces();
 });
@@ -48,28 +53,46 @@ async function logout() {
         <span class="brand-name">InfoWatchtower</span>
       </div>
 
-      <label class="workspace-switcher">
-        <span>工作台</span>
-        <select
-          :value="workspace.currentCode"
-          @change="workspace.setWorkspace(($event.target as HTMLSelectElement).value)"
-        >
-          <option v-for="item in workspace.options" :key="item.code" :value="item.code">
-            {{ item.name }}
-          </option>
-        </select>
-      </label>
-
       <nav class="nav-list" aria-label="主导航">
-        <RouterLink v-for="item in navItems" :key="item.key" class="nav-item" :to="item.path">
-          <component :is="item.icon" :size="18" />
-          <span>{{ item.label }}</span>
-        </RouterLink>
+        <label class="workspace-switcher">
+          <span>工作台</span>
+          <select
+            :value="workspace.currentCode"
+            @change="workspace.setWorkspace(($event.target as HTMLSelectElement).value)"
+          >
+            <option v-for="item in workspace.options" :key="item.code" :value="item.code">
+              {{ item.name }}
+            </option>
+          </select>
+        </label>
+
+        <div class="nav-group">
+          <p class="nav-group-title">Menu</p>
+          <RouterLink v-for="item in primaryNavItems" :key="item.key" class="nav-item" :to="item.path">
+            <component :is="item.icon" :size="18" />
+            <span>{{ item.label }}</span>
+          </RouterLink>
+        </div>
+
+        <div class="nav-group">
+          <p class="nav-group-title">System</p>
+          <RouterLink v-for="item in systemNavItems" :key="item.key" class="nav-item" :to="item.path">
+            <component :is="item.icon" :size="18" />
+            <span>{{ item.label }}</span>
+          </RouterLink>
+        </div>
       </nav>
 
-      <button class="sidebar-action" type="button" @click="logout" aria-label="退出登录">
-        <LogOut :size="18" />
-      </button>
+      <div class="sidebar-user">
+        <div class="user-avatar">{{ session.user?.display_name?.slice(0, 1) || "U" }}</div>
+        <div>
+          <strong>{{ session.user?.display_name }}</strong>
+          <span>{{ session.user?.roles[0] }}</span>
+        </div>
+        <button class="sidebar-action" type="button" @click="logout" aria-label="退出登录">
+          <LogOut :size="17" />
+        </button>
+      </div>
     </aside>
 
     <main class="main-panel">

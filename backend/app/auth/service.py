@@ -70,6 +70,20 @@ DEFAULT_WORKSPACE_LABEL_POLICY = {
     "tagging_stages": ["news_generation", "post_dedupe_labeling"],
 }
 
+AI_TOOLS_PRIMARY_CATEGORIES = ["工具新功能", "工具新案例", "工具新技术"]
+AI_TOOLS_SECONDARY_LABELS = ["cursor", "claude code", "opencode", "codex"]
+AI_TOOLS_LABEL_POLICY = {
+    "label_set_code": "ai_tools_categories",
+    "allowed_primary_categories": AI_TOOLS_PRIMARY_CATEGORIES,
+    "secondary_labels_by_primary": {
+        category: AI_TOOLS_SECONDARY_LABELS
+        for category in AI_TOOLS_PRIMARY_CATEGORIES
+    },
+    "default_category": "工具新功能",
+    "fallback_category": "工具新功能",
+    "tagging_stages": ["news_generation", "post_dedupe_labeling"],
+}
+
 CORE_WORKSPACE_SECTIONS = [
     ("dashboard", "工作台", "page", "/dashboard", 10),
     ("source_management", "数据源管理", "page", "/sources", 20),
@@ -317,10 +331,12 @@ def _ensure_workspaces(session: Session) -> dict[str, Workspace]:
             workspace.workspace_type = definition["workspace_type"]
             workspace.default_domain_code = definition["default_domain_code"]
             workspace.enabled = True
+        existing_config = workspace.config_json or {}
+        existing_policy = existing_config.get("label_policy")
         workspace.config_json = {
-            **(workspace.config_json or {}),
+            **existing_config,
             "sort_order": definition["sort_order"],
-            "label_policy": (workspace.config_json or {}).get("label_policy") or _default_workspace_label_policy(),
+            "label_policy": _workspace_label_policy_for_seed(code, existing_policy),
         }
         _ensure_workspace_sections(
             session,
@@ -337,6 +353,40 @@ def _default_workspace_label_policy() -> dict:
     return {
         **DEFAULT_WORKSPACE_LABEL_POLICY,
         "allowed_primary_categories": categories,
+        "secondary_labels_by_primary": {},
+    }
+
+
+def _workspace_label_policy_for_seed(workspace_code: str, existing_policy: dict | None) -> dict:
+    if workspace_code == "ai_tools":
+        if not existing_policy or existing_policy.get("label_set_code") != "ai_tools_categories":
+            return _copy_policy(AI_TOOLS_LABEL_POLICY)
+        return _merge_policy_defaults(existing_policy, AI_TOOLS_LABEL_POLICY)
+    if existing_policy:
+        return _merge_policy_defaults(existing_policy, _default_workspace_label_policy())
+    return _default_workspace_label_policy()
+
+
+def _merge_policy_defaults(policy: dict, default_policy: dict) -> dict:
+    return {
+        **default_policy,
+        **policy,
+        "secondary_labels_by_primary": policy.get("secondary_labels_by_primary")
+        or default_policy.get("secondary_labels_by_primary", {}),
+        "tagging_stages": policy.get("tagging_stages")
+        or default_policy.get("tagging_stages", ["news_generation", "post_dedupe_labeling"]),
+    }
+
+
+def _copy_policy(policy: dict) -> dict:
+    return {
+        **policy,
+        "allowed_primary_categories": list(policy["allowed_primary_categories"]),
+        "secondary_labels_by_primary": {
+            primary: list(labels)
+            for primary, labels in policy.get("secondary_labels_by_primary", {}).items()
+        },
+        "tagging_stages": list(policy["tagging_stages"]),
     }
 
 
@@ -403,14 +453,52 @@ def _ensure_super_admin_workspace_memberships(
 def _ensure_default_label_sets(session: Session) -> None:
     taxonomy_path = REPO_ROOT / "config" / "taxonomy" / "news_categories.json"
     categories = json.loads(taxonomy_path.read_text(encoding="utf-8"))["categories"]
-    label_set = session.scalar(select(LabelSet).where(LabelSet.code == "ai_sql_categories"))
+    _ensure_label_set(
+        session=session,
+        workspace_code="shared",
+        domain_code="ai",
+        code="ai_sql_categories",
+        name="AI SQL 一级标签",
+        description="兼容当前公司 SQL 导出的 10 个一级标签。",
+        categories=categories,
+        secondary_labels_by_primary={},
+    )
+    _ensure_label_set(
+        session=session,
+        workspace_code="ai_tools",
+        domain_code="ai",
+        code="ai_tools_categories",
+        name="AI 工具观察标签",
+        description="AI 工具桌面的一级/二级标签策略。",
+        categories=AI_TOOLS_PRIMARY_CATEGORIES,
+        secondary_labels_by_primary=AI_TOOLS_LABEL_POLICY["secondary_labels_by_primary"],
+    )
+
+
+def _ensure_label_set(
+    session: Session,
+    workspace_code: str,
+    domain_code: str,
+    code: str,
+    name: str,
+    description: str,
+    categories: list[str],
+    secondary_labels_by_primary: dict[str, list[str]],
+) -> None:
+    label_set = session.scalar(
+        select(LabelSet).where(
+            LabelSet.workspace_code == workspace_code,
+            LabelSet.domain_code == domain_code,
+            LabelSet.code == code,
+        ),
+    )
     if label_set is None:
         label_set = LabelSet(
-            workspace_code="shared",
-            domain_code="ai",
-            code="ai_sql_categories",
-            name="AI SQL 一级标签",
-            description="兼容当前公司 SQL 导出的 10 个一级标签。",
+            workspace_code=workspace_code,
+            domain_code=domain_code,
+            code=code,
+            name=name,
+            description=description,
             scope_type="domain",
             target_types={
                 "target_types": [
@@ -427,14 +515,15 @@ def _ensure_default_label_sets(session: Session) -> None:
         session.add(label_set)
         session.flush()
     else:
-        label_set.workspace_code = "shared"
-        label_set.domain_code = "ai"
-        label_set.name = "AI SQL 一级标签"
-        label_set.description = "兼容当前公司 SQL 导出的 10 个一级标签。"
+        label_set.workspace_code = workspace_code
+        label_set.domain_code = domain_code
+        label_set.name = name
+        label_set.description = description
         label_set.scope_type = "domain"
         label_set.enabled = True
 
     existing_labels = {label.code: label for label in label_set.labels}
+    primary_labels: dict[str, Label] = {}
     for index, category in enumerate(categories, start=1):
         label = existing_labels.get(category)
         if label is None:
@@ -454,3 +543,29 @@ def _ensure_default_label_sets(session: Session) -> None:
             label.parent_label_id = None
             label.sort_order = index
             label.enabled = True
+        primary_labels[category] = label
+
+    secondary_sort_base = 1000
+    for primary_index, category in enumerate(categories, start=1):
+        parent_label = primary_labels[category]
+        secondary_labels = secondary_labels_by_primary.get(category, [])
+        for secondary_index, secondary in enumerate(secondary_labels, start=1):
+            secondary_code = f"{category}:{secondary}"
+            label = existing_labels.get(secondary_code)
+            if label is None:
+                label = Label(
+                    label_set=label_set,
+                    code=secondary_code,
+                    name=secondary,
+                    label_level=2,
+                    parent_label=parent_label,
+                    sort_order=secondary_sort_base + primary_index * 100 + secondary_index,
+                    enabled=True,
+                )
+                session.add(label)
+            else:
+                label.name = secondary
+                label.label_level = 2
+                label.parent_label = parent_label
+                label.sort_order = secondary_sort_base + primary_index * 100 + secondary_index
+                label.enabled = True

@@ -128,6 +128,14 @@ workspace_sections     当前工作台启用的页面
 /audit-logs
 ```
 
+当前前端设计准则：
+
+- 使用浅色工作台壳和分组导航；导航数据来自 `workspace_sections`，不要在前端默认写死插件页。
+- 主内容区用统一的工作区容器，常见桌面宽度下不应出现横向截断；占位页也必须套同一套容器。
+- `/sources` 使用信息流式共享源列表，不使用笨重宽表作为第一视图。
+- `/sources` 的右侧标签策略是工作台级配置，不是单源配置；一级标签尽量完整露出，不依赖难发现的内部滚动条。窄屏时标签策略可移动到列表上方。
+- 按钮和状态文案保持业务直觉：单源开关用“启用/停用”，不要写成“当前工作台启用”这种重复文案。
+
 ## 4. 页面职责
 
 `/dashboard`：
@@ -139,7 +147,7 @@ workspace_sections     当前工作台启用的页面
 - 数据源列表展示共享源池，以及当前工作台是否启用该源。
 - `GET /api/sources?workspace_code=...` 返回共享源池，并附带当前工作台的 `workspace_link_enabled`、`workspace_source_weight`、`workspace_daily_limit` 和抓取状态；标签策略从 `GET /api/workspaces/{workspace_code}/label-policy` 读取。
 - `POST /api/sources/{source_id}/fetch` 第一版只做单源手动抓取，调用对应 adapter，把结果幂等写入 `raw_items`，并更新 `data_sources.last_fetch_at/last_success_at/last_error`。
-- 数据源配置页支持工作台统一标签策略的增删改，并支持单源启停、权重和每日上限；不要在单源配置里维护标签。
+- 数据源配置页支持工作台统一一级/二级标签策略的增删改，并支持单源启停、权重和每日上限；不要在单源配置里维护标签。`ai_tools` 工作台必须展示独立的 `ai_tools_categories`，不能复用规划部的 `ai_sql_categories`。
 - 数据源真实定义只保存一份；多个工作台复用时通过 `workspace_source_links` 配置差异。
 
 `/sources/:id`：

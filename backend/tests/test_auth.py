@@ -58,20 +58,30 @@ def test_auth_seed_creates_default_workspaces(monkeypatch, tmp_path):
         assert len(memberships) == 2
         for workspace in workspaces:
             label_policy = workspace.config_json["label_policy"]
-            assert label_policy["label_set_code"] == "ai_sql_categories"
             assert label_policy["tagging_stages"] == ["news_generation", "post_dedupe_labeling"]
-            assert label_policy["allowed_primary_categories"] == [
-                "AI Infra",
-                "AI 应用",
-                "测评技术",
-                "大厂动态",
-                "模型",
-                "算法",
-                "推理加速",
-                "训练技术",
-                "智能体",
-                "基础竞争力",
-            ]
+            if workspace.code == "ai_tools":
+                assert label_policy["label_set_code"] == "ai_tools_categories"
+                assert label_policy["allowed_primary_categories"] == ["工具新功能", "工具新案例", "工具新技术"]
+                assert label_policy["secondary_labels_by_primary"] == {
+                    "工具新功能": ["cursor", "claude code", "opencode", "codex"],
+                    "工具新案例": ["cursor", "claude code", "opencode", "codex"],
+                    "工具新技术": ["cursor", "claude code", "opencode", "codex"],
+                }
+            else:
+                assert label_policy["label_set_code"] == "ai_sql_categories"
+                assert label_policy["allowed_primary_categories"] == [
+                    "AI Infra",
+                    "AI 应用",
+                    "测评技术",
+                    "大厂动态",
+                    "模型",
+                    "算法",
+                    "推理加速",
+                    "训练技术",
+                    "智能体",
+                    "基础竞争力",
+                ]
+                assert label_policy["secondary_labels_by_primary"] == {}
             enabled_sections = {
                 section.section_key
                 for section in session.scalars(
@@ -146,7 +156,18 @@ def test_authenticated_user_can_load_workspace_sections(monkeypatch, tmp_path):
     )
     assert updated_policy.status_code == 200
     assert updated_policy.json()["allowed_primary_categories"] == ["模型", "智能体", "AI 应用", "具身智能"]
+    assert updated_policy.json()["secondary_labels_by_primary"] == {}
     assert updated_policy.json()["fallback_category"] == "具身智能"
+
+    tool_policy = client.get("/api/workspaces/ai_tools/label-policy")
+    assert tool_policy.status_code == 200
+    assert tool_policy.json()["label_set_code"] == "ai_tools_categories"
+    assert tool_policy.json()["allowed_primary_categories"] == ["工具新功能", "工具新案例", "工具新技术"]
+    assert tool_policy.json()["secondary_labels_by_primary"] == {
+        "工具新功能": ["cursor", "claude code", "opencode", "codex"],
+        "工具新案例": ["cursor", "claude code", "opencode", "codex"],
+        "工具新技术": ["cursor", "claude code", "opencode", "codex"],
+    }
 
 
 def test_auth_seed_creates_default_label_set(monkeypatch, tmp_path):
@@ -157,6 +178,10 @@ def test_auth_seed_creates_default_label_set(monkeypatch, tmp_path):
         assert label_set is not None
         assert label_set.workspace_code == "shared"
         assert session.scalar(select(Label).where(Label.name == "基础竞争力")) is not None
+        tool_label_set = session.scalar(select(LabelSet).where(LabelSet.code == "ai_tools_categories"))
+        assert tool_label_set is not None
+        assert tool_label_set.workspace_code == "ai_tools"
+        assert session.scalar(select(Label).where(Label.code == "工具新功能:cursor")) is not None
 
 
 def test_super_admin_can_list_roles_and_update_user_roles(monkeypatch, tmp_path):

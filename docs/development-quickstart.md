@@ -18,8 +18,8 @@
 - 登录已接入 `local/public_password/intranet_header`，本地开发账号为 `admin/password`。
 - 用户权限页面已能读取用户、读取角色并保存用户角色。
 - 公网安全和 SSO 后续计划见 `docs/auth-security-roadmap.md`。
-- 工作台模型按共享主链路实现；工作台列表来自 `workspaces`，页面来自 `workspace_sections`，所有工作台共享数据源管理、候选池、日报、周报和导出能力。差异配置通过 `workspace_source_links` 的一级/二级标题、聚类推荐配置和可选插件模块完成。
-- 阶段 3 已有共享数据源导入 API、数据源页面、工作台统一标签策略 API、工作台源链接配置 API、adapter registry、RSS adapter 和 wiseflow/page/paper/manual 骨架；旧种子源导入后会为所有已启用默认工作台创建源链接；RSS/paper RSS 源可通过手动 API 抓取并幂等写入 `raw_items`。
+- 工作台模型按共享主链路实现；工作台列表来自 `workspaces`，页面来自 `workspace_sections`，所有工作台共享数据源管理、候选池、日报、周报和导出能力。差异配置通过 `workspaces.config_json.label_policy` 的工作台统一一级/二级标签策略、`workspace_source_links` 的源启用/权重/日限和可选插件模块完成。
+- 阶段 3 已有共享数据源导入 API、数据源页面、工作台统一标签策略 API、工作台源链接配置 API、adapter registry、RSS adapter 和 wiseflow/page/paper/manual 骨架；旧种子源导入后会为所有已启用默认工作台创建源链接；RSS/paper RSS 源可通过手动 API 抓取并幂等写入 `raw_items`。前端已切到浅色工作台壳、数据库驱动导航、信息流式数据源列表和紧凑工作台标签策略面板。
 
 业务流程 API 还未实现：RSS 抓取任务调度、raw 到 news 标准化、去重执行、推荐执行、日报编辑页面和 SQL 导出会在后续阶段逐步补齐。
 
@@ -134,18 +134,19 @@ curl http://localhost:5173/healthz
 
 ## 5.1 当前阶段 3 验收
 
-本阶段已经做到：旧种子源导入、工作台源链接、工作台统一一级标签策略、数据库驱动导航、单源 RSS 抓取到 `raw_items`。
+本阶段已经做到：旧种子源导入、工作台源链接、工作台统一一级/二级标签策略、数据库驱动导航、单源 RSS 抓取到 `raw_items`。
 
 前端验收：
 
 1. 打开 `http://127.0.0.1:5173/sources`。
 2. 使用 `admin/password` 登录。
 3. 首页应显示当前阶段为阶段 3。
-4. 数据源页标题应为“数据源、标签配置与 RSS raw 入库”。
-5. 数据源页顶部应显示“工作台统一标签策略”，规划部默认含旧系统兼容的 10 个一级标签，并支持新增、重命名、删除。
+4. 数据源页标题应为“数据源管理”，共享源列表标题应为“活跃数据源”。
+5. 数据源页右侧应显示工作台统一标签策略，规划部默认含旧系统兼容的 10 个一级标签；AI 工具桌面默认含“工具新功能、工具新案例、工具新技术”，且每个一级标签下都有 `cursor/claude code/opencode/codex` 二级标签；一级/二级标签都支持新增、重命名、删除，且单个源配置里不出现标签维护。
 6. 数据源页应显示共享源 113、当前工作台启用 79。
-7. 点击任意源的“配置”，应出现数据源配置面板，可设置启用状态、权重和日限。
+7. 点击任意源的“配置”，应出现数据源配置面板，可设置启用状态、权重和日限，启用开关文案为“启用”。
 8. 对启用的 `rss` 或 `paper_rss` 源点击“抓取”，页面应提示拉取、新增、更新数量。
+9. 数据源页在桌面宽度下不应横向截断；右侧标签策略不应依赖难发现的内部滚动条；候选池、日报、周报、SQL 导出、用户权限和审计占位页应使用统一内容容器。
 
 API 验收：
 
@@ -165,7 +166,7 @@ curl -fsS -b /tmp/iw_cookie.txt \
 curl -fsS -b /tmp/iw_cookie.txt \
   -H 'Content-Type: application/json' \
   -X PATCH 'http://127.0.0.1:8000/api/workspaces/planning_intel/label-policy' \
-  -d '{"label_set_code":"ai_sql_categories","allowed_primary_categories":["AI Infra","AI 应用","测评技术","大厂动态","模型","算法","推理加速","训练技术","智能体","基础竞争力"],"default_category":"AI 应用","fallback_category":"AI 应用"}'
+  -d '{"label_set_code":"ai_sql_categories","allowed_primary_categories":["AI Infra","AI 应用","测评技术","大厂动态","模型","算法","推理加速","训练技术","智能体","基础竞争力"],"secondary_labels_by_primary":{},"default_category":"AI 应用","fallback_category":"AI 应用"}'
 
 curl -fsS -b /tmp/iw_cookie.txt \
   -H 'Content-Type: application/json' \

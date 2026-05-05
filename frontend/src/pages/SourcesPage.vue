@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { DownloadCloud, Plus, RefreshCw, Settings, Trash2, X } from "lucide-vue-next";
+import { Bot, DownloadCloud, FileText, Globe2, Monitor, Plus, RefreshCw, Rss, Settings, Trash2, X } from "lucide-vue-next";
 import { computed, reactive, ref, watch } from "vue";
 
 import {
@@ -39,14 +39,40 @@ const legacyPrimaryCategories = [
   "智能体",
   "基础竞争力"
 ];
+const aiToolPrimaryCategories = ["工具新功能", "工具新案例", "工具新技术"];
+const aiToolSecondaryLabels = ["cursor", "claude code", "opencode", "codex"];
+
+const workspacePolicyPresets = {
+  planning_intel: {
+    labelSetCode: "ai_sql_categories",
+    primaryCategories: legacyPrimaryCategories,
+    secondaryLabelsByPrimary: {} as Record<string, string[]>,
+    defaultCategory: "AI 应用",
+    fallbackCategory: "AI 应用"
+  },
+  ai_tools: {
+    labelSetCode: "ai_tools_categories",
+    primaryCategories: aiToolPrimaryCategories,
+    secondaryLabelsByPrimary: Object.fromEntries(
+      aiToolPrimaryCategories.map((category) => [category, [...aiToolSecondaryLabels]])
+    ) as Record<string, string[]>,
+    defaultCategory: "工具新功能",
+    fallbackCategory: "工具新功能"
+  }
+};
 
 const policyForm = reactive({
   labelSetCode: "ai_sql_categories",
   allowedPrimaryCategories: [...legacyPrimaryCategories],
+  secondaryLabelsByPrimary: {} as Record<string, string[]>,
   defaultCategory: "AI 应用",
   fallbackCategory: "AI 应用"
 });
 const categoryDraft = ref("");
+const secondaryDraft = reactive({
+  primary: "",
+  label: ""
+});
 
 const configForm = reactive({
   enabled: true,
@@ -69,6 +95,19 @@ const enabledInWorkspaceCount = computed(
 const activePrimaryCategories = computed(() =>
   policyForm.allowedPrimaryCategories.length > 0 ? policyForm.allowedPrimaryCategories : legacyPrimaryCategories
 );
+const secondaryLabelTotal = computed(() =>
+  activePrimaryCategories.value.reduce(
+    (total, category) => total + secondaryLabelsFor(category).length,
+    0
+  )
+);
+
+const currentPolicyPreset = computed(() => {
+  if (workspace.currentCode === "ai_tools") {
+    return workspacePolicyPresets.ai_tools;
+  }
+  return workspacePolicyPresets.planning_intel;
+});
 
 async function loadWorkspacePolicy() {
   if (!workspace.currentCode) {
@@ -85,8 +124,13 @@ async function loadWorkspacePolicy() {
 function fillPolicyForm(policy: WorkspaceLabelPolicy) {
   policyForm.labelSetCode = policy.label_set_code;
   policyForm.allowedPrimaryCategories = [...policy.allowed_primary_categories];
+  policyForm.secondaryLabelsByPrimary = normalizeSecondaryLabels(
+    policy.secondary_labels_by_primary ?? {},
+    policyForm.allowedPrimaryCategories
+  );
   policyForm.defaultCategory = policy.default_category;
   policyForm.fallbackCategory = policy.fallback_category;
+  secondaryDraft.primary = policyForm.allowedPrimaryCategories[0] ?? "";
   syncPolicyFallbacks();
 }
 
@@ -139,6 +183,17 @@ function sourceTypeLabel(type: string) {
   return labels[type] ?? type;
 }
 
+function sourceIcon(type: string) {
+  const icons = {
+    rss: Rss,
+    paper_rss: FileText,
+    wiseflow: Bot,
+    page_manual: Globe2,
+    page_monitor: Monitor
+  };
+  return icons[type as keyof typeof icons] ?? Globe2;
+}
+
 function formatDateTime(value: string | null) {
   if (!value) {
     return "";
@@ -174,6 +229,9 @@ function syncPolicyFallbacks() {
   if (!policyForm.allowedPrimaryCategories.includes(policyForm.fallbackCategory)) {
     policyForm.fallbackCategory = policyForm.defaultCategory;
   }
+  if (!policyForm.allowedPrimaryCategories.includes(secondaryDraft.primary)) {
+    secondaryDraft.primary = policyForm.allowedPrimaryCategories[0] ?? "";
+  }
 }
 
 function normalizedPolicyCategories() {
@@ -187,6 +245,28 @@ function normalizedPolicyCategories() {
   return next;
 }
 
+function normalizeSecondaryLabels(labelsByPrimary: Record<string, string[]>, primaryCategories: string[]) {
+  const normalized: Record<string, string[]> = {};
+  for (const category of primaryCategories) {
+    const labels = labelsByPrimary[category] ?? [];
+    const next: string[] = [];
+    for (const label of labels) {
+      const value = label.trim();
+      if (value && !next.includes(value)) {
+        next.push(value);
+      }
+    }
+    if (next.length > 0) {
+      normalized[category] = next;
+    }
+  }
+  return normalized;
+}
+
+function secondaryLabelsFor(category: string) {
+  return policyForm.secondaryLabelsByPrimary[category] ?? [];
+}
+
 function addPolicyCategory() {
   const value = categoryDraft.value.trim();
   if (!value || policyForm.allowedPrimaryCategories.includes(value)) {
@@ -194,12 +274,18 @@ function addPolicyCategory() {
     return;
   }
   policyForm.allowedPrimaryCategories.push(value);
+  policyForm.secondaryLabelsByPrimary[value] = [];
   categoryDraft.value = "";
   syncPolicyFallbacks();
 }
 
 function renamePolicyCategory(index: number, value: string) {
+  const previous = policyForm.allowedPrimaryCategories[index];
   policyForm.allowedPrimaryCategories[index] = value;
+  if (previous !== value) {
+    policyForm.secondaryLabelsByPrimary[value] = policyForm.secondaryLabelsByPrimary[previous] ?? [];
+    delete policyForm.secondaryLabelsByPrimary[previous];
+  }
   syncPolicyFallbacks();
 }
 
@@ -207,14 +293,48 @@ function removePolicyCategory(index: number) {
   if (policyForm.allowedPrimaryCategories.length <= 1) {
     return;
   }
+  const [removed] = policyForm.allowedPrimaryCategories.slice(index, index + 1);
   policyForm.allowedPrimaryCategories.splice(index, 1);
+  delete policyForm.secondaryLabelsByPrimary[removed];
   syncPolicyFallbacks();
 }
 
 function resetPolicyCategories() {
-  policyForm.allowedPrimaryCategories = [...legacyPrimaryCategories];
-  policyForm.defaultCategory = "AI 应用";
-  policyForm.fallbackCategory = "AI 应用";
+  const preset = currentPolicyPreset.value;
+  policyForm.labelSetCode = preset.labelSetCode;
+  policyForm.allowedPrimaryCategories = [...preset.primaryCategories];
+  policyForm.secondaryLabelsByPrimary = normalizeSecondaryLabels(
+    preset.secondaryLabelsByPrimary,
+    policyForm.allowedPrimaryCategories
+  );
+  policyForm.defaultCategory = preset.defaultCategory;
+  policyForm.fallbackCategory = preset.fallbackCategory;
+  secondaryDraft.primary = policyForm.allowedPrimaryCategories[0] ?? "";
+}
+
+function addSecondaryLabel() {
+  const primary = secondaryDraft.primary || policyForm.allowedPrimaryCategories[0];
+  const label = secondaryDraft.label.trim();
+  if (!primary || !label) {
+    return;
+  }
+  const labels = policyForm.secondaryLabelsByPrimary[primary] ?? [];
+  if (!labels.includes(label)) {
+    policyForm.secondaryLabelsByPrimary[primary] = [...labels, label];
+  }
+  secondaryDraft.label = "";
+}
+
+function renameSecondaryLabel(primary: string, index: number, value: string) {
+  const labels = [...secondaryLabelsFor(primary)];
+  labels[index] = value;
+  policyForm.secondaryLabelsByPrimary[primary] = labels;
+}
+
+function removeSecondaryLabel(primary: string, index: number) {
+  const labels = [...secondaryLabelsFor(primary)];
+  labels.splice(index, 1);
+  policyForm.secondaryLabelsByPrimary[primary] = labels;
 }
 
 async function saveWorkspacePolicy() {
@@ -227,6 +347,10 @@ async function saveWorkspacePolicy() {
     return;
   }
   policyForm.allowedPrimaryCategories = categories;
+  policyForm.secondaryLabelsByPrimary = normalizeSecondaryLabels(
+    policyForm.secondaryLabelsByPrimary,
+    categories
+  );
   syncPolicyFallbacks();
   savingPolicy.value = true;
   error.value = "";
@@ -235,6 +359,7 @@ async function saveWorkspacePolicy() {
     const updated = await updateWorkspaceLabelPolicy(workspace.currentCode, {
       label_set_code: policyForm.labelSetCode,
       allowed_primary_categories: categories,
+      secondary_labels_by_primary: policyForm.secondaryLabelsByPrimary,
       default_category: policyForm.defaultCategory,
       fallback_category: policyForm.fallbackCategory
     });
@@ -311,14 +436,18 @@ watch(
 </script>
 
 <template>
-  <section class="toolbar-band">
-    <div>
-      <p class="eyebrow">阶段 3</p>
-      <h2>数据源、标签配置与 RSS raw 入库</h2>
-      <p>工作台统一标签策略约束模型生成新闻结构和去重后的标签定稿；数据源只管理接入和采集权重。</p>
+  <section class="source-command">
+    <div class="source-title">
+      <p class="eyebrow">来源运营</p>
+      <h2>数据源管理</h2>
+    </div>
+    <div class="source-metrics" aria-label="数据源概览">
+      <span><b>{{ sources.length }}</b> 共享源</span>
+      <span><b>{{ enabledInWorkspaceCount }}</b> 已启用</span>
+      <span v-for="[type, count] in counts" :key="type"><b>{{ count }}</b> {{ sourceTypeLabel(type) }}</span>
     </div>
     <div class="toolbar-actions">
-      <button type="button" class="icon-button" :disabled="loading" @click="loadSources" title="刷新">
+      <button type="button" class="icon-button secondary" :disabled="loading" @click="loadSources" title="刷新">
         <RefreshCw :size="18" />
         <span>刷新</span>
       </button>
@@ -332,168 +461,237 @@ watch(
   <p v-if="error" class="form-error">{{ error }}</p>
   <p v-if="lastImportMessage" class="form-success">{{ lastImportMessage }}</p>
 
-  <section class="policy-panel">
-    <div class="policy-copy">
-      <p class="eyebrow">工作台统一标签策略</p>
-      <h3>{{ workspace.current?.name }} · {{ policyForm.labelSetCode }}</h3>
-      <p>模型在 raw 生成新闻结构时只能从这些一级标签里选；去重合并后会再次按同一套标签定稿。</p>
-    </div>
-
-    <div class="policy-controls">
-      <div class="category-editor">
-        <div v-for="(category, index) in policyForm.allowedPrimaryCategories" :key="`${category}-${index}`" class="category-edit">
-          <input
-            :value="category"
-            @input="renamePolicyCategory(index, ($event.target as HTMLInputElement).value)"
-            aria-label="一级标签名称"
-          />
-          <button
-            type="button"
-            class="mini-icon-button"
-            :disabled="policyForm.allowedPrimaryCategories.length <= 1"
-            @click="removePolicyCategory(index)"
-            title="删除标签"
-          >
-            <Trash2 :size="14" />
-          </button>
-        </div>
-        <div class="category-add">
-          <input v-model="categoryDraft" placeholder="新增一级标签" @keydown.enter.prevent="addPolicyCategory" />
-          <button type="button" class="mini-icon-button add" @click="addPolicyCategory" title="新增标签">
-            <Plus :size="16" />
-          </button>
-          <button type="button" class="ghost-button" @click="resetPolicyCategories">恢复默认</button>
-        </div>
-      </div>
-
-      <div class="policy-selects">
-        <label>
-          <span>默认标签</span>
-          <select v-model="policyForm.defaultCategory">
-            <option v-for="category in activePrimaryCategories" :key="category" :value="category">
-              {{ category }}
-            </option>
-          </select>
-        </label>
-        <label>
-          <span>兜底标签</span>
-          <select v-model="policyForm.fallbackCategory">
-            <option v-for="category in activePrimaryCategories" :key="category" :value="category">
-              {{ category }}
-            </option>
-          </select>
-        </label>
-        <button type="button" class="config-save" :disabled="savingPolicy" @click="saveWorkspacePolicy">
-          {{ savingPolicy ? "保存中" : "保存工作台策略" }}
-        </button>
-      </div>
-    </div>
-  </section>
-
-  <section class="summary-strip">
-    <div>
-      <span>当前工作台</span>
-      <strong>{{ workspace.current?.name }}</strong>
-    </div>
-    <div>
-      <span>共享源</span>
-      <strong>{{ sources.length }}</strong>
-    </div>
-    <div>
-      <span>当前工作台启用</span>
-      <strong>{{ enabledInWorkspaceCount }}</strong>
-    </div>
-    <div v-for="[type, count] in counts" :key="type">
-      <span>{{ sourceTypeLabel(type) }}</span>
-      <strong>{{ count }}</strong>
-    </div>
-  </section>
-
-  <section class="source-workbench" :class="{ 'has-panel': selectedSource }">
+  <section class="source-page-grid">
     <div class="source-list">
-      <div class="source-list-head">
-        <span>数据源</span>
-        <span>类型</span>
-        <span>状态</span>
-        <span>操作</span>
+      <header class="source-list-title">
+        <div>
+          <p class="eyebrow">数据源池</p>
+          <h3>活跃数据源</h3>
+        </div>
+        <span>{{ enabledInWorkspaceCount }} / {{ sources.length }} 已启用</span>
+      </header>
+
+      <div class="source-feed">
+        <article
+          v-for="source in sources"
+          :key="source.id"
+          class="source-row"
+          :class="{ inactive: !source.workspace_link_enabled }"
+        >
+          <div class="source-icon">
+            <component :is="sourceIcon(source.source_type)" :size="18" />
+          </div>
+
+          <div class="source-body">
+            <div class="source-heading">
+              <strong>{{ source.name }}</strong>
+              <span :class="source.workspace_link_enabled ? 'status-on' : 'status-off'">
+                {{ source.workspace_link_enabled ? "启用" : "停用" }}
+              </span>
+            </div>
+            <a v-if="source.url" class="source-url" :href="source.url" target="_blank" rel="noreferrer">
+              {{ source.url }}
+            </a>
+            <span v-else class="source-url">无公开 URL</span>
+
+            <div class="source-meta-line">
+              <span class="type-badge">{{ sourceTypeLabel(source.source_type) }}</span>
+              <span class="meta-chip">{{ source.domain_code }}</span>
+              <span v-if="source.info_category || source.primary_category" class="meta-chip">
+                {{ source.info_category || source.primary_category }}
+              </span>
+              <span class="source-freshness">
+                {{ source.last_success_at ? `最近成功 ${formatDateTime(source.last_success_at)}` : "暂无成功抓取" }}
+              </span>
+              <span v-if="source.last_error" class="source-error">{{ source.last_error }}</span>
+            </div>
+          </div>
+
+          <div class="source-actions">
+            <button type="button" class="table-action" @click="openConfig(source)" title="配置数据源">
+              <Settings :size="14" />
+              <span>配置</span>
+            </button>
+            <button
+              v-if="canFetchSource(source)"
+              type="button"
+              class="table-action"
+              :disabled="fetchingSourceId === source.id"
+              @click="fetchOneSource(source)"
+              title="抓取 RSS"
+            >
+              <RefreshCw :size="14" />
+              <span>{{ fetchingSourceId === source.id ? "抓取中" : "抓取" }}</span>
+            </button>
+          </div>
+        </article>
       </div>
-
-      <article
-        v-for="source in sources"
-        :key="source.id"
-        class="source-row"
-        :class="{ inactive: !source.workspace_link_enabled }"
-      >
-        <div class="source-main">
-          <strong>{{ source.name }}</strong>
-          <a v-if="source.url" :href="source.url" target="_blank" rel="noreferrer">{{ source.url }}</a>
-          <span v-else>无公开 URL</span>
-        </div>
-
-        <div class="source-cell">
-          <strong>{{ sourceTypeLabel(source.source_type) }}</strong>
-          <span>{{ source.domain_code }}</span>
-          <span>{{ source.info_category || source.primary_category || "" }}</span>
-        </div>
-
-        <div class="source-cell">
-          <strong>{{ source.workspace_link_enabled ? "当前工作台启用" : "当前工作台停用" }}</strong>
-          <span>{{ source.last_success_at ? `最近成功 ${formatDateTime(source.last_success_at)}` : "暂无成功抓取" }}</span>
-          <span v-if="source.last_error">{{ source.last_error }}</span>
-        </div>
-
-        <div class="source-actions">
-          <button type="button" class="table-action" @click="openConfig(source)" title="配置数据源">
-            <Settings :size="14" />
-            <span>配置</span>
-          </button>
-          <button
-            v-if="canFetchSource(source)"
-            type="button"
-            class="table-action"
-            :disabled="fetchingSourceId === source.id"
-            @click="fetchOneSource(source)"
-            title="抓取 RSS"
-          >
-            <RefreshCw :size="14" />
-            <span>{{ fetchingSourceId === source.id ? "抓取中" : "抓取" }}</span>
-          </button>
-        </div>
-      </article>
 
       <p v-if="!loading && sources.length === 0" class="empty-state">暂无数据源，可先导入旧种子源。</p>
     </div>
 
-    <aside v-if="selectedSource" class="config-panel">
-      <header>
-        <div>
-          <p class="eyebrow">数据源配置</p>
-          <h3>{{ selectedSource.name }}</h3>
+    <aside class="control-rail">
+      <section class="policy-panel">
+        <header class="policy-header">
+          <div>
+            <p class="eyebrow">标签策略</p>
+            <h3>{{ policyForm.labelSetCode }}</h3>
+          </div>
+          <div class="policy-stats">
+            <span>{{ activePrimaryCategories.length }} 一级</span>
+            <span>{{ secondaryLabelTotal }} 二级</span>
+          </div>
+        </header>
+
+        <div class="label-policy-grid">
+          <div class="label-section">
+            <div class="label-section-title">
+              <span>一级标签</span>
+              <small>用于模型分类与去重后定稿</small>
+            </div>
+            <div class="label-primary-grid">
+              <label
+                v-for="(category, index) in policyForm.allowedPrimaryCategories"
+                :key="`${category}-${index}`"
+                class="label-token-row"
+              >
+                <input
+                  class="label-primary-input"
+                  :value="category"
+                  @input="renamePolicyCategory(index, ($event.target as HTMLInputElement).value)"
+                  aria-label="一级标签名称"
+                />
+                <button
+                  type="button"
+                  class="mini-icon-button danger"
+                  :disabled="policyForm.allowedPrimaryCategories.length <= 1"
+                  @click="removePolicyCategory(index)"
+                  title="删除一级标签"
+                >
+                  <Trash2 :size="14" />
+                </button>
+              </label>
+            </div>
+          </div>
+
+          <div v-if="secondaryLabelTotal > 0" class="label-section">
+            <div class="label-section-title">
+              <span>二级标签</span>
+              <small>只显示已配置项</small>
+            </div>
+            <div class="secondary-groups">
+              <div
+                v-for="category in activePrimaryCategories"
+                v-show="secondaryLabelsFor(category).length > 0"
+                :key="category"
+                class="secondary-group"
+              >
+                <strong>{{ category }}</strong>
+                <div class="secondary-line">
+                  <label
+                    v-for="(label, labelIndex) in secondaryLabelsFor(category)"
+                    :key="`${category}-${label}-${labelIndex}`"
+                    class="secondary-pill"
+                  >
+                    <input
+                      :value="label"
+                      @input="renameSecondaryLabel(category, labelIndex, ($event.target as HTMLInputElement).value)"
+                      aria-label="二级标签名称"
+                    />
+                    <button type="button" @click="removeSecondaryLabel(category, labelIndex)" title="删除二级标签">
+                      <X :size="12" />
+                    </button>
+                  </label>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="label-editor-panel">
+            <label>
+              <span>新增一级</span>
+              <div class="inline-control">
+                <input v-model="categoryDraft" placeholder="标签名" @keydown.enter.prevent="addPolicyCategory" />
+                <button type="button" class="mini-icon-button add" @click="addPolicyCategory" title="新增一级标签">
+                  <Plus :size="16" />
+                </button>
+              </div>
+            </label>
+            <label>
+              <span>新增二级</span>
+              <div class="inline-control stackable">
+                <select v-model="secondaryDraft.primary">
+                  <option v-for="category in activePrimaryCategories" :key="category" :value="category">
+                    {{ category }}
+                  </option>
+                </select>
+                <input v-model="secondaryDraft.label" placeholder="二级标签" @keydown.enter.prevent="addSecondaryLabel" />
+                <button type="button" class="mini-icon-button add" @click="addSecondaryLabel" title="新增二级标签">
+                  <Plus :size="16" />
+                </button>
+              </div>
+            </label>
+
+            <div class="policy-selects">
+              <label>
+                <span>默认</span>
+                <select v-model="policyForm.defaultCategory">
+                  <option v-for="category in activePrimaryCategories" :key="category" :value="category">
+                    {{ category }}
+                  </option>
+                </select>
+              </label>
+              <label>
+                <span>兜底</span>
+                <select v-model="policyForm.fallbackCategory">
+                  <option v-for="category in activePrimaryCategories" :key="category" :value="category">
+                    {{ category }}
+                  </option>
+                </select>
+              </label>
+            </div>
+
+            <div class="policy-actions">
+              <button type="button" class="ghost-button" @click="resetPolicyCategories">恢复默认</button>
+              <button type="button" class="config-save" :disabled="savingPolicy" @click="saveWorkspacePolicy">
+                {{ savingPolicy ? "保存中" : "保存策略" }}
+              </button>
+            </div>
+          </div>
         </div>
-        <button type="button" class="panel-close" @click="closeConfig" title="关闭">
-          <X :size="18" />
+      </section>
+
+      <aside v-if="selectedSource" class="config-panel">
+        <header>
+          <div>
+            <p class="eyebrow">数据源配置</p>
+            <h3>{{ selectedSource.name }}</h3>
+          </div>
+          <button type="button" class="panel-close" @click="closeConfig" title="关闭">
+            <X :size="18" />
+          </button>
+        </header>
+
+        <label class="switch-row">
+          <input v-model="configForm.enabled" type="checkbox" />
+          <span>启用</span>
+        </label>
+
+        <div class="config-grid">
+          <label>
+            <span>权重</span>
+            <input v-model.number="configForm.sourceWeight" type="number" min="0" step="0.1" />
+          </label>
+          <label>
+            <span>日报日限</span>
+            <input v-model="configForm.dailyLimit" type="number" min="0" placeholder="不限" />
+          </label>
+        </div>
+
+        <button type="button" class="config-save" :disabled="savingConfig" @click="saveConfig">
+          {{ savingConfig ? "保存中" : "保存配置" }}
         </button>
-      </header>
-
-      <label class="switch-row">
-        <input v-model="configForm.enabled" type="checkbox" />
-        <span>当前工作台启用</span>
-      </label>
-
-      <div class="config-grid">
-        <label>
-          <span>权重</span>
-          <input v-model.number="configForm.sourceWeight" type="number" min="0" step="0.1" />
-        </label>
-        <label>
-          <span>日报日限</span>
-          <input v-model="configForm.dailyLimit" type="number" min="0" placeholder="不限" />
-        </label>
-      </div>
-
-      <button type="button" class="config-save" :disabled="savingConfig" @click="saveConfig">
-        {{ savingConfig ? "保存中" : "保存配置" }}
-      </button>
+      </aside>
     </aside>
   </section>
 </template>

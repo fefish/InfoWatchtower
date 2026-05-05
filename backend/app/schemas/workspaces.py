@@ -23,6 +23,7 @@ class WorkspaceLabelPolicyRead(BaseModel):
     workspace_code: str
     label_set_code: str
     allowed_primary_categories: list[str]
+    secondary_labels_by_primary: dict[str, list[str]] = Field(default_factory=dict)
     default_category: str
     fallback_category: str
     tagging_stages: list[str]
@@ -31,5 +32,6 @@ class WorkspaceLabelPolicyRead(BaseModel):
 class WorkspaceLabelPolicyUpdate(BaseModel):
     label_set_code: str = "ai_sql_categories"
     allowed_primary_categories: list[str] = Field(default_factory=list)
+    secondary_labels_by_primary: dict[str, list[str]] = Field(default_factory=dict)
     default_category: str = "AI 应用"
     fallback_category: str = "AI 应用"

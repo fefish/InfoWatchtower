@@ -6,7 +6,7 @@ defineProps<{
 </script>
 
 <template>
-  <section class="work-band">
+  <section class="placeholder-panel">
     <div>
       <p class="eyebrow">模块骨架</p>
       <h2>{{ title }}</h2>

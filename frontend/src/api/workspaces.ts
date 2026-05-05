@@ -18,6 +18,7 @@ export interface WorkspaceLabelPolicy {
   workspace_code: string;
   label_set_code: string;
   allowed_primary_categories: string[];
+  secondary_labels_by_primary: Record<string, string[]>;
   default_category: string;
   fallback_category: string;
   tagging_stages: string[];
@@ -26,6 +27,7 @@ export interface WorkspaceLabelPolicy {
 export interface WorkspaceLabelPolicyUpdate {
   label_set_code: string;
   allowed_primary_categories: string[];
+  secondary_labels_by_primary: Record<string, string[]>;
   default_category: string;
   fallback_category: string;
 }
