@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -20,11 +19,9 @@ from app.schemas.sources import (
     DataSourceWorkspaceConfigUpdate,
     LegacySeedImportRead,
     SourceFetchRead,
-    SourceLabelOptionsRead,
 )
 
 router = APIRouter(prefix="/api/sources", tags=["sources"])
-REPO_ROOT = Path(__file__).resolve().parents[4]
 
 
 @router.get("", response_model=list[DataSourceRead])
@@ -59,16 +56,6 @@ def import_legacy_seed_sources(
     result = import_legacy_sources(session, seed_root)
     session.commit()
     return LegacySeedImportRead(created=result.created, updated=result.updated, total=result.total)
-
-
-@router.get("/label-options", response_model=SourceLabelOptionsRead)
-def get_source_label_options(_: User = Depends(get_current_user)) -> SourceLabelOptionsRead:
-    taxonomy_path = REPO_ROOT / "config" / "taxonomy" / "news_categories.json"
-    taxonomy = json.loads(taxonomy_path.read_text(encoding="utf-8"))
-    return SourceLabelOptionsRead(
-        label_set_codes=["ai_sql_categories"],
-        primary_categories=list(taxonomy.get("categories") or []),
-    )
 
 
 @router.patch("/{source_id}/workspace-link", response_model=DataSourceRead)

@@ -63,6 +63,14 @@ WORKSPACE_DEFINITIONS = {
     },
 }
 
+DEFAULT_WORKSPACE_LABEL_POLICY = {
+    "label_set_code": "ai_sql_categories",
+    "default_category": "AI 应用",
+    "fallback_category": "AI 应用",
+    "tagging_stages": ["news_generation", "post_dedupe_labeling"],
+    "source_hint_policy": "hint_only",
+}
+
 CORE_WORKSPACE_SECTIONS = [
     ("dashboard", "工作台", "page", "/dashboard", 10),
     ("source_management", "数据源管理", "page", "/sources", 20),
@@ -313,6 +321,7 @@ def _ensure_workspaces(session: Session) -> dict[str, Workspace]:
         workspace.config_json = {
             **(workspace.config_json or {}),
             "sort_order": definition["sort_order"],
+            "label_policy": (workspace.config_json or {}).get("label_policy") or _default_workspace_label_policy(),
         }
         _ensure_workspace_sections(
             session,
@@ -321,6 +330,15 @@ def _ensure_workspaces(session: Session) -> dict[str, Workspace]:
         )
     session.flush()
     return existing
+
+
+def _default_workspace_label_policy() -> dict:
+    taxonomy_path = REPO_ROOT / "config" / "taxonomy" / "news_categories.json"
+    categories = json.loads(taxonomy_path.read_text(encoding="utf-8"))["categories"]
+    return {
+        **DEFAULT_WORKSPACE_LABEL_POLICY,
+        "allowed_primary_categories": categories,
+    }
 
 
 def _ensure_workspace_sections(

@@ -43,7 +43,7 @@ onMounted(async () => {
       <h2>数据源、标签配置与 RSS raw 入库</h2>
       <p>
         当前工作台：{{ workspace.current?.name }}。系统已完成登录与 RBAC、数据库驱动工作台、
-        共享数据源导入、工作台级标签配置、adapter 注册，以及 RSS/paper RSS 手动抓取到 raw_items 的最小链路。
+        共享数据源导入、工作台统一标签策略、adapter 注册，以及 RSS/paper RSS 手动抓取到 raw_items 的最小链路。
         下一步补抓取调度，再进入 raw 到 news 的标准化和去重。
       </p>
     </div>

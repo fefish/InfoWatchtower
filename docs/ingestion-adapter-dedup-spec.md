@@ -152,6 +152,8 @@ model_name
 prompt_version
 ```
 
+生成 `generated_news.category` 时必须读取当前工作台的 `workspaces.config_json.label_policy.allowed_primary_categories`。第一阶段规划部默认使用 `config/taxonomy/news_categories.json` 的 10 个旧系统兼容一级标签。单个数据源上的 `default_label_paths` 只能作为来源提示进入 prompt 或规则特征，不得替代工作台统一标签策略。
+
 ## 6. 去重在哪一步做
 
 去重发生在：
@@ -162,6 +164,7 @@ Adapter 抓取
 -> 正文抽取
 -> normalize_to_news_item
 -> dedupe_grouping
+-> post_dedupe_labeling
 -> candidate_pool
 -> scoring_and_recommendation
 -> daily_report_draft

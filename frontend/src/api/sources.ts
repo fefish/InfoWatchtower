@@ -28,11 +28,6 @@ export interface LegacySeedImportResult {
   total: number;
 }
 
-export interface SourceLabelOptions {
-  label_set_codes: string[];
-  primary_categories: string[];
-}
-
 export interface SourceWorkspaceConfigUpdate {
   workspace_code: string;
   enabled: boolean;
@@ -71,10 +66,6 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
 export async function fetchSources(workspaceCode?: string): Promise<DataSourceRecord[]> {
   const params = workspaceCode ? `?${new URLSearchParams({ workspace_code: workspaceCode }).toString()}` : "";
   return requestJson<DataSourceRecord[]>(`/api/sources${params}`);
-}
-
-export async function fetchSourceLabelOptions(): Promise<SourceLabelOptions> {
-  return requestJson<SourceLabelOptions>("/api/sources/label-options");
 }
 
 export async function importLegacySources(): Promise<LegacySeedImportResult> {

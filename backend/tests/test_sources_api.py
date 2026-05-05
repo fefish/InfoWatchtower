@@ -62,11 +62,6 @@ def test_super_admin_imports_and_lists_legacy_sources(monkeypatch, tmp_path):
     assert len(ai_tool_payload) == 113
     assert sum(1 for item in ai_tool_payload if item["workspace_link_enabled"]) == 79
 
-    label_options = client.get("/api/sources/label-options")
-    assert label_options.status_code == 200
-    assert label_options.json()["label_set_codes"] == ["ai_sql_categories"]
-    assert "模型" in label_options.json()["primary_categories"]
-
     updated = client.patch(
         f"/api/sources/{payload[0]['id']}/workspace-link",
         json={

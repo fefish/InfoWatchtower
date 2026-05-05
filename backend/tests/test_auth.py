@@ -57,6 +57,22 @@ def test_auth_seed_creates_default_workspaces(monkeypatch, tmp_path):
         memberships = session.scalars(select(WorkspaceMembership)).all()
         assert len(memberships) == 2
         for workspace in workspaces:
+            label_policy = workspace.config_json["label_policy"]
+            assert label_policy["label_set_code"] == "ai_sql_categories"
+            assert label_policy["source_hint_policy"] == "hint_only"
+            assert label_policy["tagging_stages"] == ["news_generation", "post_dedupe_labeling"]
+            assert label_policy["allowed_primary_categories"] == [
+                "AI Infra",
+                "AI 应用",
+                "测评技术",
+                "大厂动态",
+                "模型",
+                "算法",
+                "推理加速",
+                "训练技术",
+                "智能体",
+                "基础竞争力",
+            ]
             enabled_sections = {
                 section.section_key
                 for section in session.scalars(
@@ -104,6 +120,35 @@ def test_authenticated_user_can_load_workspace_sections(monkeypatch, tmp_path):
     assert "topics" not in section_keys
     assert "tool_catalog" not in section_keys
     assert "tool_runs" not in section_keys
+
+    label_policy = client.get("/api/workspaces/planning_intel/label-policy")
+    assert label_policy.status_code == 200
+    assert label_policy.json()["allowed_primary_categories"] == [
+        "AI Infra",
+        "AI 应用",
+        "测评技术",
+        "大厂动态",
+        "模型",
+        "算法",
+        "推理加速",
+        "训练技术",
+        "智能体",
+        "基础竞争力",
+    ]
+
+    updated_policy = client.patch(
+        "/api/workspaces/planning_intel/label-policy",
+        json={
+            "label_set_code": "ai_sql_categories",
+            "allowed_primary_categories": ["模型", "智能体", "AI 应用"],
+            "default_category": "AI 应用",
+            "fallback_category": "智能体",
+            "source_hint_policy": "hint_only",
+        },
+    )
+    assert updated_policy.status_code == 200
+    assert updated_policy.json()["allowed_primary_categories"] == ["模型", "智能体", "AI 应用"]
+    assert updated_policy.json()["fallback_category"] == "智能体"
 
 
 def test_auth_seed_creates_default_label_set(monkeypatch, tmp_path):

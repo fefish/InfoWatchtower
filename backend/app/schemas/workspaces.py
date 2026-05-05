@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class WorkspaceRead(BaseModel):
@@ -17,3 +17,21 @@ class WorkspaceSectionRead(BaseModel):
     section_type: str
     route_path: str
     sort_order: int
+
+
+class WorkspaceLabelPolicyRead(BaseModel):
+    workspace_code: str
+    label_set_code: str
+    allowed_primary_categories: list[str]
+    default_category: str
+    fallback_category: str
+    tagging_stages: list[str]
+    source_hint_policy: str
+
+
+class WorkspaceLabelPolicyUpdate(BaseModel):
+    label_set_code: str = "ai_sql_categories"
+    allowed_primary_categories: list[str] = Field(default_factory=list)
+    default_category: str = "AI 应用"
+    fallback_category: str = "AI 应用"
+    source_hint_policy: str = "hint_only"

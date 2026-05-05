@@ -52,8 +52,3 @@ class SourceFetchRead(BaseModel):
     fetched: int
     created: int
     updated: int
-
-
-class SourceLabelOptionsRead(BaseModel):
-    label_set_codes: list[str]
-    primary_categories: list[str]

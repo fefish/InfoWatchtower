@@ -15,7 +15,7 @@
         "workspace memberships",
         "source enablement through workspace_source_links",
         "default domain visibility",
-        "label set configuration"
+        "unified label policy for model tagging"
       ]
     },
     "section": {
@@ -64,7 +64,7 @@
       "workspace_type",
       "default_domain_code",
       "enabled",
-      "config_json"
+      "config_json.label_policy"
     ],
     "workspace_sections": [
       "workspace_id",
@@ -106,6 +106,8 @@
     "New work scopes are workspaces; optional pages/tools are workspace_sections with enabled=false by default.",
     "The frontend must load workspace list and enabled sections from backend APIs; hard-coded navigation is only a temporary scaffold.",
     "Do not show tool_catalog, tool_runs or standalone_topics unless workspace_sections explicitly enables them.",
+    "First-level labels are configured once per workspace in workspaces.config_json.label_policy and constrain model-generated news categories.",
+    "Per-source label paths are source hints only; they do not replace the workspace label policy.",
     "First-level and second-level labels are the directory for clustering and recommendation; do not add a separate tool management page for that.",
     "Data APIs that list reusable sources may filter by workspace_code through workspace_source_links.",
     "Workspace membership controls access to a desktop, while global roles still control privileged actions."

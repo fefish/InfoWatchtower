@@ -14,6 +14,24 @@ export interface WorkspaceSectionRecord {
   sort_order: number;
 }
 
+export interface WorkspaceLabelPolicy {
+  workspace_code: string;
+  label_set_code: string;
+  allowed_primary_categories: string[];
+  default_category: string;
+  fallback_category: string;
+  tagging_stages: string[];
+  source_hint_policy: string;
+}
+
+export interface WorkspaceLabelPolicyUpdate {
+  label_set_code: string;
+  allowed_primary_categories: string[];
+  default_category: string;
+  fallback_category: string;
+  source_hint_policy: string;
+}
+
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     credentials: "same-origin",
@@ -37,4 +55,18 @@ export async function fetchWorkspaces(): Promise<WorkspaceRecord[]> {
 
 export async function fetchWorkspaceSections(workspaceCode: string): Promise<WorkspaceSectionRecord[]> {
   return requestJson<WorkspaceSectionRecord[]>(`/api/workspaces/${workspaceCode}/sections`);
+}
+
+export async function fetchWorkspaceLabelPolicy(workspaceCode: string): Promise<WorkspaceLabelPolicy> {
+  return requestJson<WorkspaceLabelPolicy>(`/api/workspaces/${workspaceCode}/label-policy`);
+}
+
+export async function updateWorkspaceLabelPolicy(
+  workspaceCode: string,
+  payload: WorkspaceLabelPolicyUpdate
+): Promise<WorkspaceLabelPolicy> {
+  return requestJson<WorkspaceLabelPolicy>(`/api/workspaces/${workspaceCode}/label-policy`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
 }

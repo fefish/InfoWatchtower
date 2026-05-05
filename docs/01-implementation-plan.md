@@ -235,7 +235,7 @@ PATCH /api/users/{id}/roles
 
 前置调整：工作台模型按共享主链路收束。`workspaces/workspace_sections/workspace_memberships` 管工作范围、页面和权限；`workspace_source_links` 管工作台启用哪些共享数据源；`domain_code` 继续只表达情报主题板块。
 
-当前实现状态：导入、工作台级标签配置、adapter 框架和手动 RSS 抓取到 raw 入库的最小链路已完成，抓取调度待继续。`backend/app/adapters/` 已有统一 `SourceAdapter`、RSS adapter 和 wiseflow/page/paper/manual 等骨架；`/api/sources/import-legacy-seeds` 可以导入 113 个旧源；`/api/sources?workspace_code=...` 可以展示共享源池及当前工作台配置；`/api/sources/{source_id}/workspace-link` 可以更新当前工作台的启用状态、权重、日限和一级/二级标签路径；`/api/sources/{source_id}/fetch` 可以触发单个 RSS/paper RSS 源抓取并幂等写入 `raw_items`；`workspace_source_links` 会为所有已启用默认工作台建立链接。
+当前实现状态：导入、工作台统一标签策略、adapter 框架和手动 RSS 抓取到 raw 入库的最小链路已完成，抓取调度待继续。`backend/app/adapters/` 已有统一 `SourceAdapter`、RSS adapter 和 wiseflow/page/paper/manual 等骨架；`/api/sources/import-legacy-seeds` 可以导入 113 个旧源；`/api/sources?workspace_code=...` 可以展示共享源池及当前工作台配置；`/api/workspaces/{workspace_code}/label-policy` 可以配置工作台统一一级标签策略；`/api/sources/{source_id}/workspace-link` 可以更新当前工作台对单源的启用状态、权重、日限和可选来源提示；`/api/sources/{source_id}/fetch` 可以触发单个 RSS/paper RSS 源抓取并幂等写入 `raw_items`；`workspace_source_links` 会为所有已启用默认工作台建立链接。
 
 实现：
 
@@ -270,7 +270,7 @@ class SourceAdapter:
 - 旧 wiseflow 不被混成 RSS。
 - `planning_intel` 和 `ai_tools` 都能看到 113 个共享源链接，其中 79 个启用。
 - 单个 RSS 源可以手动触发抓取，首次创建 `raw_items`，重复抓取更新已有 raw 记录而不重复插入。
-- 前端首页显示阶段 3，数据源页显示“数据源、标签配置与 RSS raw 入库”，并能通过“配置”修改工作台级一级/二级标签路径、通过“抓取”按钮触发单源抓取。
+- 前端首页显示阶段 3，数据源页显示“数据源、标签配置与 RSS raw 入库”，并能配置工作台统一一级标签策略、通过“配置”修改单源启用/权重/日限/可选来源提示、通过“抓取”按钮触发单源抓取。
 - 新增 source_type 只需注册 adapter。
 - adapter 输出满足 `adapter_pipeline.json` 的 raw 字段要求。
 
