@@ -2,6 +2,7 @@
   "schema_version": 1,
   "description": "Ingestion adapter and deduplication pipeline contract.",
   "pipeline_order": [
+    "workspace_ingestion_run",
     "data_source_config",
     "adapter_fetch",
     "raw_item_persist",
@@ -14,6 +15,7 @@
     "editor_review",
     "company_sql_export"
   ],
+  "ingestion_run_rule": "A workspace ingestion run selects enabled workspace_source_links, executes the registered adapters, persists raw_items idempotently, and records run-level source success/failure plus raw created/updated counts. Schedulers and workers must call this same service layer instead of bypassing adapters.",
   "adapter_rule": "Each source type may have its own input structure, but every adapter must persist the full raw payload and emit canonical raw_items. Normalization enriches and maps fields; it must not discard the original payload.",
   "source_type_to_adapter": {
     "wiseflow": "WiseflowReadInfoAdapter",

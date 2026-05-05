@@ -50,6 +50,24 @@ class RawItem(IdMixin, ScopeMixin, SyncMixin, TimestampMixin, Base):
     news_items: Mapped[list[NewsItem]] = relationship(back_populates="raw_item")
 
 
+class IngestionRun(IdMixin, ScopeMixin, SyncMixin, TimestampMixin, Base):
+    __tablename__ = "ingestion_runs"
+
+    run_key: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    run_type: Mapped[str] = mapped_column(String(64), default="workspace_fetch", index=True)
+    status: Mapped[str] = mapped_column(String(32), default="running", index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    source_total: Mapped[int] = mapped_column(Integer, default=0)
+    source_succeeded: Mapped[int] = mapped_column(Integer, default=0)
+    source_failed: Mapped[int] = mapped_column(Integer, default=0)
+    items_fetched: Mapped[int] = mapped_column(Integer, default=0)
+    raw_created: Mapped[int] = mapped_column(Integer, default=0)
+    raw_updated: Mapped[int] = mapped_column(Integer, default=0)
+    params_json: Mapped[JsonDict] = mapped_column(JsonColumn, default=dict)
+    summary_json: Mapped[JsonDict] = mapped_column(JsonColumn, default=dict)
+
+
 class NewsItem(IdMixin, ScopeMixin, SyncMixin, TimestampMixin, Base):
     __tablename__ = "news_items"
 

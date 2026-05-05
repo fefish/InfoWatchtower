@@ -33,6 +33,7 @@ EXPECTED_STAGE1_TABLES = {
     "export_job_items",
     "export_jobs",
     "generated_news",
+    "ingestion_runs",
     "insights",
     "label_sets",
     "labels",

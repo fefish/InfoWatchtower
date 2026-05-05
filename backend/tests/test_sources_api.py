@@ -82,3 +82,36 @@ def test_super_admin_imports_and_lists_legacy_sources(monkeypatch, tmp_path):
     repeated = client.post("/api/sources/import-legacy-seeds")
     assert repeated.status_code == 200
     assert repeated.json() == {"created": 0, "updated": 113, "total": 113}
+
+
+def test_super_admin_can_create_zero_limit_ingestion_run(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+
+    login = client.post("/api/auth/login", json={"username": "admin", "password": "password"})
+    assert login.status_code == 200
+
+    imported = client.post("/api/sources/import-legacy-seeds")
+    assert imported.status_code == 200
+
+    created = client.post(
+        "/api/ingestion/runs",
+        json={
+            "workspace_code": "planning_intel",
+            "source_types": ["rss", "paper_rss"],
+            "limit": 0,
+        },
+    )
+    assert created.status_code == 200
+    payload = created.json()
+    assert payload["workspace_code"] == "planning_intel"
+    assert payload["status"] == "completed"
+    assert payload["source_total"] == 0
+    assert payload["params_json"]["source_types"] == ["rss", "paper_rss"]
+
+    listed = client.get("/api/ingestion/runs", params={"workspace_code": "planning_intel"})
+    assert listed.status_code == 200
+    assert listed.json()[0]["id"] == payload["id"]
+
+    detail = client.get(f"/api/ingestion/runs/{payload['id']}")
+    assert detail.status_code == 200
+    assert detail.json()["run_key"] == payload["run_key"]

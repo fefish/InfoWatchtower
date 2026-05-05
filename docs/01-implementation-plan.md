@@ -235,7 +235,7 @@ PATCH /api/users/{id}/roles
 
 前置调整：工作台模型按共享主链路收束。`workspaces/workspace_sections/workspace_memberships` 管工作范围、页面和权限；`workspace_source_links` 管工作台启用哪些共享数据源；`domain_code` 继续只表达情报主题板块。
 
-当前实现状态：导入、工作台统一标签策略、adapter 框架和手动 RSS 抓取到 raw 入库的最小链路已完成，抓取调度待继续。`backend/app/adapters/` 已有统一 `SourceAdapter`、RSS adapter 和 wiseflow/page/paper/manual 等骨架；`/api/sources/import-legacy-seeds` 可以导入 113 个旧源；`/api/sources?workspace_code=...` 可以展示共享源池及当前工作台配置；`/api/workspaces/{workspace_code}/label-policy` 可以增删改工作台统一一级/二级标签策略；`planning_intel` 默认 `ai_sql_categories`，`ai_tools` 默认 `ai_tools_categories`；`/api/sources/{source_id}/workspace-link` 可以更新当前工作台对单源的启用状态、权重和日限；`/api/sources/{source_id}/fetch` 可以触发单个 RSS/paper RSS 源抓取并幂等写入 `raw_items`；`workspace_source_links` 会为所有已启用默认工作台建立链接。
+当前实现状态：导入、工作台统一标签策略、adapter 框架、手动 RSS 抓取到 raw 入库和工作台级 ingestion run 最小 API 已完成，真正定时器/队列待继续。`backend/app/adapters/` 已有统一 `SourceAdapter`、RSS adapter 和 wiseflow/page/paper/manual 等骨架；`/api/sources/import-legacy-seeds` 可以导入 113 个旧源；`/api/sources?workspace_code=...` 可以展示共享源池及当前工作台配置；`/api/workspaces/{workspace_code}/label-policy` 可以增删改工作台统一一级/二级标签策略；`planning_intel` 默认 `ai_sql_categories`，`ai_tools` 默认 `ai_tools_categories`；`/api/sources/{source_id}/workspace-link` 可以更新当前工作台对单源的启用状态、权重和日限；`/api/sources/{source_id}/fetch` 可以触发单个 RSS/paper RSS 源抓取并幂等写入 `raw_items`；`/api/ingestion/runs` 可以按工作台创建同步执行的抓取 run，默认处理该工作台已启用的 `rss/paper_rss` 源并写入 `ingestion_runs` 摘要；`workspace_source_links` 会为所有已启用默认工作台建立链接。
 
 实现：
 
@@ -270,6 +270,7 @@ class SourceAdapter:
 - 旧 wiseflow 不被混成 RSS。
 - `planning_intel` 和 `ai_tools` 都能看到 113 个共享源链接，其中 79 个启用。
 - 单个 RSS 源可以手动触发抓取，首次创建 `raw_items`，重复抓取更新已有 raw 记录而不重复插入。
+- 可以创建工作台级 ingestion run，run 记录 source 成功/失败、拉取数、raw 新增数和 raw 更新数；`limit=0` 可用于无网络验收 API。
 - 前端首页显示阶段 3，数据源页显示数据源管理能力，并能增删改工作台统一一级/二级标签策略、通过“配置”修改单源启用/权重/日限、通过“抓取”按钮触发单源抓取。
 - 新增 source_type 只需注册 adapter。
 - adapter 输出满足 `adapter_pipeline.json` 的 raw 字段要求。
