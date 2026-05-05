@@ -220,7 +220,7 @@ AuthAdapter -> ExternalIdentity -> IdentityResolver -> users -> session/JWT -> R
 
 ### 5.4 数据源导入
 
-当前进度：已实现旧种子源导入 API、数据源列表 API 和单源手动抓取 API。导入后 113 个源进入共享数据源池，并为 `planning_intel`、`ai_tools` 等已启用默认工作台创建 `workspace_source_links`；每个工作台当前 79 个源启用、34 个源停用，继承旧源 enabled 状态。RSS/paper RSS 源可手动触发抓取到 `raw_items`，重复抓取按 `(data_source_id, entry_key)` 幂等更新。
+当前进度：已实现旧种子源导入 API、数据源列表 API、工作台源链接配置 API 和单源手动抓取 API。导入后 113 个源进入共享数据源池，并为 `planning_intel`、`ai_tools` 等已启用默认工作台创建 `workspace_source_links`；每个工作台当前 79 个源启用、34 个源停用，继承旧源 enabled 状态。管理员可在数据源页配置当前工作台是否启用该源、权重、日限、标签集和一级/二级标签路径。RSS/paper RSS 源可手动触发抓取到 `raw_items`，重复抓取按 `(data_source_id, entry_key)` 幂等更新。
 
 从这些文件导入初始源：
 
@@ -234,7 +234,7 @@ AuthAdapter -> ExternalIdentity -> IdentityResolver -> users -> session/JWT -> R
 - 导入后旧源进入共享数据源池，并为所有已启用的默认工作台创建 `workspace_source_links`；源定义仍只保存一份。
 - `folo_metadata.info_category = 学术论文` 的 RSS 源导入为 `paper_rss`。
 - wiseflow 作为 `source_type=wiseflow` 单独存在，不要混成 RSS。
-- 前端首页和数据源页必须显示当前阶段 3 进度；数据源页应能手动触发 RSS/paper RSS 抓取。
+- 前端首页和数据源页必须显示当前阶段 3 进度；数据源页应能配置工作台级一级/二级标签路径，并能手动触发 RSS/paper RSS 抓取。
 - 重复抓取同一个 RSS 源时，`raw_items` 按 `(data_source_id, entry_key)` 更新，不重复插入。
 
 ### 5.5 Adapter 注册

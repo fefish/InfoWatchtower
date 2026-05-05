@@ -30,6 +30,16 @@ class DataSourceRead(BaseModel):
     workspace_clustering_config: dict[str, Any] = Field(default_factory=dict)
 
 
+class DataSourceWorkspaceConfigUpdate(BaseModel):
+    workspace_code: str
+    enabled: bool
+    source_weight: float = Field(default=1.0, ge=0)
+    daily_limit: int | None = Field(default=None, ge=0)
+    label_set_codes: list[str] = Field(default_factory=list)
+    default_label_paths: list[str] = Field(default_factory=list)
+    clustering_config: dict[str, Any] = Field(default_factory=dict)
+
+
 class LegacySeedImportRead(BaseModel):
     created: int
     updated: int
@@ -42,3 +52,8 @@ class SourceFetchRead(BaseModel):
     fetched: int
     created: int
     updated: int
+
+
+class SourceLabelOptionsRead(BaseModel):
+    label_set_codes: list[str]
+    primary_categories: list[str]

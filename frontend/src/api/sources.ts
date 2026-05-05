@@ -28,6 +28,21 @@ export interface LegacySeedImportResult {
   total: number;
 }
 
+export interface SourceLabelOptions {
+  label_set_codes: string[];
+  primary_categories: string[];
+}
+
+export interface SourceWorkspaceConfigUpdate {
+  workspace_code: string;
+  enabled: boolean;
+  source_weight: number;
+  daily_limit: number | null;
+  label_set_codes: string[];
+  default_label_paths: string[];
+  clustering_config: Record<string, unknown>;
+}
+
 export interface SourceFetchResult {
   data_source_id: string;
   source_type: string;
@@ -58,6 +73,10 @@ export async function fetchSources(workspaceCode?: string): Promise<DataSourceRe
   return requestJson<DataSourceRecord[]>(`/api/sources${params}`);
 }
 
+export async function fetchSourceLabelOptions(): Promise<SourceLabelOptions> {
+  return requestJson<SourceLabelOptions>("/api/sources/label-options");
+}
+
 export async function importLegacySources(): Promise<LegacySeedImportResult> {
   return requestJson<LegacySeedImportResult>("/api/sources/import-legacy-seeds", {
     method: "POST"
@@ -67,5 +86,15 @@ export async function importLegacySources(): Promise<LegacySeedImportResult> {
 export async function fetchSource(sourceId: string): Promise<SourceFetchResult> {
   return requestJson<SourceFetchResult>(`/api/sources/${sourceId}/fetch`, {
     method: "POST"
+  });
+}
+
+export async function updateSourceWorkspaceConfig(
+  sourceId: string,
+  payload: SourceWorkspaceConfigUpdate
+): Promise<DataSourceRecord> {
+  return requestJson<DataSourceRecord>(`/api/sources/${sourceId}/workspace-link`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
   });
 }

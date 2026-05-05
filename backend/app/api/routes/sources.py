@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -14,9 +15,16 @@ from app.ingestion.source_seeds import import_legacy_sources
 from app.models.content import DataSource
 from app.models.identity import User
 from app.models.workspace import Workspace, WorkspaceSourceLink
-from app.schemas.sources import DataSourceRead, LegacySeedImportRead, SourceFetchRead
+from app.schemas.sources import (
+    DataSourceRead,
+    DataSourceWorkspaceConfigUpdate,
+    LegacySeedImportRead,
+    SourceFetchRead,
+    SourceLabelOptionsRead,
+)
 
 router = APIRouter(prefix="/api/sources", tags=["sources"])
+REPO_ROOT = Path(__file__).resolve().parents[4]
 
 
 @router.get("", response_model=list[DataSourceRead])
@@ -51,6 +59,66 @@ def import_legacy_seed_sources(
     result = import_legacy_sources(session, seed_root)
     session.commit()
     return LegacySeedImportRead(created=result.created, updated=result.updated, total=result.total)
+
+
+@router.get("/label-options", response_model=SourceLabelOptionsRead)
+def get_source_label_options(_: User = Depends(get_current_user)) -> SourceLabelOptionsRead:
+    taxonomy_path = REPO_ROOT / "config" / "taxonomy" / "news_categories.json"
+    taxonomy = json.loads(taxonomy_path.read_text(encoding="utf-8"))
+    return SourceLabelOptionsRead(
+        label_set_codes=["ai_sql_categories"],
+        primary_categories=list(taxonomy.get("categories") or []),
+    )
+
+
+@router.patch("/{source_id}/workspace-link", response_model=DataSourceRead)
+def update_source_workspace_link(
+    source_id: str,
+    payload: DataSourceWorkspaceConfigUpdate,
+    _: User = Depends(require_super_admin),
+    session: Session = Depends(get_db_session),
+) -> DataSourceRead:
+    source = session.get(DataSource, source_id)
+    if source is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Data source not found")
+
+    workspace = session.scalar(
+        select(Workspace).where(
+            Workspace.code == payload.workspace_code,
+            Workspace.enabled.is_(True),
+        ),
+    )
+    if workspace is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
+
+    link = session.scalar(
+        select(WorkspaceSourceLink).where(
+            WorkspaceSourceLink.workspace_id == workspace.id,
+            WorkspaceSourceLink.data_source_id == source.id,
+        ),
+    )
+    if link is None:
+        link = WorkspaceSourceLink(
+            workspace=workspace,
+            data_source=source,
+            domain_code=source.domain_code,
+        )
+        session.add(link)
+
+    link.enabled = payload.enabled
+    link.source_weight = payload.source_weight
+    link.daily_limit = payload.daily_limit
+    link.domain_code = source.domain_code
+    existing_config = link.config_json or {}
+    link.config_json = {
+        **existing_config,
+        "label_set_codes": payload.label_set_codes or ["ai_sql_categories"],
+        "default_label_paths": payload.default_label_paths,
+        "clustering_config": payload.clustering_config,
+    }
+    session.commit()
+    session.refresh(link)
+    return _source_to_read(source, link)
 
 
 @router.post("/{source_id}/fetch", response_model=SourceFetchRead)

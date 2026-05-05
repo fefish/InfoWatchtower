@@ -62,6 +62,30 @@ def test_super_admin_imports_and_lists_legacy_sources(monkeypatch, tmp_path):
     assert len(ai_tool_payload) == 113
     assert sum(1 for item in ai_tool_payload if item["workspace_link_enabled"]) == 79
 
+    label_options = client.get("/api/sources/label-options")
+    assert label_options.status_code == 200
+    assert label_options.json()["label_set_codes"] == ["ai_sql_categories"]
+    assert "模型" in label_options.json()["primary_categories"]
+
+    updated = client.patch(
+        f"/api/sources/{payload[0]['id']}/workspace-link",
+        json={
+            "workspace_code": "planning_intel",
+            "enabled": True,
+            "source_weight": 1.5,
+            "daily_limit": 3,
+            "label_set_codes": ["ai_sql_categories"],
+            "default_label_paths": ["模型/闭源模型", "AI 应用"],
+            "clustering_config": {"min_group_size": 2},
+        },
+    )
+    assert updated.status_code == 200
+    updated_payload = updated.json()
+    assert updated_payload["workspace_source_weight"] == 1.5
+    assert updated_payload["workspace_daily_limit"] == 3
+    assert updated_payload["workspace_default_label_paths"] == ["模型/闭源模型", "AI 应用"]
+    assert updated_payload["workspace_clustering_config"] == {"min_group_size": 2}
+
     repeated = client.post("/api/sources/import-legacy-seeds")
     assert repeated.status_code == 200
     assert repeated.json() == {"created": 0, "updated": 113, "total": 113}
