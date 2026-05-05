@@ -9,15 +9,16 @@
 接手者不要从零散附录开始。必须按顺序阅读：
 
 1. `docs/00-system-design.md`
-2. `docs/data-examples.md`
-3. `docs/README.md`
-4. `docs/ingestion-adapter-dedup-spec.md`
-5. `docs/data-format-mapping.md`
-6. `docs/data-lineage-and-storage.md`
-7. `docs/auth-unified-login.md`
-8. `docs/deployment-ops.md`
-9. `docs/multi-environment-sync.md`
-10. `docs/extension-points.md`
+2. `docs/01-implementation-plan.md`
+3. `docs/data-examples.md`
+4. `docs/README.md`
+5. `docs/ingestion-adapter-dedup-spec.md`
+6. `docs/data-format-mapping.md`
+7. `docs/data-lineage-and-storage.md`
+8. `docs/auth-unified-login.md`
+9. `docs/deployment-ops.md`
+10. `docs/multi-environment-sync.md`
+11. `docs/extension-points.md`
 
 `docs/strategic-intelligence-platform.md` 是愿景展开附录，核心愿景已经合并到 `docs/00-system-design.md`。实现第一版时不需要先读它。
 

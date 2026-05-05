@@ -1,0 +1,64 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-infowatchtower}
+      POSTGRES_USER: ${POSTGRES_USER:-infowatchtower}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - /srv/infowatchtower/postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-infowatchtower} -d ${POSTGRES_DB:-infowatchtower}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - /srv/infowatchtower/redis_data:/data
+
+  backend:
+    build:
+      context: ../backend
+    restart: unless-stopped
+    env_file:
+      - ${INFOWATCHTOWER_ENV_FILE:-/srv/infowatchtower/.env.production}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  worker:
+    build:
+      context: ../backend
+    restart: unless-stopped
+    command: ["python", "-m", "app.workers.worker"]
+    env_file:
+      - ${INFOWATCHTOWER_ENV_FILE:-/srv/infowatchtower/.env.production}
+    depends_on:
+      - backend
+      - redis
+
+  scheduler:
+    build:
+      context: ../backend
+    restart: unless-stopped
+    command: ["python", "-m", "app.workers.scheduler"]
+    env_file:
+      - ${INFOWATCHTOWER_ENV_FILE:-/srv/infowatchtower/.env.production}
+    depends_on:
+      - backend
+      - redis
+
+  reverse_proxy:
+    build:
+      context: ../frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend

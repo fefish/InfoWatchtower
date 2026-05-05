@@ -414,9 +414,10 @@ daily_report_items.adoption_status = 2
 先读：
 
 1. `docs/implementation-handoff.md`
-2. `docs/data-examples.md`
-3. `docs/README.md`
-4. `config/contracts/*.json`
+2. `docs/01-implementation-plan.md`
+3. `docs/data-examples.md`
+4. `docs/README.md`
+5. `config/contracts/*.json`
 
 第一批代码目标：
 
@@ -436,6 +437,7 @@ Docker Compose local/prod skeleton
 ## 15. 附录索引
 
 - `docs/implementation-handoff.md`：开发任务书和验收标准。
+- `docs/01-implementation-plan.md`：第一版施工顺序、阶段交付物和验收命令。
 - `docs/README.md`：文档地图、单一事实源和修改规则。
 - `docs/data-examples.md`：数据流样例。
 - `docs/ingestion-adapter-dedup-spec.md`：采集和去重细节。

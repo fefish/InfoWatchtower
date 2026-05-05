@@ -6,14 +6,16 @@
 
 1. `docs/00-system-design.md`
 2. `docs/implementation-handoff.md`
-3. `docs/README.md`
-4. `config/contracts/README.md`
-5. 相关 `config/contracts/*.json`
+3. `docs/01-implementation-plan.md`
+4. `docs/README.md`
+5. `config/contracts/README.md`
+6. 相关 `config/contracts/*.json`
 
 ## 单一事实源
 
 - 总纲：`docs/00-system-design.md`
 - 开发任务书：`docs/implementation-handoff.md`
+- 第一版施工计划：`docs/01-implementation-plan.md`
 - 文档地图和修改规则：`docs/README.md`
 - 机器契约：`config/contracts/*.json`
 - 标签和板块：`config/taxonomy/*.json`
