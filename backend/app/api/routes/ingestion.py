@@ -6,7 +6,11 @@ from sqlalchemy.orm import Session
 
 from app.api.routes.auth import get_current_user, require_super_admin
 from app.core.database import get_db_session
-from app.ingestion.runs import WorkspaceIngestionRequest, WorkspaceNotFoundError, run_workspace_ingestion
+from app.ingestion.runs import (
+    WorkspaceIngestionRequest,
+    WorkspaceNotFoundError,
+    run_workspace_ingestion,
+)
 from app.models.content import IngestionRun
 from app.models.identity import User
 from app.schemas.ingestion import IngestionRunCreate, IngestionRunRead

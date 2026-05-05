@@ -52,9 +52,32 @@ class Settings(BaseSettings):
     cors_origins: str = Field(default="", alias="CORS_ORIGINS")
     legacy_seed_root: str = Field(default=str(DEFAULT_LEGACY_SEED_ROOT), alias="LEGACY_SEED_ROOT")
 
+    ingestion_scheduler_enabled: bool = Field(default=False, alias="INGESTION_SCHEDULER_ENABLED")
+    ingestion_scheduler_interval_seconds: int = Field(
+        default=60 * 60 * 24,
+        alias="INGESTION_SCHEDULER_INTERVAL_SECONDS",
+    )
+    ingestion_scheduler_workspace_code: str = Field(
+        default="planning_intel",
+        alias="INGESTION_SCHEDULER_WORKSPACE_CODE",
+    )
+    ingestion_scheduler_source_types: str = Field(
+        default="rss,paper_rss",
+        alias="INGESTION_SCHEDULER_SOURCE_TYPES",
+    )
+    ingestion_scheduler_limit: int | None = Field(default=None, alias="INGESTION_SCHEDULER_LIMIT")
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [item.strip() for item in self.cors_origins.split(",") if item.strip()]
+
+    @property
+    def ingestion_source_type_list(self) -> list[str]:
+        return [
+            item.strip()
+            for item in self.ingestion_scheduler_source_types.split(",")
+            if item.strip()
+        ]
 
 
 @lru_cache

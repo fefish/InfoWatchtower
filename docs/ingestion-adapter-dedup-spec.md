@@ -20,7 +20,7 @@
 - 登录设计：`docs/auth-unified-login.md`
 - 旧系统规格：`docs/legacy-system-spec.md`
 
-当前仓库已经有可运行的 `backend/`、`frontend/`、数据库迁移和测试；采集侧已完成 adapter 框架、单源 RSS/paper RSS 抓取和工作台级 ingestion run 最小 API。下一步应把 run 接入真正定时器/队列，并继续实现 raw 到 news 标准化与去重。
+当前仓库已经有可运行的 `backend/`、`frontend/`、数据库迁移和测试；采集侧已完成 adapter 框架、单源 RSS/paper RSS 抓取、工作台级 ingestion run API，以及 Redis/RQ worker + scheduler 调度入口。下一步应继续实现 raw 到 news 标准化与去重。
 
 ## 2. Adapter 的职责
 
@@ -186,15 +186,12 @@ workspace ingestion run
 第一版已实现：
 
 - `POST /api/ingestion/runs` 创建同步执行的工作台级 run。
+- scheduler 可按环境变量定时把同一任务入队，worker 从 Redis/RQ 执行。
 - 默认处理当前工作台已启用、且源本身启用的 `rss/paper_rss`。
 - `ingestion_runs` 保存 run 参数、状态、处理源数量、成功/失败、拉取数、raw 新增数和 raw 更新数。
 - `summary_json.sources` 保存每个源的结果摘要。
 
-尚未实现：
-
-- APScheduler/RQ/Celery 定时触发。
-- 失败源重试队列。
-- run 结束后自动进入 raw 到 news 标准化。
+尚未实现：失败源重试队列，以及 run 结束后自动进入 raw 到 news 标准化。
 
 ## 6.2 候选池是什么
 

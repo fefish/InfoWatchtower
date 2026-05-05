@@ -19,9 +19,9 @@
 - 用户权限页面已能读取用户、读取角色并保存用户角色。
 - 公网安全和 SSO 后续计划见 `docs/auth-security-roadmap.md`。
 - 工作台模型按共享主链路实现；工作台列表来自 `workspaces`，页面来自 `workspace_sections`，所有工作台共享数据源管理、候选池、日报、周报和导出能力。差异配置通过 `workspaces.config_json.label_policy` 的工作台统一一级/二级标签策略、`workspace_source_links` 的源启用/权重/日限和可选插件模块完成。
-- 阶段 3 已有共享数据源导入 API、数据源页面、工作台统一标签策略 API、工作台源链接配置 API、工作台级 ingestion run API、adapter registry、RSS adapter 和 wiseflow/page/paper/manual 骨架；旧种子源导入后会为所有已启用默认工作台创建源链接；RSS/paper RSS 源可通过手动 API 抓取并幂等写入 `raw_items`，也可通过 ingestion run 按工作台批量触发。前端已切到浅色工作台壳、数据库驱动导航、信息流式数据源列表和紧凑工作台标签策略面板。
+- 阶段 3 已有共享数据源导入 API、数据源页面、工作台统一标签策略 API、工作台源链接配置 API、工作台级 ingestion run API、Redis/RQ worker + scheduler 调度入口、adapter registry、RSS adapter 和 wiseflow/page/paper/manual 骨架；旧种子源导入后会为所有已启用默认工作台创建源链接；RSS/paper RSS 源可通过手动 API 抓取并幂等写入 `raw_items`，也可通过 ingestion run 按工作台批量触发。前端已切到浅色工作台壳、数据库驱动导航、信息流式数据源列表和紧凑工作台标签策略面板。
 
-业务流程 API 还未实现：真正后台定时器/队列、raw 到 news 标准化、去重执行、推荐执行、日报编辑页面和 SQL 导出会在后续阶段逐步补齐。
+业务流程 API 还未实现：raw 到 news 标准化、去重执行、推荐执行、日报编辑页面和 SQL 导出会在后续阶段逐步补齐。
 
 ## 2. 后端本地运行
 
@@ -134,7 +134,7 @@ curl http://localhost:5173/healthz
 
 ## 5.1 当前阶段 3 验收
 
-本阶段已经做到：旧种子源导入、工作台源链接、工作台统一一级/二级标签策略、数据库驱动导航、单源 RSS 抓取到 `raw_items`、工作台级 ingestion run 最小 API。
+本阶段已经做到：旧种子源导入、工作台源链接、工作台统一一级/二级标签策略、数据库驱动导航、单源 RSS 抓取到 `raw_items`、工作台级 ingestion run API、worker/scheduler 调度入口。
 
 前端验收：
 
@@ -197,4 +197,4 @@ docker compose -p infowatchtower -f deploy/docker-compose.local.yml exec -T post
 
 ## 6. 下一阶段
 
-阶段 3 已完成工作台统一标签策略、手动 RSS 抓取到 raw 入库和工作台级 ingestion run 最小 API。下一步先把 ingestion run 接入真正定时器/队列，再进入阶段 4 的 raw 到 news 标准化与去重。
+阶段 3 已完成工作台统一标签策略、手动 RSS 抓取到 raw 入库、工作台级 ingestion run API 和 worker/scheduler 调度入口。下一步进入阶段 4 的 raw 到 news 标准化与去重。

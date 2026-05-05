@@ -157,7 +157,7 @@ workspace_sections     当前工作台启用的页面
 `/ingestion-runs`：
 
 - 展示工作台级抓取 run 历史、状态、处理源数量、成功/失败源、raw 新增/更新数量。
-- 当前后端已提供 `POST /api/ingestion/runs`、`GET /api/ingestion/runs`、`GET /api/ingestion/runs/{id}`；第一版 API 是同步执行，后续 scheduler/worker 应调用同一服务层。
+- 当前后端已提供 `POST /api/ingestion/runs`、`GET /api/ingestion/runs`、`GET /api/ingestion/runs/{id}`；scheduler/worker 已接入同一服务层，默认关闭自动抓取。
 - 页面上线前可以通过 `limit=0` 验收 API 与权限链路，不触发真实外网抓取。
 
 `/news`：

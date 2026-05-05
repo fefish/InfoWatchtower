@@ -39,6 +39,17 @@ internet / intranet
 
 因此内网快速上线的目标是：拉同一个 Git 仓库，换一份内网 `.env.production`，执行迁移和 Compose 启动。
 
+当前 scheduler 已接入 ingestion run，默认关闭自动抓取。需要开启时在生产环境变量中设置：
+
+```text
+INGESTION_SCHEDULER_ENABLED=true
+INGESTION_SCHEDULER_INTERVAL_SECONDS=86400
+INGESTION_SCHEDULER_WORKSPACE_CODE=planning_intel
+INGESTION_SCHEDULER_SOURCE_TYPES=rss,paper_rss
+```
+
+如果要限制单次调度处理源数量，可设置 `INGESTION_SCHEDULER_LIMIT=10`。
+
 ## 2. 数据库放在哪里
 
 PostgreSQL 数据库不放在 GitHub 仓库里。

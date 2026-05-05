@@ -40,6 +40,41 @@ services:
       redis:
         condition: service_started
 
+  worker:
+    build:
+      context: ../backend
+    command: ["python", "-m", "app.workers.worker"]
+    env_file:
+      - ../config/env.example
+    environment:
+      DATABASE_URL: postgresql+psycopg://infowatchtower:change_me@postgres:5432/infowatchtower
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ../config:/config:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  scheduler:
+    build:
+      context: ../backend
+    command: ["python", "-m", "app.workers.scheduler"]
+    env_file:
+      - ../config/env.example
+    environment:
+      DATABASE_URL: postgresql+psycopg://infowatchtower:change_me@postgres:5432/infowatchtower
+      REDIS_URL: redis://redis:6379/0
+      INGESTION_SCHEDULER_ENABLED: "false"
+    volumes:
+      - ../config:/config:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
   frontend:
     image: node:22-alpine
     working_dir: /app
