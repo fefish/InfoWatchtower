@@ -49,6 +49,8 @@ GET  /api/news-items/{id}
 GET  /api/dedupe-groups
 GET  /api/dedupe-groups/{id}
 
+POST /api/pipeline/daily-runs
+
 POST /api/recommendation/runs
 GET  /api/recommendation/runs
 GET  /api/recommendation/runs/{id}
@@ -158,7 +160,7 @@ workspace_sections     当前工作台启用的页面
 `/ingestion-runs`：
 
 - 展示工作台级抓取 run 历史、状态、处理源数量、成功/失败源、raw 新增/更新数量。
-- 当前后端已提供 `POST /api/ingestion/runs`、`GET /api/ingestion/runs`、`GET /api/ingestion/runs/{id}`；scheduler/worker 已接入每日完整流水线，默认关闭自动任务，开启后执行抓取、标准化/去重、推荐和日报草稿。
+- 当前后端已提供 `POST /api/ingestion/runs`、`GET /api/ingestion/runs`、`GET /api/ingestion/runs/{id}`；scheduler/worker 已接入每日完整流水线，默认关闭自动任务，开启后执行抓取、标准化/去重、按日期推荐和日报草稿。
 - 页面上线前可以通过 `limit=0` 验收 API 与权限链路，不触发真实外网抓取。
 
 `/news`：
@@ -171,11 +173,12 @@ workspace_sections     当前工作台启用的页面
 `/recommendations`：
 
 - 推荐 run、分数、推荐原因、去重组、是否进入日报。
+- `POST /api/pipeline/daily-runs` 是面向 UI 和运维的完整流水线入口；`POST /api/recommendation/runs` 保留为只重跑推荐层的入口。
 
 `/daily-reports/:id`：
 
 - 日报时间线、点赞、评分、评论、楼中楼。
-- 当前后端已提供 `GET /api/daily-reports`、`GET /api/daily-reports/{id}`、`POST /api/daily-reports/{id}/publish`、`PATCH /api/daily-report-items/{id}` 以及日报条目的点赞/评分/评论 API；前端 `/daily-reports` 已能生成并查看日报草稿。
+- 当前后端已提供 `GET /api/daily-reports`、`GET /api/daily-reports/{id}`、`POST /api/daily-reports/{id}/publish`、`PATCH /api/daily-report-items/{id}` 以及日报条目的点赞/评分/评论 API；前端 `/daily-reports` 已能选择日期并触发完整流水线生成日报草稿，支持正文展示、采信切换、条目编辑、点赞、评分、评论和追溯查看。
 
 `/daily-reports/:id/edit`：
 
@@ -243,7 +246,7 @@ viewer
 - 可以看到 raw_items 和 news_items。
 - 可以看到去重 winner/loser。
 - 可以生成推荐 run。
-- 可以生成日报草稿。
+- 可以按日期触发完整流水线并生成日报草稿。
 - 管理员可以编辑并发布日报。
 - 用户可以点赞、评分、评论和回复。
 - 管理员可以导出公司 SQL。

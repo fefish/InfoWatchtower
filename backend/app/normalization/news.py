@@ -10,7 +10,14 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.content import DataSource, DedupeGroup, DedupeGroupItem, NewsItem, RawItem
+from app.models.content import (
+    DataSource,
+    DedupeGroup,
+    DedupeGroupItem,
+    NewsItem,
+    RawItem,
+    RecommendationItem,
+)
 from app.models.workspace import Workspace, WorkspaceSourceLink
 
 TRACKING_QUERY_KEYS = {"fbclid", "gclid", "igshid", "mc_cid", "mc_eid", "ref", "ref_src", "spm"}
@@ -361,7 +368,26 @@ def _delete_stale_group_items(
     ).all()
     for group_item in existing_items:
         if group_item.news_item_id not in current_ids:
-            session.delete(group_item)
+            if _group_item_has_recommendation_history(session, group_item):
+                group_item.is_winner = False
+                group_item.duplicate_reason = "stale_after_rebuild"
+                group_item.rank_score = 0.0
+            else:
+                session.delete(group_item)
+
+
+def _group_item_has_recommendation_history(
+    session: Session,
+    group_item: DedupeGroupItem,
+) -> bool:
+    return (
+        session.scalar(
+            select(RecommendationItem.id)
+            .where(RecommendationItem.dedupe_group_item_id == group_item.id)
+            .limit(1),
+        )
+        is not None
+    )
 
 
 def _ensure_group_item(

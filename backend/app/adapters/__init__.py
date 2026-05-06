@@ -1,11 +1,10 @@
 from app.adapters.base import AdapterRegistry, RawItemInput, SourceAdapter
+from app.adapters.page import ManualPageAdapter, PageListingAdapter
 from app.adapters.rss import PaperRssFeedAdapter, RssFeedAdapter
 from app.adapters.stubs import (
     CustomCrawlerAdapter,
     InternalSourceAdapter,
     ManualNewsAdapter,
-    ManualPageAdapter,
-    PageListingAdapter,
     PaperApiAdapter,
     PaperPageAdapter,
     WiseflowReadInfoAdapter,

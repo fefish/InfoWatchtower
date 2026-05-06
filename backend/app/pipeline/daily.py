@@ -25,6 +25,7 @@ from app.recommendations.service import (
 @dataclass(frozen=True)
 class DailyPipelineRequest:
     workspace_code: str = "planning_intel"
+    day_key: str | None = None
     source_types: list[str] | None = None
     ingestion_limit: int | None = None
     recommendation_limit: int = 15
@@ -70,6 +71,7 @@ async def run_daily_pipeline(
         session,
         RecommendationRunRequest(
             workspace_code=request.workspace_code,
+            day_key=request.day_key,
             limit=request.recommendation_limit,
             source_daily_limit=request.source_daily_limit,
             create_daily_draft=request.create_daily_draft,
@@ -90,6 +92,7 @@ def run_daily_pipeline_job(
     source_daily_limit: int = 2,
     create_daily_draft: bool = True,
     run_ingestion: bool = True,
+    day_key: str | None = None,
 ) -> dict[str, Any]:
     return asyncio.run(
         _run_daily_pipeline_job(
@@ -100,6 +103,7 @@ def run_daily_pipeline_job(
             source_daily_limit=source_daily_limit,
             create_daily_draft=create_daily_draft,
             run_ingestion=run_ingestion,
+            day_key=day_key,
         ),
     )
 
@@ -112,6 +116,7 @@ async def _run_daily_pipeline_job(
     source_daily_limit: int,
     create_daily_draft: bool,
     run_ingestion: bool,
+    day_key: str | None,
 ) -> dict[str, Any]:
     session_factory = get_session_factory()
     if session_factory is None:
@@ -122,6 +127,7 @@ async def _run_daily_pipeline_job(
             session,
             DailyPipelineRequest(
                 workspace_code=workspace_code,
+                day_key=day_key,
                 source_types=source_types,
                 ingestion_limit=ingestion_limit,
                 recommendation_limit=recommendation_limit,
@@ -130,16 +136,17 @@ async def _run_daily_pipeline_job(
                 run_ingestion=run_ingestion,
             ),
         )
-        payload = _pipeline_payload(result)
+        payload = daily_pipeline_payload(result)
         session.commit()
         return payload
 
 
-def _pipeline_payload(result: DailyPipelineResult) -> dict[str, Any]:
+def daily_pipeline_payload(result: DailyPipelineResult) -> dict[str, Any]:
     ingestion = result.ingestion_run
     recommendation = result.recommendation
     return {
         "workspace_code": recommendation.run.workspace_code,
+        "day_key": recommendation.run.params_json.get("day_key"),
         "ingestion_run_id": ingestion.id if ingestion else None,
         "ingestion_status": ingestion.status if ingestion else "skipped",
         "raw_scanned": result.normalization.raw_scanned,

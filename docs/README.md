@@ -15,7 +15,7 @@
 7. 只在需要模块细节时阅读对应专题附录。
 8. 旧系统事实从私有参考仓查询；主仓说明见 `references/README.md`，不从旧代码直接继承新架构。
 
-当前进度：阶段 0-5 已完成最小闭环。阶段 3 已完成旧种子源导入、共享数据源池、默认工作台源链接、工作台统一标签策略、adapter 框架、手动 RSS/paper RSS 抓取到 `raw_items`、工作台级 ingestion run API 和 Redis/RQ worker + scheduler 调度入口；阶段 4 已完成 raw 到 news 标准化、canonical URL、dedupe key、工作台隔离硬去重、winner/loser 回写和查询 API；阶段 5 已完成推荐 run、可解释推荐分、`generated_news`、日报草稿、发布、条目编辑和点赞/评分/评论最小 API。scheduler 开启后默认执行每日完整流水线：抓取、标准化/去重、推荐和日报草稿。前端首页必须显示阶段 5；工作台壳和导航必须来自后端工作台配置；数据源页采用信息流式共享源列表，日报页可生成并查看日报草稿。`planning_intel` 与 `ai_tools` 的默认标签策略必须保持后端隔离。下一步进入候选池/日报编辑体验增强和阶段 6 公司 SQL 导出。
+当前进度：阶段 0-5 已完成可回填闭环。阶段 3 已完成旧种子源导入、共享数据源池、默认工作台源链接、工作台统一标签策略、adapter 框架、RSS/paper RSS/页面源抓取到 `raw_items`、工作台级 ingestion run API 和 Redis/RQ worker + scheduler 调度入口；阶段 4 已完成 raw 到 news 标准化、canonical URL、dedupe key、工作台隔离硬去重、winner/loser 回写和查询 API；阶段 5 已完成完整流水线 API、按 `day_key` 推荐 run、可解释推荐分、可选 MiniMax `generated_news`、日报草稿、发布、条目编辑和点赞/评分/评论最小 API。scheduler 开启后默认执行每日完整流水线：抓取、标准化/去重、推荐和日报草稿。前端首页必须显示阶段 5；工作台壳和导航必须来自后端工作台配置；数据源页采用信息流式共享源列表，日报页可按日期生成日报草稿，并支持正文展示、采信切换、编辑、点赞、评分、评论和追溯查看。`planning_intel` 与 `ai_tools` 的默认标签策略必须保持后端隔离。下一步进入候选池页面和阶段 6 公司 SQL 导出。
 
 ## 2. 单一事实源
 

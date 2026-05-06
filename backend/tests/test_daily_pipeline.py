@@ -57,6 +57,7 @@ async def test_daily_pipeline_runs_ingestion_normalization_recommendation_and_dr
         session,
         DailyPipelineRequest(
             workspace_code="planning_intel",
+            day_key="2026-05-05",
             source_types=["rss"],
             recommendation_limit=15,
             source_daily_limit=2,
@@ -102,6 +103,7 @@ def test_daily_pipeline_job_can_process_existing_raw_without_ingestion(monkeypat
 
     payload = run_daily_pipeline_job(
         workspace_code="planning_intel",
+        day_key="2026-05-05",
         source_types=["rss"],
         run_ingestion=False,
     )

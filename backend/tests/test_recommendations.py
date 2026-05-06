@@ -118,6 +118,99 @@ def test_source_daily_limit_selects_at_most_configured_items_per_source():
     assert session.scalar(select(func.count(DailyReportItem.id))) == 1
 
 
+def test_recommendation_day_key_only_selects_that_report_day():
+    session = make_session()
+    workspace = seed_workspace(session)
+    source = seed_source(session, workspace)
+    add_raw_item(
+        session,
+        source,
+        "rss:april-30",
+        "April 30 model release",
+        "https://example.com/april-30",
+        "April 30 body.",
+        published_at=datetime(2026, 4, 30, 8, tzinfo=UTC),
+    )
+    add_raw_item(
+        session,
+        source,
+        "rss:may-01",
+        "May 1 model release",
+        "https://example.com/may-01",
+        "May 1 body.",
+        published_at=datetime(2026, 5, 1, 8, tzinfo=UTC),
+    )
+    normalize_workspace_raw_items(
+        session,
+        NewsNormalizationRequest(workspace_code="planning_intel", source_types=[], limit=None),
+    )
+
+    result = run_daily_recommendation(
+        session,
+        RecommendationRunRequest(
+            workspace_code="planning_intel",
+            day_key="2026-04-30",
+            limit=15,
+            source_daily_limit=2,
+            create_daily_draft=True,
+        ),
+    )
+    session.commit()
+
+    assert result.candidates_total == 1
+    assert result.daily_report is not None
+    assert result.daily_report.day_key == "2026-04-30"
+    assert result.daily_report.items[0].generated_news.news_item.source_url == (
+        "https://example.com/april-30"
+    )
+
+
+def test_normalization_rebuild_preserves_historical_recommendation_links():
+    session = make_session()
+    workspace = seed_workspace(session)
+    source = seed_source(session, workspace)
+    raw_item = add_raw_item(
+        session,
+        source,
+        "rss:historical",
+        "Historical model release",
+        "https://example.com/historical",
+        "Historical body.",
+    )
+    normalize_workspace_raw_items(
+        session,
+        NewsNormalizationRequest(workspace_code="planning_intel", source_types=[], limit=None),
+    )
+    run_daily_recommendation(
+        session,
+        RecommendationRunRequest(
+            workspace_code="planning_intel",
+            day_key="2026-05-05",
+            limit=15,
+            source_daily_limit=2,
+            create_daily_draft=True,
+        ),
+        now=datetime(2026, 5, 5, 10, tzinfo=UTC),
+    )
+
+    raw_item.source_url = None
+    raw_item.source_title = ""
+    raw_item.published_at = None
+    result = normalize_workspace_raw_items(
+        session,
+        NewsNormalizationRequest(workspace_code="planning_intel", source_types=[], limit=None),
+    )
+    session.commit()
+
+    assert result.raw_skipped == 1
+    assert session.scalar(select(func.count(RecommendationItem.id))) == 1
+    historical_item = session.scalar(select(RecommendationItem))
+    assert historical_item is not None
+    assert historical_item.dedupe_group_item_id is not None
+    assert historical_item.dedupe_group_item.is_winner is False
+    assert historical_item.dedupe_group_item.duplicate_reason == "stale_after_rebuild"
+
+
 def test_daily_reports_are_scoped_by_workspace_for_same_day_and_domain():
     session = make_session()
     planning = seed_workspace(session, "planning_intel")

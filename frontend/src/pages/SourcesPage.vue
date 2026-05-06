@@ -169,7 +169,11 @@ async function importSeeds() {
 }
 
 function canFetchSource(source: DataSourceRecord) {
-  return source.enabled && source.workspace_link_enabled && ["rss", "paper_rss"].includes(source.source_type);
+  return (
+    source.enabled &&
+    source.workspace_link_enabled &&
+    ["rss", "paper_rss", "page_manual", "page_monitor"].includes(source.source_type)
+  );
 }
 
 function sourceTypeLabel(type: string) {

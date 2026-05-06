@@ -4,7 +4,7 @@
 
 ## 1. 当前状态
 
-当前已完成阶段 0、阶段 1、阶段 2、阶段 3、阶段 4 和阶段 5 最小闭环：
+当前已完成阶段 0、阶段 1、阶段 2、阶段 3、阶段 4 和阶段 5 可回填闭环：
 
 - 后端 FastAPI 骨架。
 - `/healthz` 健康检查。
@@ -19,9 +19,9 @@
 - 用户权限页面已能读取用户、读取角色并保存用户角色。
 - 公网安全和 SSO 后续计划见 `docs/auth-security-roadmap.md`。
 - 工作台模型按共享主链路实现；工作台列表来自 `workspaces`，页面来自 `workspace_sections`，所有工作台共享数据源管理、候选池、日报、周报和导出能力。差异配置通过 `workspaces.config_json.label_policy` 的工作台统一一级/二级标签策略、`workspace_source_links` 的源启用/权重/日限和可选插件模块完成。
-- 阶段 3 已有共享数据源导入 API、数据源页面、工作台统一标签策略 API、工作台源链接配置 API、工作台级 ingestion run API、Redis/RQ worker + scheduler 调度入口、adapter registry、RSS adapter 和 wiseflow/page/paper/manual 骨架；旧种子源导入后会为所有已启用默认工作台创建源链接；RSS/paper RSS 源可通过手动 API 抓取并幂等写入 `raw_items`，也可通过 ingestion run 按工作台批量触发。前端已切到浅色工作台壳、数据库驱动导航、信息流式数据源列表和紧凑工作台标签策略面板。
+- 阶段 3 已有共享数据源导入 API、数据源页面、工作台统一标签策略 API、工作台源链接配置 API、工作台级 ingestion run API、Redis/RQ worker + scheduler 调度入口、adapter registry、RSS/paper RSS/page_manual/page_monitor adapter 和 wiseflow/paper API/manual 骨架；旧种子源导入后会为所有已启用默认工作台创建源链接；RSS/paper RSS/page_manual/page_monitor 源可通过手动 API 抓取并幂等写入 `raw_items`，也可通过 ingestion run 按工作台批量触发。前端已切到浅色工作台壳、数据库驱动导航、信息流式数据源列表和紧凑工作台标签策略面板。
 - 阶段 4 已有 raw 到 news 标准化与硬去重 API：`POST /api/news-items/normalize`、`GET /api/news-items`、`GET /api/dedupe-groups`。同一共享 raw 可以被不同工作台各自标准化；去重组按 `workspace_code + dedupe_key` 隔离；winner/loser 会回写到 `news_items.active` 和 `duplicate_of_id`。
-- 阶段 5 已有推荐 run、可解释推荐分、`generated_news`、日报草稿、发布、条目编辑和点赞/评分/评论最小 API；前端 `/daily-reports` 可点击生成日报草稿并展示条目；scheduler 开启后默认执行每日完整流水线：抓取、标准化/去重、推荐和日报草稿。
+- 阶段 5 已有按日期回填的完整流水线、推荐 run、可解释推荐分、可选 MiniMax `generated_news`、日报草稿、发布、条目编辑和点赞/评分/评论最小 API；前端 `/daily-reports` 可选择日期并触发完整流水线，支持正文展示、采信切换、编辑、点赞、评分、评论和追溯查看；scheduler 开启后默认执行每日完整流水线：抓取、标准化/去重、推荐和日报草稿。
 
 业务流程 API 还未实现：候选池完整页面、日报深度编辑页面、周报和 SQL 导出会在后续阶段逐步补齐。
 
@@ -231,22 +231,23 @@ curl -fsS -b /tmp/iw_cookie.txt \
 
 ## 5.3 当前阶段 5 验收
 
-本阶段已经做到：从去重 winner 生成推荐 run、推荐分、`generated_news` 和日报草稿，并支持发布、条目编辑、点赞、评分、评论。
+本阶段已经做到：从目标日期的去重 winner 生成推荐 run、推荐分、`generated_news` 和日报草稿，并支持发布、条目编辑、点赞、评分、评论。若设置 `MINIMAX_GENERATION_ENABLED=true` 且 `MINIMAX_API_KEY` 可用，结构化新闻优先由 MiniMax 生成；否则使用规则 fallback。
 
 前端验收：
 
 1. 确保至少已有 raw 标准化和去重 winner。
 2. 打开 `http://127.0.0.1:5173/daily-reports`。
-3. 点击“生成日报草稿”。
-4. 页面应显示最新日报，条目展示分类、标题、摘要、来源 URL、采信状态、点赞和评论数。
+3. 选择日报日期，点击“生成日报草稿”。
+4. 页面应显示最新日报，条目展示分类、标题、摘要、正文片段、来源 URL、采信状态、点赞和评论数。
+5. 点击日报条目后，右侧应能切换采信/备选/剔除，编辑标题/摘要/要点，点赞、评分、评论，并查看 news/raw/source 追溯 ID。
 
 API 验收：
 
 ```bash
 curl -fsS -b /tmp/iw_cookie.txt \
   -H 'Content-Type: application/json' \
-  -X POST 'http://127.0.0.1:8000/api/recommendation/runs' \
-  -d '{"workspace_code":"planning_intel","limit":15,"source_daily_limit":2,"create_daily_draft":true}'
+  -X POST 'http://127.0.0.1:8000/api/pipeline/daily-runs' \
+  -d '{"workspace_code":"planning_intel","day_key":"2026-04-30","source_types":["rss","paper_rss","page_manual","page_monitor"],"recommendation_limit":15,"source_daily_limit":2,"create_daily_draft":true,"run_ingestion":true}'
 
 curl -fsS -b /tmp/iw_cookie.txt \
   'http://127.0.0.1:8000/api/daily-reports?workspace_code=planning_intel'
@@ -264,7 +265,7 @@ curl -fsS -b /tmp/iw_cookie.txt \
 
 通过标准：
 
-- 推荐只处理 `active=true` 的去重 winner。
+- 推荐只处理目标日期 `active=true` 的去重 winner。
 - selected 数量不超过每日上限，且单源数量不超过同源日限。
 - 日报编辑写 `daily_report_items.editor_*`，不覆盖 `generated_news`。
 - 日报可沿 `daily_report_items -> generated_news -> recommendation_items -> news_items -> raw_items` 追溯。
@@ -272,4 +273,4 @@ curl -fsS -b /tmp/iw_cookie.txt \
 
 ## 6. 下一阶段
 
-阶段 5 已完成推荐、日报草稿和反馈链路的最小闭环。下一步进入候选池/日报编辑体验增强和阶段 6 公司 SQL 导出。
+阶段 5 已完成推荐、日报草稿和反馈链路的可回填闭环。下一步进入候选池/日报编辑体验增强和阶段 6 公司 SQL 导出。

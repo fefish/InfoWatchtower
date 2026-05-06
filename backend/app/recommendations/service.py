@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
+from app.llm import generate_news_with_minimax
 from app.models.common import utc_now
 from app.models.content import (
     DedupeGroup,
@@ -66,11 +67,11 @@ def run_daily_recommendation(
     if workspace is None:
         raise WorkspaceNotFoundError(f"Workspace not found: {request.workspace_code}")
 
-    now = now or utc_now()
+    now = now or _recommendation_now_for_day(request.day_key)
     day_key = request.day_key or now.astimezone(BEIJING_TZ).date().isoformat()
     limit = max(0, request.limit)
     source_daily_limit = max(1, request.source_daily_limit)
-    candidates = _candidate_rows(session, workspace.code)
+    candidates = _candidate_rows(session, workspace.code, day_key)
     scored = sorted(
         (_score_candidate(session, workspace, row, now) for row in candidates),
         key=lambda item: item.final_score,
@@ -177,7 +178,11 @@ class ScoredCandidate:
     reason: str
 
 
-def _candidate_rows(session: Session, workspace_code: str) -> list[CandidateRow]:
+def _candidate_rows(
+    session: Session,
+    workspace_code: str,
+    day_key: str | None = None,
+) -> list[CandidateRow]:
     rows = session.execute(
         select(DedupeGroup, DedupeGroupItem, NewsItem)
         .join(DedupeGroupItem, DedupeGroupItem.dedupe_group_id == DedupeGroup.id)
@@ -191,10 +196,20 @@ def _candidate_rows(session: Session, workspace_code: str) -> list[CandidateRow]
             NewsItem.normalization_status == "normalized",
         )
     ).all()
-    return [
+    candidates = [
         CandidateRow(dedupe_group=row[0], dedupe_group_item=row[1], news_item=row[2])
         for row in rows
     ]
+    if not day_key:
+        return candidates
+    return [row for row in candidates if _matches_day_key(row.news_item, day_key)]
+
+
+def _matches_day_key(news_item: NewsItem, day_key: str) -> bool:
+    published_at = news_item.published_at or news_item.created_at
+    if published_at.tzinfo is None:
+        published_at = published_at.replace(tzinfo=UTC)
+    return published_at.astimezone(BEIJING_TZ).date().isoformat() == day_key
 
 
 def _score_candidate(
@@ -376,6 +391,45 @@ def _create_generated_news(
 ) -> GeneratedNews:
     news_item = recommendation_item.news_item
     category = _category_for_news(workspace, news_item)
+    policy = _label_policy(workspace)
+    llm_draft = generate_news_with_minimax(
+        news_item,
+        fallback_category=category,
+        allowed_categories=list(policy["allowed_primary_categories"]),
+        recommendation_reason=recommendation_item.recommendation_reason,
+    )
+    if llm_draft is None:
+        content_json = {
+            "eventSummary": news_item.summary or news_item.source_title,
+            "technologyAndInnovation": _content_excerpt(news_item.content),
+            "valueAndImpact": "该信号进入日报候选，后续由管理员结合业务场景判断采信和改写。",
+            "background": f"来源：{news_item.source_name}；类型：{news_item.source_type}",
+        }
+        generated_fields = {
+            "category": category,
+            "title": _generated_title(news_item),
+            "summary": news_item.summary or news_item.content[:220],
+            "key_points": _key_points(news_item, category),
+            "content_json": content_json,
+            "generated_by": "rule_v1",
+        }
+    else:
+        generated_fields = {
+            "category": llm_draft.category,
+            "title": llm_draft.title,
+            "summary": llm_draft.summary,
+            "key_points": llm_draft.key_points,
+            "content_json": llm_draft.content_json,
+            "generated_by": llm_draft.generated_by,
+        }
+    generated_fields["content_json"] = {
+        **generated_fields["content_json"],
+        "source": {
+            "news_item_id": news_item.id,
+            "raw_item_id": news_item.raw_item_id,
+            "data_source_id": news_item.data_source_id,
+        },
+    }
     generated = GeneratedNews(
         recommendation_item=recommendation_item,
         news_item=news_item,
@@ -383,23 +437,13 @@ def _create_generated_news(
         domain_code=news_item.domain_code,
         visibility_scope=news_item.visibility_scope,
         sync_policy=news_item.sync_policy,
-        category=category,
-        title=_generated_title(news_item),
-        summary=news_item.summary or news_item.content[:220],
-        key_points=_key_points(news_item, category),
-        content_json={
-            "eventSummary": news_item.summary or news_item.source_title,
-            "technologyAndInnovation": _content_excerpt(news_item.content),
-            "valueAndImpact": "该信号进入日报候选，后续由管理员结合业务场景判断采信和改写。",
-            "background": f"来源：{news_item.source_name}；类型：{news_item.source_type}",
-            "source": {
-                "news_item_id": news_item.id,
-                "raw_item_id": news_item.raw_item_id,
-                "data_source_id": news_item.data_source_id,
-            },
-        },
+        category=str(generated_fields["category"]),
+        title=str(generated_fields["title"]),
+        summary=str(generated_fields["summary"]),
+        key_points=str(generated_fields["key_points"]),
+        content_json=generated_fields["content_json"],
         source_url=news_item.source_url,
-        generated_by="rule_v1",
+        generated_by=str(generated_fields["generated_by"]),
         generation_status="ready",
     )
     session.add(generated)
@@ -509,6 +553,16 @@ def _content_excerpt(content: str) -> str:
     if len(content) <= 500:
         return content
     return f"{content[:497].rstrip()}..."
+
+
+def _recommendation_now_for_day(day_key: str | None) -> datetime:
+    if not day_key:
+        return utc_now()
+    try:
+        target_date = date.fromisoformat(day_key)
+    except ValueError:
+        return utc_now()
+    return datetime.combine(target_date, time(23, 59, 59), tzinfo=BEIJING_TZ).astimezone(UTC)
 
 
 def _run_key(workspace_code: str, day_key: str, now: datetime) -> str:

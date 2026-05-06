@@ -235,7 +235,7 @@ PATCH /api/users/{id}/roles
 
 前置调整：工作台模型按共享主链路收束。`workspaces/workspace_sections/workspace_memberships` 管工作范围、页面和权限；`workspace_source_links` 管工作台启用哪些共享数据源；`domain_code` 继续只表达情报主题板块。
 
-当前实现状态：导入、工作台统一标签策略、adapter 框架、手动 RSS 抓取到 raw 入库、工作台级 ingestion run API 和 Redis/RQ worker + scheduler 调度入口已完成。`backend/app/adapters/` 已有统一 `SourceAdapter`、RSS adapter 和 wiseflow/page/paper/manual 等骨架；`/api/sources/import-legacy-seeds` 可以导入 113 个旧源；`/api/sources?workspace_code=...` 可以展示共享源池及当前工作台配置；`/api/workspaces/{workspace_code}/label-policy` 可以增删改工作台统一一级/二级标签策略；`planning_intel` 默认 `ai_sql_categories`，`ai_tools` 默认 `ai_tools_categories`；`/api/sources/{source_id}/workspace-link` 可以更新当前工作台对单源的启用状态、权重和日限；`/api/sources/{source_id}/fetch` 可以触发单个 RSS/paper RSS 源抓取并幂等写入 `raw_items`；`/api/ingestion/runs` 可以按工作台创建同步执行的抓取 run，默认处理该工作台已启用的 `rss/paper_rss` 源并写入 `ingestion_runs` 摘要；scheduler 可按环境变量定时把每日完整流水线入队给 worker 执行，默认关闭自动任务；`workspace_source_links` 会为所有已启用默认工作台建立链接。
+当前实现状态：导入、工作台统一标签策略、adapter 框架、RSS/paper RSS/page_manual/page_monitor 抓取到 raw 入库、工作台级 ingestion run API 和 Redis/RQ worker + scheduler 调度入口已完成。`backend/app/adapters/` 已有统一 `SourceAdapter`、RSS adapter、页面源 adapter 和 wiseflow/paper/manual 等骨架；`/api/sources/import-legacy-seeds` 可以导入 113 个旧源；`/api/sources?workspace_code=...` 可以展示共享源池及当前工作台配置；`/api/workspaces/{workspace_code}/label-policy` 可以增删改工作台统一一级/二级标签策略；`planning_intel` 默认 `ai_sql_categories`，`ai_tools` 默认 `ai_tools_categories`；`/api/sources/{source_id}/workspace-link` 可以更新当前工作台对单源的启用状态、权重和日限；`/api/sources/{source_id}/fetch` 可以触发单个 RSS/paper RSS/page_manual/page_monitor 源抓取并幂等写入 `raw_items`；`/api/ingestion/runs` 可以按工作台创建同步执行的抓取 run，默认处理该工作台已启用的 `rss/paper_rss` 源并写入 `ingestion_runs` 摘要；完整日报流水线通过 `/api/pipeline/daily-runs` 可覆盖 `rss/paper_rss/page_manual/page_monitor`。scheduler 可按环境变量定时把每日完整流水线入队给 worker 执行，默认关闭自动任务；`workspace_source_links` 会为所有已启用默认工作台建立链接。
 
 实现：
 
@@ -258,10 +258,10 @@ class SourceAdapter:
 
 第一版实现：
 
-- `RssFeedAdapter` 可真实抓取。
-- `ManualNewsAdapter` 可手工录入。
+- `RssFeedAdapter` 和 `PaperRssFeedAdapter` 可真实抓取。
+- `PageListingAdapter` 和 `ManualPageAdapter` 可真实抓取页面列表和手工页面。
 - `WiseflowReadInfoAdapter` 骨架，接口按旧 `/read_info` 预留。
-- `PageListingAdapter` 骨架。
+- `ManualNewsAdapter` 骨架。
 - `PaperMetadataEnricher` 骨架。
 
 验收：
@@ -269,10 +269,10 @@ class SourceAdapter:
 - 数据源导入数量与 contract 的 seed counts 对齐。
 - 旧 wiseflow 不被混成 RSS。
 - `planning_intel` 和 `ai_tools` 都能看到 113 个共享源链接，其中 79 个启用。
-- 单个 RSS 源可以手动触发抓取，首次创建 `raw_items`，重复抓取更新已有 raw 记录而不重复插入。
+- 单个 RSS/paper RSS/page_manual/page_monitor 源可以手动触发抓取，首次创建 `raw_items`，重复抓取更新已有 raw 记录而不重复插入。
 - 可以创建工作台级 ingestion run，run 记录 source 成功/失败、拉取数、raw 新增数和 raw 更新数；`limit=0` 可用于无网络验收 API。
 - 可以启动 worker/scheduler 容器；默认 `INGESTION_SCHEDULER_ENABLED=false` 不会自动执行，设为 `true` 后按 `INGESTION_SCHEDULER_INTERVAL_SECONDS` 入队完整日报流水线；如需旧的只抓取行为，设置 `SCHEDULER_JOB_MODE=ingestion_only`。
-- 前端首页当前显示阶段 5；数据源页仍可验收阶段 3 的数据源管理能力，并能增删改工作台统一一级/二级标签策略、通过“配置”修改单源启用/权重/日限、通过“抓取”按钮触发单源抓取。
+- 前端首页当前显示阶段 5；数据源页仍可验收阶段 3 的数据源管理能力，并能增删改工作台统一一级/二级标签策略、通过“配置”修改单源启用/权重/日限、通过“抓取”按钮触发 RSS/paper RSS/page_manual/page_monitor 单源抓取。
 - 新增 source_type 只需注册 adapter。
 - adapter 输出满足 `adapter_pipeline.json` 的 raw 字段要求。
 
@@ -326,7 +326,7 @@ cd backend && ruff check app/normalization app/schemas/news.py app/api/routes/ne
 
 目标：形成可解释推荐，并能进入日报编辑。
 
-当前实现状态：已完成最小闭环。服务位于 `backend/app/recommendations/service.py`，API 位于 `backend/app/api/routes/recommendations.py` 和 `backend/app/api/routes/reports.py`，schema 位于 `backend/app/schemas/recommendations.py` 和 `backend/app/schemas/reports.py`。`POST /api/recommendation/runs` 会读取当前工作台 active winner，生成可解释推荐分，写入 `recommendation_items`，为 selected 项生成 `generated_news`，并创建或替换日报草稿。`backend/app/pipeline/daily.py` 提供每日完整流水线，scheduler 开启后自动执行抓取、标准化/去重、推荐和日报草稿。`daily_reports` 已按 `workspace_code + domain_code + day_key` 唯一，避免多个工作台同一天同板块互相覆盖。前端 `/daily-reports` 已接入生成和查看日报草稿。
+当前实现状态：已完成可回填闭环。服务位于 `backend/app/recommendations/service.py`，完整流水线 API 位于 `backend/app/api/routes/pipeline.py`，推荐/日报 API 位于 `backend/app/api/routes/recommendations.py` 和 `backend/app/api/routes/reports.py`。`POST /api/pipeline/daily-runs` 会按工作台和 `day_key` 执行抓取、标准化/去重、推荐、结构化生成和日报草稿；`POST /api/recommendation/runs` 仍可只重跑推荐层。推荐读取当前工作台目标日期 active winner，生成可解释推荐分，写入 `recommendation_items`，为 selected 项生成 `generated_news`，并创建或替换日报草稿。`generated_news` 优先使用 MiniMax（`MINIMAX_GENERATION_ENABLED=true` 且有 key），失败或未启用时使用规则 fallback。`backend/app/pipeline/daily.py` 提供同一套每日完整流水线，scheduler 开启后自动执行。`daily_reports` 已按 `workspace_code + domain_code + day_key` 唯一，避免多个工作台同一天同板块互相覆盖。前端 `/daily-reports` 已接入按日期生成日报草稿、正文展示、采信切换、条目编辑、点赞、评分、评论和追溯查看。
 
 推荐字段：
 
@@ -345,7 +345,7 @@ recommendation_reason
 实现：
 
 - 推荐 run 可重跑。
-- 推荐只处理 active winner。
+- 推荐只处理目标 `day_key` 的 active winner。
 - 每日推荐上限默认 15。
 - 同源每日上限默认 2。
 - 推荐结果写 `recommendation_items`。
@@ -373,6 +373,7 @@ recommendation_reason
 ```text
 cd backend && DATABASE_URL="" pytest tests/test_recommendations.py
 cd backend && DATABASE_URL="" pytest tests/test_daily_pipeline.py
+cd backend && DATABASE_URL="" pytest tests/test_adapters.py
 cd frontend && npm run build
 make migration-check
 ```

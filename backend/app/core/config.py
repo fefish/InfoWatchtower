@@ -5,7 +5,9 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_ENV_FILE = REPO_ROOT / "config" / ".env"
+LOCAL_ENV_FILE = REPO_ROOT / "config" / ".env"
+MOUNTED_ENV_FILE = Path("/config/.env")
+DEFAULT_ENV_FILE = LOCAL_ENV_FILE if LOCAL_ENV_FILE.exists() else MOUNTED_ENV_FILE
 DEFAULT_LEGACY_SEED_ROOT = (
     REPO_ROOT / "config" / "seeds" / "legacy"
     if (REPO_ROOT / "config" / "seeds" / "legacy").exists()
@@ -83,6 +85,14 @@ class Settings(BaseSettings):
         default=2,
         alias="DAILY_PIPELINE_SOURCE_DAILY_LIMIT",
     )
+
+    minimax_generation_enabled: bool = Field(default=False, alias="MINIMAX_GENERATION_ENABLED")
+    minimax_api_key: str = Field(default="", alias="MINIMAX_API_KEY")
+    minimax_base_url: str = Field(default="", alias="MINIMAX_BASE_URL")
+    minimax_anthropic_base_url: str = Field(default="", alias="MINIMAX_ANTHROPIC_BASE_URL")
+    minimax_model: str = Field(default="MiniMax-M2.7", alias="MINIMAX_MODEL")
+    minimax_max_tokens: int = Field(default=2200, alias="MINIMAX_MAX_TOKENS")
+    minimax_temperature: float = Field(default=0.3, alias="MINIMAX_TEMPERATURE")
 
     @property
     def cors_origin_list(self) -> list[str]:

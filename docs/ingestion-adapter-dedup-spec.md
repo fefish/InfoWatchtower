@@ -20,7 +20,7 @@
 - 登录设计：`docs/auth-unified-login.md`
 - 旧系统规格：`docs/legacy-system-spec.md`
 
-当前仓库已经有可运行的 `backend/`、`frontend/`、数据库迁移和测试；采集侧已完成 adapter 框架、单源 RSS/paper RSS 抓取、工作台级 ingestion run API，以及 Redis/RQ worker + scheduler 调度入口。标准化与去重侧已完成 `POST /api/news-items/normalize`、`GET /api/news-items`、`GET /api/dedupe-groups` 的阶段 4 最小闭环；推荐与日报侧已完成 `POST /api/recommendation/runs`、日报草稿、发布、条目编辑和点赞/评分/评论的阶段 5 最小闭环。
+当前仓库已经有可运行的 `backend/`、`frontend/`、数据库迁移和测试；采集侧已完成 adapter 框架、单源 RSS/paper RSS/page_manual/page_monitor 抓取、工作台级 ingestion run API，以及 Redis/RQ worker + scheduler 调度入口。标准化与去重侧已完成 `POST /api/news-items/normalize`、`GET /api/news-items`、`GET /api/dedupe-groups` 的阶段 4 闭环；推荐与日报侧已完成 `POST /api/pipeline/daily-runs`、`POST /api/recommendation/runs`、日报草稿、发布、条目编辑和点赞/评分/评论的阶段 5 可回填闭环。
 
 ## 2. Adapter 的职责
 

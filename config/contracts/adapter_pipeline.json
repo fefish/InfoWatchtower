@@ -100,8 +100,9 @@
   "recommendation_stage": {
     "runs_after": "dedupe_grouping",
     "runs_before": "generate_structured_news",
-    "current_api": "POST /api/recommendation/runs",
-    "candidate_rule": "Only active dedupe winners from the requested workspace can enter a recommendation run. Losers remain traceable but are not recommended directly.",
+    "current_api": "POST /api/pipeline/daily-runs for full pipeline; POST /api/recommendation/runs for recommendation-only reruns",
+    "candidate_rule": "Only active dedupe winners from the requested workspace and target day_key can enter a recommendation run. Losers remain traceable but are not recommended directly.",
+    "day_key_rule": "Daily recommendation filters candidates by (news_items.published_at or created_at) in Asia/Shanghai. Freshness scoring for backfill uses the target day end instead of the wall-clock current day.",
     "default_limit": 15,
     "default_source_daily_limit": 2,
     "score_dimensions": [
@@ -124,8 +125,14 @@
     "adoption_rule": "Recommendation creates draft daily_report_items with adoption_status = 2 for selected items. Editors may later change adoption_status on daily_report_items; news_items and raw_items are never overwritten.",
     "workspace_scope_rule": "Daily reports are unique by workspace_code + domain_code + day_key so multiple workspaces can generate same-day reports independently."
   },
+  "generator_stage": {
+    "current_provider": "MiniMax when MINIMAX_GENERATION_ENABLED=true and MINIMAX_API_KEY is set; deterministic rule_v1 fallback otherwise",
+    "provider_rule": "Model output must be strict JSON and category must be one of the workspace label policy primary labels. Source trace IDs are forced by backend after generation.",
+    "fallback_rule": "LLM failure must not abort the daily pipeline; selected recommendations still generate rule_v1 drafts."
+  },
   "scheduled_daily_pipeline": {
     "current_job": "app.pipeline.daily.run_daily_pipeline_job",
+    "current_api": "POST /api/pipeline/daily-runs",
     "scheduler_default_mode": "daily_pipeline",
     "legacy_ingestion_only_mode": "ingestion_only",
     "enabled_by": "INGESTION_SCHEDULER_ENABLED=true",
