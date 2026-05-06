@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
+import json_repair
 
 from app.core.config import Settings, get_settings
 from app.models.content import NewsItem
+
+DEFAULT_MINIMAX_BASE_URL = "https://api.minimaxi.com/v1"
 
 
 @dataclass(frozen=True)
@@ -119,11 +123,7 @@ def _build_user_prompt(
 
 
 def _chat_completions_url(settings: Settings) -> str:
-    base_url = (
-        settings.minimax_base_url
-        or settings.minimax_anthropic_base_url
-        or "https://api.minimax.io/v1"
-    ).rstrip("/")
+    base_url = (settings.minimax_base_url or DEFAULT_MINIMAX_BASE_URL).rstrip("/")
     if base_url.endswith("/chat/completions"):
         return base_url
     if not base_url.endswith("/v1") and "/api/v1" not in base_url:
@@ -131,37 +131,7 @@ def _chat_completions_url(settings: Settings) -> str:
     return f"{base_url}/chat/completions"
 
 
-def _anthropic_messages_url(settings: Settings) -> str:
-    base_url = settings.minimax_anthropic_base_url.rstrip("/")
-    if base_url.endswith("/v1/messages"):
-        return base_url
-    if base_url.endswith("/v1"):
-        return f"{base_url}/messages"
-    return f"{base_url}/v1/messages"
-
-
 def _request_completion(settings: Settings, system_prompt: str, user_prompt: str) -> str:
-    if settings.minimax_anthropic_base_url and not settings.minimax_base_url:
-        payload = {
-            "model": settings.minimax_model,
-            "max_tokens": settings.minimax_max_tokens,
-            "temperature": settings.minimax_temperature,
-            "system": system_prompt,
-            "messages": [{"role": "user", "content": user_prompt}],
-        }
-        with httpx.Client(timeout=180.0, trust_env=False) as client:
-            response = client.post(
-                _anthropic_messages_url(settings),
-                headers={
-                    "Authorization": f"Bearer {settings.minimax_api_key}",
-                    "Content-Type": "application/json",
-                    "anthropic-version": "2023-06-01",
-                },
-                json=payload,
-            )
-            response.raise_for_status()
-        return _anthropic_content(response.json())
-
     payload = {
         "model": settings.minimax_model,
         "messages": [
@@ -172,17 +142,23 @@ def _request_completion(settings: Settings, system_prompt: str, user_prompt: str
         "max_tokens": settings.minimax_max_tokens,
         "stream": False,
     }
+    retry_times = max(settings.minimax_retry_times, 1)
     with httpx.Client(timeout=180.0, trust_env=False) as client:
-        response = client.post(
-            _chat_completions_url(settings),
-            headers={
-                "Authorization": f"Bearer {settings.minimax_api_key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-        )
-        response.raise_for_status()
-    return _choice_content(response.json())
+        for attempt in range(1, retry_times + 1):
+            response = client.post(
+                _chat_completions_url(settings),
+                headers={
+                    "Authorization": f"Bearer {settings.minimax_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            if response.status_code == 529 and attempt < retry_times:
+                time.sleep(settings.minimax_retry_backoff_seconds * attempt)
+                continue
+            response.raise_for_status()
+            return _choice_content(response.json())
+    raise RuntimeError("MiniMax completion request did not return a response")
 
 
 def _choice_content(data: dict[str, Any]) -> str:
@@ -199,22 +175,6 @@ def _choice_content(data: dict[str, Any]) -> str:
     return str(message)
 
 
-def _anthropic_content(data: dict[str, Any]) -> str:
-    content = data["content"]
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts = []
-        for item in content:
-            if isinstance(item, dict):
-                if item.get("type") == "text":
-                    parts.append(str(item.get("text") or ""))
-                elif item.get("text"):
-                    parts.append(str(item.get("text")))
-        return "".join(parts)
-    return str(content)
-
-
 def _parse_json_object(value: str) -> dict[str, Any]:
     text = _strip_thinking(value).strip()
     if text.startswith("```"):
@@ -225,7 +185,7 @@ def _parse_json_object(value: str) -> dict[str, Any]:
         end = text.rfind("}")
         if start >= 0 and end >= start:
             text = text[start : end + 1]
-    parsed = json.loads(text)
+    parsed = json_repair.loads(text)
     if not isinstance(parsed, dict):
         raise ValueError("MiniMax response is not a JSON object")
     return parsed

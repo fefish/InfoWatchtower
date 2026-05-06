@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, func, select
@@ -67,24 +68,25 @@ def run_daily_recommendation(
     if workspace is None:
         raise WorkspaceNotFoundError(f"Workspace not found: {request.workspace_code}")
 
-    now = now or _recommendation_now_for_day(request.day_key)
-    day_key = request.day_key or now.astimezone(BEIJING_TZ).date().isoformat()
+    scoring_now = now or _recommendation_now_for_day(request.day_key)
+    run_started_at = utc_now()
+    day_key = request.day_key or scoring_now.astimezone(BEIJING_TZ).date().isoformat()
     limit = max(0, request.limit)
     source_daily_limit = max(1, request.source_daily_limit)
     candidates = _candidate_rows(session, workspace.code, day_key)
     scored = sorted(
-        (_score_candidate(session, workspace, row, now) for row in candidates),
+        (_score_candidate(session, workspace, row, scoring_now) for row in candidates),
         key=lambda item: item.final_score,
         reverse=True,
     )
     selected_ids = _selected_candidate_ids(scored, limit, source_daily_limit)
 
     run = RecommendationRun(
-        run_key=_run_key(workspace.code, day_key, now),
+        run_key=_run_key(workspace.code, day_key, run_started_at),
         workspace_code=workspace.code,
         domain_code=workspace.default_domain_code,
         status="running",
-        started_at=now,
+        started_at=run_started_at,
         params_json={
             "workspace_code": workspace.code,
             "day_key": day_key,
@@ -567,4 +569,4 @@ def _recommendation_now_for_day(day_key: str | None) -> datetime:
 
 def _run_key(workspace_code: str, day_key: str, now: datetime) -> str:
     compact_time = now.strftime("%Y%m%d%H%M%S%f")
-    return f"{workspace_code}:recommendation:{day_key}:{compact_time}"
+    return f"{workspace_code}:recommendation:{day_key}:{compact_time}:{uuid4().hex[:8]}"

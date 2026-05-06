@@ -231,7 +231,7 @@ curl -fsS -b /tmp/iw_cookie.txt \
 
 ## 5.3 当前阶段 5 验收
 
-本阶段已经做到：从目标日期的去重 winner 生成推荐 run、推荐分、`generated_news` 和日报草稿，并支持发布、条目编辑、点赞、评分、评论。若设置 `MINIMAX_GENERATION_ENABLED=true` 且 `MINIMAX_API_KEY` 可用，结构化新闻优先由 MiniMax 生成；否则使用规则 fallback。
+本阶段已经做到：从目标日期的去重 winner 生成推荐 run、推荐分、`generated_news` 和日报草稿，并支持发布、条目编辑、点赞、评分、评论。若设置 `MINIMAX_GENERATION_ENABLED=true` 且 `MINIMAX_API_KEY` 可用，结构化新闻优先由 MiniMax 中国区 OpenAI-compatible `https://api.minimaxi.com/v1/chat/completions` 生成；否则使用规则 fallback。
 
 前端验收：
 

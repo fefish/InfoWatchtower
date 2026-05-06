@@ -304,7 +304,7 @@ class SourceAdapter:
 
 ### 5.8 推荐
 
-当前进度：已实现可回填闭环。`POST /api/pipeline/daily-runs` 可按工作台和 `day_key` 执行抓取、标准化/去重、推荐和日报草稿；`POST /api/recommendation/runs` 可只重跑推荐层。推荐读取目标日期的 `dedupe_groups` winner，写入 `recommendation_runs/recommendation_items`，并为 selected 推荐生成 `generated_news`。推荐分数包含 `quality_score/topic_score/freshness_score/feedback_score/diversity_score/source_score/heat_score/final_score` 和 `recommendation_reason`。MiniMax 生成通过 `MINIMAX_GENERATION_ENABLED=true` 开启，失败时不阻塞流水线，会落回规则生成。
+当前进度：已实现可回填闭环。`POST /api/pipeline/daily-runs` 可按工作台和 `day_key` 执行抓取、标准化/去重、推荐和日报草稿；`POST /api/recommendation/runs` 可只重跑推荐层。推荐读取目标日期的 `dedupe_groups` winner，写入 `recommendation_runs/recommendation_items`，并为 selected 推荐生成 `generated_news`。推荐分数包含 `quality_score/topic_score/freshness_score/feedback_score/diversity_score/source_score/heat_score/final_score` 和 `recommendation_reason`。MiniMax 生成通过 `MINIMAX_GENERATION_ENABLED=true` 开启，按旧参考脚本已验证的中国区 OpenAI-compatible `https://api.minimaxi.com/v1/chat/completions` 调用，失败时不阻塞流水线，会落回规则生成。
 
 `backend/app/pipeline/daily.py` 已提供每日完整流水线：可选抓取、标准化/去重、按 `day_key` 推荐、结构化生成和日报草稿。`POST /api/pipeline/daily-runs` 与 scheduler 都调用同一套 service；如果只想抓取，设置 `SCHEDULER_JOB_MODE=ingestion_only`。
 

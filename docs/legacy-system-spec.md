@@ -346,10 +346,11 @@ PROCESS_LOOKBACK_SECONDS
 MODEL_REQUEST_INTERVAL_SECONDS
 ARTICLE_TEXT_MAX_CHARS
 RAW_CONTENT_MAX_CHARS
+MINIMAX_BASE_URL
 MINIMAX_ANTHROPIC_BASE_URL
 MINIMAX_MODEL
 MINIMAX_MAX_TOKENS
 MINIMAX_TEMPERATURE
 ```
 
-注意：文档里只记录变量名，不记录值。真实值只保留在本地被 `.gitignore` 忽略的 `.env` 文件中。
+注意：文档里只记录变量名，不记录密钥值。旧生成脚本实际读取 `MINIMAX_BASE_URL`，未设置时默认使用中国区 OpenAI-compatible `https://api.minimaxi.com/v1/chat/completions`；旧 `.env` 中残留的 `MINIMAX_ANTHROPIC_BASE_URL` 不参与旧脚本生成调用。真实密钥值只保留在本地被 `.gitignore` 忽略的 `.env` 文件中。

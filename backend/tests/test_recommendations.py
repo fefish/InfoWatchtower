@@ -8,7 +8,7 @@ from app.auth.service import ensure_auth_seed
 from app.core.config import get_settings
 from app.core.database import Base, get_engine
 from app.main import create_app
-from app.models.content import GeneratedNews, RawItem, RecommendationItem
+from app.models.content import GeneratedNews, RawItem, RecommendationItem, RecommendationRun
 from app.models.reports import DailyReport, DailyReportItem
 from app.models.workspace import Workspace, WorkspaceSourceLink
 from app.normalization.news import NewsNormalizationRequest, normalize_workspace_raw_items
@@ -115,6 +115,41 @@ def test_source_daily_limit_selects_at_most_configured_items_per_source():
     assert session.scalar(
         select(func.count(RecommendationItem.id)).where(RecommendationItem.selected.is_(True)),
     ) == 1
+    assert session.scalar(select(func.count(DailyReportItem.id))) == 1
+
+
+def test_recommendation_can_rerun_same_day_with_same_scoring_time():
+    session = make_session()
+    workspace = seed_workspace(session)
+    source = seed_source(session, workspace)
+    add_raw_item(
+        session,
+        source,
+        "rss:rerun",
+        "Model rerun update",
+        "https://example.com/model-rerun",
+        "A useful model update body.",
+    )
+    normalize_workspace_raw_items(
+        session,
+        NewsNormalizationRequest(workspace_code="planning_intel", source_types=[], limit=None),
+    )
+    request = RecommendationRunRequest(
+        workspace_code="planning_intel",
+        day_key="2026-05-05",
+        limit=15,
+        source_daily_limit=2,
+        create_daily_draft=True,
+    )
+    fixed_scoring_time = datetime(2026, 5, 5, 10, tzinfo=UTC)
+
+    first = run_daily_recommendation(session, request, now=fixed_scoring_time)
+    second = run_daily_recommendation(session, request, now=fixed_scoring_time)
+    session.commit()
+
+    assert first.run.run_key != second.run.run_key
+    assert session.scalar(select(func.count(RecommendationRun.id))) == 2
+    assert session.scalar(select(func.count(DailyReport.id))) == 1
     assert session.scalar(select(func.count(DailyReportItem.id))) == 1
 
 

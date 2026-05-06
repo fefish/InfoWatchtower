@@ -58,11 +58,12 @@ DAILY_PIPELINE_CREATE_DAILY_DRAFT=true
 DAILY_PIPELINE_RECOMMENDATION_LIMIT=15
 DAILY_PIPELINE_SOURCE_DAILY_LIMIT=2
 MINIMAX_GENERATION_ENABLED=false
+# MINIMAX_BASE_URL=https://api.minimaxi.com/v1
 ```
 
 如果要限制单次调度处理源数量，可设置 `INGESTION_SCHEDULER_LIMIT=10`。
 
-若生产环境希望日报结构化稿调用 MiniMax，设置 `MINIMAX_GENERATION_ENABLED=true`、`MINIMAX_API_KEY`、`MINIMAX_BASE_URL` 或 `MINIMAX_ANTHROPIC_BASE_URL`；未启用或调用失败时会使用规则生成，不阻塞日报流水线。
+若生产环境希望日报结构化稿调用 MiniMax，设置 `MINIMAX_GENERATION_ENABLED=true`、`MINIMAX_API_KEY`，并使用旧参考脚本已验证的中国区 OpenAI-compatible 地址 `MINIMAX_BASE_URL=https://api.minimaxi.com/v1`；未显式设置 `MINIMAX_BASE_URL` 时也会默认走该地址。旧 `.env` 中可能残留的 `MINIMAX_ANTHROPIC_BASE_URL` 只保留兼容读取，不会覆盖主链路。未启用或调用失败时会使用规则生成，不阻塞日报流水线。
 
 如果只想执行抓取、不生成日报草稿，可设置 `SCHEDULER_JOB_MODE=ingestion_only`。
 

@@ -90,9 +90,14 @@ class Settings(BaseSettings):
     minimax_api_key: str = Field(default="", alias="MINIMAX_API_KEY")
     minimax_base_url: str = Field(default="", alias="MINIMAX_BASE_URL")
     minimax_anthropic_base_url: str = Field(default="", alias="MINIMAX_ANTHROPIC_BASE_URL")
-    minimax_model: str = Field(default="MiniMax-M2.7", alias="MINIMAX_MODEL")
+    minimax_model: str = Field(default="MiniMax-M2.7-highspeed", alias="MINIMAX_MODEL")
     minimax_max_tokens: int = Field(default=2200, alias="MINIMAX_MAX_TOKENS")
-    minimax_temperature: float = Field(default=0.3, alias="MINIMAX_TEMPERATURE")
+    minimax_temperature: float = Field(default=0.4, alias="MINIMAX_TEMPERATURE")
+    minimax_retry_times: int = Field(default=3, alias="MINIMAX_RETRY_TIMES")
+    minimax_retry_backoff_seconds: float = Field(
+        default=8.0,
+        alias="MINIMAX_RETRY_BACKOFF_SECONDS",
+    )
 
     @property
     def cors_origin_list(self) -> list[str]:

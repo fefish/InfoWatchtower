@@ -126,7 +126,7 @@
     "workspace_scope_rule": "Daily reports are unique by workspace_code + domain_code + day_key so multiple workspaces can generate same-day reports independently."
   },
   "generator_stage": {
-    "current_provider": "MiniMax when MINIMAX_GENERATION_ENABLED=true and MINIMAX_API_KEY is set; deterministic rule_v1 fallback otherwise",
+    "current_provider": "MiniMax China OpenAI-compatible chat/completions at MINIMAX_BASE_URL or default https://api.minimaxi.com/v1 when MINIMAX_GENERATION_ENABLED=true and MINIMAX_API_KEY is set; deterministic rule_v1 fallback otherwise",
     "provider_rule": "Model output must be strict JSON and category must be one of the workspace label policy primary labels. Source trace IDs are forced by backend after generation.",
     "fallback_rule": "LLM failure must not abort the daily pipeline; selected recommendations still generate rule_v1 drafts."
   },
