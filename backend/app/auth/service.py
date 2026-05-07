@@ -65,6 +65,14 @@ WORKSPACE_DEFINITIONS = {
 
 DEFAULT_WORKSPACE_LABEL_POLICY = {
     "label_set_code": "ai_sql_categories",
+    "news_format_code": "company_sql_v1",
+    "required_content_fields": [
+        "background",
+        "effects",
+        "eventSummary",
+        "technologyAndInnovation",
+        "valueAndImpact",
+    ],
     "default_category": "AI 应用",
     "fallback_category": "AI 应用",
     "tagging_stages": ["news_generation", "post_dedupe_labeling"],
@@ -74,6 +82,14 @@ AI_TOOLS_PRIMARY_CATEGORIES = ["工具新功能", "工具新案例", "工具新�
 AI_TOOLS_SECONDARY_LABELS = ["cursor", "claude code", "opencode", "codex"]
 AI_TOOLS_LABEL_POLICY = {
     "label_set_code": "ai_tools_categories",
+    "news_format_code": "tool_intel_v1",
+    "required_content_fields": [
+        "background",
+        "effects",
+        "eventSummary",
+        "technologyAndInnovation",
+        "valueAndImpact",
+    ],
     "allowed_primary_categories": AI_TOOLS_PRIMARY_CATEGORIES,
     "secondary_labels_by_primary": {
         category: AI_TOOLS_SECONDARY_LABELS
@@ -373,6 +389,8 @@ def _merge_policy_defaults(policy: dict, default_policy: dict) -> dict:
         **policy,
         "secondary_labels_by_primary": policy.get("secondary_labels_by_primary")
         or default_policy.get("secondary_labels_by_primary", {}),
+        "required_content_fields": policy.get("required_content_fields")
+        or default_policy.get("required_content_fields", []),
         "tagging_stages": policy.get("tagging_stages")
         or default_policy.get("tagging_stages", ["news_generation", "post_dedupe_labeling"]),
     }
@@ -382,6 +400,7 @@ def _copy_policy(policy: dict) -> dict:
     return {
         **policy,
         "allowed_primary_categories": list(policy["allowed_primary_categories"]),
+        "required_content_fields": list(policy.get("required_content_fields", [])),
         "secondary_labels_by_primary": {
             primary: list(labels)
             for primary, labels in policy.get("secondary_labels_by_primary", {}).items()

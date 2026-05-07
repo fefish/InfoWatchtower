@@ -17,6 +17,8 @@ export interface WorkspaceSectionRecord {
 export interface WorkspaceLabelPolicy {
   workspace_code: string;
   label_set_code: string;
+  news_format_code: string;
+  required_content_fields: string[];
   allowed_primary_categories: string[];
   secondary_labels_by_primary: Record<string, string[]>;
   default_category: string;
@@ -26,6 +28,8 @@ export interface WorkspaceLabelPolicy {
 
 export interface WorkspaceLabelPolicyUpdate {
   label_set_code: string;
+  news_format_code: string;
+  required_content_fields: string[];
   allowed_primary_categories: string[];
   secondary_labels_by_primary: Record<string, string[]>;
   default_category: string;

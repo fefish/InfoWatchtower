@@ -1,6 +1,6 @@
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
-from fastapi.testclient import TestClient
 
 from app.auth.passwords import hash_password
 from app.auth.service import ensure_auth_seed
@@ -61,7 +61,11 @@ def test_auth_seed_creates_default_workspaces(monkeypatch, tmp_path):
             assert label_policy["tagging_stages"] == ["news_generation", "post_dedupe_labeling"]
             if workspace.code == "ai_tools":
                 assert label_policy["label_set_code"] == "ai_tools_categories"
-                assert label_policy["allowed_primary_categories"] == ["工具新功能", "工具新案例", "工具新技术"]
+                assert label_policy["allowed_primary_categories"] == [
+                    "工具新功能",
+                    "工具新案例",
+                    "工具新技术",
+                ]
                 assert label_policy["secondary_labels_by_primary"] == {
                     "工具新功能": ["cursor", "claude code", "opencode", "codex"],
                     "工具新案例": ["cursor", "claude code", "opencode", "codex"],
@@ -132,6 +136,14 @@ def test_authenticated_user_can_load_workspace_sections(monkeypatch, tmp_path):
 
     label_policy = client.get("/api/workspaces/planning_intel/label-policy")
     assert label_policy.status_code == 200
+    assert label_policy.json()["news_format_code"] == "company_sql_v1"
+    assert label_policy.json()["required_content_fields"] == [
+        "background",
+        "effects",
+        "eventSummary",
+        "technologyAndInnovation",
+        "valueAndImpact",
+    ]
     assert label_policy.json()["allowed_primary_categories"] == [
         "AI Infra",
         "AI 应用",
@@ -149,20 +161,51 @@ def test_authenticated_user_can_load_workspace_sections(monkeypatch, tmp_path):
         "/api/workspaces/planning_intel/label-policy",
         json={
             "label_set_code": "ai_sql_categories",
+            "news_format_code": "company_sql_v1",
+            "required_content_fields": [
+                "background",
+                "effects",
+                "eventSummary",
+                "technologyAndInnovation",
+                "valueAndImpact",
+            ],
             "allowed_primary_categories": ["模型", "智能体", "AI 应用", "具身智能"],
             "default_category": "AI 应用",
             "fallback_category": "具身智能",
         },
     )
     assert updated_policy.status_code == 200
-    assert updated_policy.json()["allowed_primary_categories"] == ["模型", "智能体", "AI 应用", "具身智能"]
+    assert updated_policy.json()["allowed_primary_categories"] == [
+        "模型",
+        "智能体",
+        "AI 应用",
+        "具身智能",
+    ]
     assert updated_policy.json()["secondary_labels_by_primary"] == {}
     assert updated_policy.json()["fallback_category"] == "具身智能"
+
+    invalid_policy = client.patch(
+        "/api/workspaces/planning_intel/label-policy",
+        json={
+            "label_set_code": "ai_sql_categories",
+            "news_format_code": "company_sql_v1",
+            "required_content_fields": ["background", "eventSummary"],
+            "allowed_primary_categories": ["模型", "AI 应用"],
+            "default_category": "AI 应用",
+            "fallback_category": "AI 应用",
+        },
+    )
+    assert invalid_policy.status_code == 400
 
     tool_policy = client.get("/api/workspaces/ai_tools/label-policy")
     assert tool_policy.status_code == 200
     assert tool_policy.json()["label_set_code"] == "ai_tools_categories"
-    assert tool_policy.json()["allowed_primary_categories"] == ["工具新功能", "工具新案例", "工具新技术"]
+    assert tool_policy.json()["news_format_code"] == "tool_intel_v1"
+    assert tool_policy.json()["allowed_primary_categories"] == [
+        "工具新功能",
+        "工具新案例",
+        "工具新技术",
+    ]
     assert tool_policy.json()["secondary_labels_by_primary"] == {
         "工具新功能": ["cursor", "claude code", "opencode", "codex"],
         "工具新案例": ["cursor", "claude code", "opencode", "codex"],
@@ -178,7 +221,9 @@ def test_auth_seed_creates_default_label_set(monkeypatch, tmp_path):
         assert label_set is not None
         assert label_set.workspace_code == "shared"
         assert session.scalar(select(Label).where(Label.name == "基础竞争力")) is not None
-        tool_label_set = session.scalar(select(LabelSet).where(LabelSet.code == "ai_tools_categories"))
+        tool_label_set = session.scalar(
+            select(LabelSet).where(LabelSet.code == "ai_tools_categories"),
+        )
         assert tool_label_set is not None
         assert tool_label_set.workspace_code == "ai_tools"
         assert session.scalar(select(Label).where(Label.code == "工具新功能:cursor")) is not None

@@ -235,7 +235,7 @@ PATCH /api/users/{id}/roles
 
 前置调整：工作台模型按共享主链路收束。`workspaces/workspace_sections/workspace_memberships` 管工作范围、页面和权限；`workspace_source_links` 管工作台启用哪些共享数据源；`domain_code` 继续只表达情报主题板块。
 
-当前实现状态：导入、工作台统一标签策略、adapter 框架、RSS/paper RSS/page_manual/page_monitor 抓取到 raw 入库、工作台级 ingestion run API 和 Redis/RQ worker + scheduler 调度入口已完成。`backend/app/adapters/` 已有统一 `SourceAdapter`、RSS adapter、页面源 adapter 和 wiseflow/paper/manual 等骨架；`/api/sources/import-legacy-seeds` 可以导入 113 个旧源；`/api/sources?workspace_code=...` 可以展示共享源池及当前工作台配置；`/api/workspaces/{workspace_code}/label-policy` 可以增删改工作台统一一级/二级标签策略；`planning_intel` 默认 `ai_sql_categories`，`ai_tools` 默认 `ai_tools_categories`；`/api/sources/{source_id}/workspace-link` 可以更新当前工作台对单源的启用状态、权重和日限；`/api/sources/{source_id}/fetch` 可以触发单个 RSS/paper RSS/page_manual/page_monitor 源抓取并幂等写入 `raw_items`；`/api/ingestion/runs` 可以按工作台创建同步执行的抓取 run，默认处理该工作台已启用的 `rss/paper_rss` 源并写入 `ingestion_runs` 摘要；完整日报流水线通过 `/api/pipeline/daily-runs` 可覆盖 `rss/paper_rss/page_manual/page_monitor`。scheduler 可按环境变量定时把每日完整流水线入队给 worker 执行，默认关闭自动任务；`workspace_source_links` 会为所有已启用默认工作台建立链接。
+当前实现状态：导入、工作台统一标签/新闻结构策略、adapter 框架、RSS/paper RSS/page_manual/page_monitor 抓取到 raw 入库、工作台级 ingestion run API 和 Redis/RQ worker + scheduler 调度入口已完成。`backend/app/adapters/` 已有统一 `SourceAdapter`、RSS adapter、页面源 adapter 和 wiseflow/paper/manual 等骨架；`/api/sources/import-legacy-seeds` 可以导入 113 个旧源；`/api/sources?workspace_code=...` 可以展示共享源池及当前工作台配置；`/api/workspaces/{workspace_code}/label-policy` 可以增删改工作台统一一级/二级标签策略，并返回/保存 `news_format_code` 与 `required_content_fields`；`planning_intel` 默认 `ai_sql_categories + company_sql_v1`，`ai_tools` 默认 `ai_tools_categories + tool_intel_v1`；`/api/sources/{source_id}/workspace-link` 可以更新当前工作台对单源的启用状态、权重和日限；`/api/sources/{source_id}/fetch` 可以触发单个 RSS/paper RSS/page_manual/page_monitor 源抓取并幂等写入 `raw_items`；`/api/ingestion/runs` 可以按工作台创建同步执行的抓取 run，默认处理该工作台已启用的 `rss/paper_rss` 源并写入 `ingestion_runs` 摘要；完整日报流水线通过 `/api/pipeline/daily-runs` 可覆盖 `rss/paper_rss/page_manual/page_monitor`。scheduler 可按环境变量定时把每日完整流水线入队给 worker 执行，默认关闭自动任务；`workspace_source_links` 会为所有已启用默认工作台建立链接。
 
 实现：
 
@@ -272,7 +272,7 @@ class SourceAdapter:
 - 单个 RSS/paper RSS/page_manual/page_monitor 源可以手动触发抓取，首次创建 `raw_items`，重复抓取更新已有 raw 记录而不重复插入。
 - 可以创建工作台级 ingestion run，run 记录 source 成功/失败、拉取数、raw 新增数和 raw 更新数；`limit=0` 可用于无网络验收 API。
 - 可以启动 worker/scheduler 容器；默认 `INGESTION_SCHEDULER_ENABLED=false` 不会自动执行，设为 `true` 后按 `INGESTION_SCHEDULER_INTERVAL_SECONDS` 入队完整日报流水线；如需旧的只抓取行为，设置 `SCHEDULER_JOB_MODE=ingestion_only`。
-- 前端首页当前显示阶段 5；数据源页仍可验收阶段 3 的数据源管理能力，并能增删改工作台统一一级/二级标签策略、通过“配置”修改单源启用/权重/日限、通过“抓取”按钮触发 RSS/paper RSS/page_manual/page_monitor 单源抓取。
+- 前端首页当前显示阶段 5；数据源页仍可验收阶段 3 的数据源管理能力，并能通过右侧 tab 面板增删改工作台统一一级/二级标签策略、查看和保存工作台新闻结构字段、通过“配置”修改单源启用/权重/日限、通过“抓取”按钮触发 RSS/paper RSS/page_manual/page_monitor 单源抓取。
 - 新增 source_type 只需注册 adapter。
 - adapter 输出满足 `adapter_pipeline.json` 的 raw 字段要求。
 
@@ -326,7 +326,7 @@ cd backend && ruff check app/normalization app/schemas/news.py app/api/routes/ne
 
 目标：形成可解释推荐，并能进入日报编辑。
 
-当前实现状态：已完成可回填闭环。服务位于 `backend/app/recommendations/service.py`，完整流水线 API 位于 `backend/app/api/routes/pipeline.py`，推荐/日报 API 位于 `backend/app/api/routes/recommendations.py` 和 `backend/app/api/routes/reports.py`。`POST /api/pipeline/daily-runs` 会按工作台和 `day_key` 执行抓取、标准化/去重、推荐、结构化生成和日报草稿；`POST /api/recommendation/runs` 仍可只重跑推荐层。推荐读取当前工作台目标日期 active winner，生成可解释推荐分，写入 `recommendation_items`，为 selected 项生成 `generated_news`，并创建或替换日报草稿。`generated_news` 优先使用 MiniMax 中国区 OpenAI-compatible `https://api.minimaxi.com/v1/chat/completions`（`MINIMAX_GENERATION_ENABLED=true` 且有 key），失败或未启用时使用规则 fallback。`backend/app/pipeline/daily.py` 提供同一套每日完整流水线，scheduler 开启后自动执行。`daily_reports` 已按 `workspace_code + domain_code + day_key` 唯一，避免多个工作台同一天同板块互相覆盖。前端 `/daily-reports` 已接入按日期生成日报草稿、正文展示、采信切换、条目编辑、点赞、评分、评论和追溯查看。
+当前实现状态：已完成可回填闭环。服务位于 `backend/app/recommendations/service.py`，完整流水线 API 位于 `backend/app/api/routes/pipeline.py`，推荐/日报 API 位于 `backend/app/api/routes/recommendations.py` 和 `backend/app/api/routes/reports.py`。`POST /api/pipeline/daily-runs` 会按工作台和 `day_key` 执行抓取、标准化/去重、推荐、结构化生成和日报草稿；`POST /api/recommendation/runs` 仍可只重跑推荐层。推荐读取当前工作台目标日期 active winner，生成可解释推荐分，写入 `recommendation_items`，为 selected 项生成 `generated_news`，并创建或替换日报草稿。`planning_intel` 评分默认技术情报优先：`paper_rss`、研究机构、AI 软件、AI 基础设施、模型工程、推理/训练、RAG、多智能体、Agent 记忆和工程实践加分，融资、财报、股价、消费硬件和泛商业市场新闻降权。`generated_news` 优先使用 MiniMax 中国区 OpenAI-compatible `https://api.minimaxi.com/v1/chat/completions`（`MINIMAX_GENERATION_ENABLED=true` 且有 key），失败或未启用时使用规则 fallback；两条路径都必须输出 `background/effects/eventSummary/technologyAndInnovation/valueAndImpact`，满足旧参考和后续 SQL 映射。`backend/app/pipeline/daily.py` 提供同一套每日完整流水线，scheduler 开启后自动执行。`daily_reports` 已按 `workspace_code + domain_code + day_key` 唯一，避免多个工作台同一天同板块互相覆盖。前端 `/daily-reports` 已接入按日期生成日报草稿，列表展示 brief，点击打开详情弹窗后完成正文查看、采信切换、条目编辑、点赞、评分、评论和追溯查看。
 
 推荐字段：
 
@@ -396,6 +396,8 @@ daily_report_items.adoption_status = 2
 3. `ai_journal_analysis`
 4. `t_news_data_info`
 
+当前实现状态：阶段 6 标准日报 SQL 导出已落地。`backend/app/exports/company_sql.py` 从已发布日报读取采信项，按旧 `generate_ai_sql.py` 顺序生成四张表 SQL，并写入 `export_jobs/export_job_items`；`POST /api/exports/company-sql/daily-reports/{daily_report_id}` 返回完整 SQL 文本。导出的 `content_json` 严格投影为 `background/effects/eventSummary/technologyAndInnovation/valueAndImpact`，不会把新系统追溯字段混入公司内网字段。`ai_journal.source_title/content` 导出前清洗为纯文本，避免 RSS/网页 HTML 的 `<span>`、`<p>`、script/style 等污染公司 SQL；原始抓取内容仍保存在 `raw_items`。
+
 实现要求：
 
 - 字段映射完全遵守 `config/contracts/news_sql_mapping.json`。
@@ -415,7 +417,7 @@ daily_report_items.adoption_status = 2
 
 目标：让主链路变成可操作看板，不做营销首页。
 
-当前实现状态：浅色工作台壳、登录页、用户权限页和数据源管理页已可用。工作台列表与左侧导航已从后端 `workspaces/workspace_sections` 读取，不再前端硬编码；第一版默认不显示工具目录、工具任务、独立热点专题等插件页。数据源页采用信息流式共享源列表，展示共享源池、当前工作台启用数、源类型分布、工作台启用状态和抓取状态；右侧标签面板展示工作台统一一级/二级标签策略。单个源配置只包含启用、权重和日限，不维护标签。
+当前实现状态：浅色工作台壳、登录页、用户权限页和数据源管理页已可用。工作台列表与左侧导航已从后端 `workspaces/workspace_sections` 读取，不再前端硬编码；第一版默认不显示工具目录、工具任务、独立热点专题等插件页。数据源页采用参考高保真风格的信息流式共享源列表，展示共享源池、当前工作台启用数、源类型分布、工作台启用状态和抓取状态；右侧标签面板用一级/二级/新闻结构 tab 管理工作台统一策略。单个源配置只包含启用、权重和日限，不维护标签。日报页采用 brief 列表 + 详情处理弹窗，避免正文和处理区互相遮挡。
 
 页面顺序：
 
@@ -457,7 +459,7 @@ daily_report_items.adoption_status = 2
 - 切换工作台后左侧导航仍来自后端 section 配置，且不会默认出现工具目录、工具任务或独立热点专题。
 - 数据源页能看到当前工作台启用 79 个源，并能区分共享源定义和工作台配置。
 - `planning_intel` 默认展示旧公司 SQL 兼容的 10 个一级标签；`ai_tools` 默认展示“工具新功能、工具新案例、工具新技术”，且每个一级下有 `cursor/claude code/opencode/codex` 二级标签。
-- 数据源页和其他占位页在常见桌面宽度下不应出现横向截断；标签策略不应依赖难发现的内部滚动条。
+- 数据源页和其他占位页在常见桌面宽度下不应出现横向截断；标签策略的一级/二级/新闻结构应通过显式 tab 切换，避免用户不知道还有隐藏内容。
 - 可以触发一次抓取和推荐。
 - 可以查看 winner/loser 和推荐原因。
 - 可以编辑并发布日报。

@@ -15,6 +15,7 @@ coverage/
 *.sqlite
 *.sqlite3
 *.tsbuildinfo
+outputs/
 frontend/vite.config.js
 frontend/vite.config.js.map
 

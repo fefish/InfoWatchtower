@@ -55,6 +55,8 @@
     "storage": "workspaces.config_json.label_policy",
     "fields": [
       "label_set_code",
+      "news_format_code",
+      "required_content_fields",
       "allowed_primary_categories",
       "secondary_labels_by_primary",
       "default_category",
@@ -62,7 +64,16 @@
       "tagging_stages"
     ],
     "planning_intel_default_label_set_code": "ai_sql_categories",
+    "planning_intel_default_news_format_code": "company_sql_v1",
+    "company_sql_v1_required_content_fields": [
+      "background",
+      "effects",
+      "eventSummary",
+      "technologyAndInnovation",
+      "valueAndImpact"
+    ],
     "ai_tools_default_label_set_code": "ai_tools_categories",
+    "ai_tools_default_news_format_code": "tool_intel_v1",
     "tagging_stages": [
       "news_generation",
       "post_dedupe_labeling"

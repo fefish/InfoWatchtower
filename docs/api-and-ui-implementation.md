@@ -79,9 +79,9 @@ GET  /api/tasks
 POST /api/tasks
 PATCH /api/tasks/{id}
 
-POST /api/exports/company-sql
+POST /api/exports/company-sql/daily-reports/{daily_report_id}
 GET  /api/exports
-GET  /api/exports/{id}/download
+GET  /api/exports/{id}
 
 POST /api/sync/packages/export
 GET  /api/sync/packages/{package_id}/download
@@ -194,7 +194,7 @@ workspace_sections     当前工作台启用的页面
 
 `/exports`：
 
-- 公司 SQL 生成、下载、导出历史、导出追溯。
+- 公司 SQL 生成、导出历史、导出追溯。第一版 API 直接返回 SQL 文本；后续如果文件很大，再补下载文件。
 
 `/sync`：
 

@@ -173,7 +173,28 @@ GET  /api/dedupe-groups?workspace_code=planning_intel
 
 早期没有用户反馈时，`feedback_score` 和 `heat_score` 可以为 0。上线后会由点赞、评论、评分、采信行为反哺。
 
+`planning_intel` 当前默认使用技术情报优先策略：`paper_rss`、研究机构、AI 软件、AI 基础设施、模型工程、推理/训练、RAG、多智能体、Agent 记忆和工程实践会加分；融资、财报、股价、市值、消费硬件、泛商业合作等新闻默认降权。商业信号仍可保留在候选池，但不应挤占每日 10 条左右的技术日报名额。
+
 ## 6. 模型生成稿 generated_news
+
+生成前会读取工作台策略。规划部默认：
+
+```json
+{
+  "workspace_code": "planning_intel",
+  "label_set_code": "ai_sql_categories",
+  "news_format_code": "company_sql_v1",
+  "required_content_fields": [
+    "background",
+    "effects",
+    "eventSummary",
+    "technologyAndInnovation",
+    "valueAndImpact"
+  ]
+}
+```
+
+`company_sql_v1` 的字段不能随意删除，否则后续阶段 6 无法稳定导出公司内网 SQL。
 
 模型基于原始标题、原始摘要、原始 URL、抽取正文生成结构化稿。
 
@@ -240,6 +261,24 @@ GET  /api/dedupe-groups?workspace_code=planning_intel
 
 所以仍能追溯回模型原稿和原始数据。
 
+日报条目编辑层可以覆盖导出的 `title`、`summary`、`key_points` 和五段正文。导出时的优先级是：
+
+```text
+daily_report_items.editor_* > generated_news.*
+```
+
+但公司 SQL 的 `content_json` 仍然只导出旧系统五段正文，不导出 InfoWatchtower 自己的追溯字段：
+
+```json
+{
+  "background": "背景",
+  "effects": "效果总结",
+  "eventSummary": "事件总结",
+  "technologyAndInnovation": "技术和创新点总结",
+  "valueAndImpact": "价值和影响"
+}
+```
+
 ## 8. 公司 SQL 导出
 
 标准导出只取：
@@ -257,6 +296,8 @@ VALUES ('https://openai.com/index/introducing-workspace-agents-in-chatgpt',
         'Introducing workspace agents in ChatGPT',
         'Workspace agents in ChatGPT are Codex-powered agents that automate complex workflows...',
         '2026-04-22 10:00:00');
+
+-- ai_journal.content 使用导出前清洗后的纯文本；原始 HTML 仍保留在 raw_items，不写入公司 SQL。
 
 INSERT IGNORE INTO ai_journal_focus (journal_id, focus_id)
 SELECT id, 1 FROM ai_journal

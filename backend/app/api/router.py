@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.api.routes import (
     auth,
+    exports,
     health,
     ingestion,
     news,
@@ -22,4 +23,5 @@ api_router.include_router(news.router)
 api_router.include_router(pipeline.router)
 api_router.include_router(recommendations.router)
 api_router.include_router(reports.router)
+api_router.include_router(exports.router)
 api_router.include_router(health.router)

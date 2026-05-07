@@ -468,6 +468,18 @@ def _is_tracking_query_key(key: str) -> bool:
 
 def _clean_text(value: str) -> str:
     unescaped = html.unescape(value or "")
+    unescaped = re.sub(
+        r"<script\b[^>]*>.*?</script>",
+        " ",
+        unescaped,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    unescaped = re.sub(
+        r"<style\b[^>]*>.*?</style>",
+        " ",
+        unescaped,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
     without_tags = re.sub(r"<[^>]+>", " ", unescaped)
     return " ".join(without_tags.split())
 

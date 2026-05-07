@@ -52,7 +52,7 @@
 - 所有工作台默认都有数据源管理、候选池、日报、周报和导出；可选模块只能做加法，且默认关闭。
 - 数据源先进入共享池 `data_sources`，工作台通过 `workspace_source_links` 启用和配置，不复制数据源定义。
 - 一级/二级标题统一走 `label_sets/labels/content_labels`，不要给每个工作台或 source_type 增加专用标签字段，也不要为它们新增工具管理页面。
-- 工作台统一标签策略保存在 `workspaces.config_json.label_policy`。模型生成新闻结构和去重后标签定稿都必须读取这套策略；单个数据源不配置标签，只配置启用、权重、日限和抓取相关信息。`planning_intel` 默认是旧公司 SQL 兼容的 10 个一级标签；`ai_tools` 默认是“工具新功能、工具新案例、工具新技术”，且每个一级标签下都有 `cursor/claude code/opencode/codex` 二级标签。
+- 工作台统一标签和新闻结构策略保存在 `workspaces.config_json.label_policy`。模型生成新闻结构和去重后标签定稿都必须读取这套策略；单个数据源不配置标签，只配置启用、权重、日限和抓取相关信息。`planning_intel` 默认 `label_set_code=ai_sql_categories`、`news_format_code=company_sql_v1`，必须生成 `background/effects/eventSummary/technologyAndInnovation/valueAndImpact` 五个公司 SQL 兼容内容字段；`ai_tools` 默认是“工具新功能、工具新案例、工具新技术”，且每个一级标签下都有 `cursor/claude code/opencode/codex` 二级标签。
 - 原始数据必须进入 `raw_items.raw_payload_json`，不能只保存清洗后的字段。
 - 去重必须发生在 `news_items` 之后、推荐之前。
 - 标准公司 SQL 只导出已发布日报里 `adoption_status = 2` 的条目。
@@ -221,7 +221,7 @@ AuthAdapter -> ExternalIdentity -> IdentityResolver -> users -> session/JWT -> R
 
 ### 5.4 数据源导入
 
-当前进度：已实现旧种子源导入 API、数据源列表 API、工作台统一标签策略 API、工作台源链接配置 API、单源手动抓取 API、工作台级 ingestion run API 和 Redis/RQ worker + scheduler 调度入口。导入后 113 个源进入共享数据源池，并为 `planning_intel`、`ai_tools` 等已启用默认工作台创建 `workspace_source_links`；每个工作台当前 79 个源启用、34 个源停用，继承旧源 enabled 状态。管理员可在数据源页增删改当前工作台统一一级/二级标签策略；该策略是模型生成新闻结构和去重后标签定稿的合法标签列表。单个源只配置启用、权重和日限。RSS/paper RSS/page_manual/page_monitor 源可手动触发抓取到 `raw_items`，重复抓取按 `(data_source_id, entry_key)` 幂等更新。`/api/ingestion/runs` 当前同步执行工作台级抓取，默认抓该工作台启用的 `rss/paper_rss` 源；完整日报流水线通过 `/api/pipeline/daily-runs` 可覆盖 `rss/paper_rss/page_manual/page_monitor`。scheduler 默认关闭自动任务，开启后定时把每日完整流水线入队给 worker 执行。前端已改为浅色工作台壳、数据库驱动分组导航、信息流式数据源列表和紧凑工作台标签策略面板；占位页使用统一内容容器，避免常见桌面宽度下横向显示不全。
+当前进度：已实现旧种子源导入 API、数据源列表 API、工作台统一标签/新闻结构策略 API、工作台源链接配置 API、单源手动抓取 API、工作台级 ingestion run API 和 Redis/RQ worker + scheduler 调度入口。导入后 113 个源进入共享数据源池，并为 `planning_intel`、`ai_tools` 等已启用默认工作台创建 `workspace_source_links`；每个工作台当前 79 个源启用、34 个源停用，继承旧源 enabled 状态。管理员可在数据源页增删改当前工作台统一一级/二级标签策略，并能查看/配置 `news_format_code` 与生成稿必填内容字段；该策略是模型生成新闻结构、公司 SQL 兼容字段和去重后标签定稿的合法来源。单个源只配置启用、权重和日限。RSS/paper RSS/page_manual/page_monitor 源可手动触发抓取到 `raw_items`，重复抓取按 `(data_source_id, entry_key)` 幂等更新。`/api/ingestion/runs` 当前同步执行工作台级抓取，默认抓该工作台启用的 `rss/paper_rss` 源；完整日报流水线通过 `/api/pipeline/daily-runs` 可覆盖 `rss/paper_rss/page_manual/page_monitor`。scheduler 默认关闭自动任务，开启后定时把每日完整流水线入队给 worker 执行。前端已改为浅色工作台壳、数据库驱动分组导航、信息流式数据源列表和参考高保真风格的右侧标签策略面板；占位页使用统一内容容器，避免常见桌面宽度下横向显示不全。
 
 从这些文件导入初始源：
 
@@ -235,7 +235,7 @@ AuthAdapter -> ExternalIdentity -> IdentityResolver -> users -> session/JWT -> R
 - 导入后旧源进入共享数据源池，并为所有已启用的默认工作台创建 `workspace_source_links`；源定义仍只保存一份。
 - `folo_metadata.info_category = 学术论文` 的 RSS 源导入为 `paper_rss`。
 - wiseflow 作为 `source_type=wiseflow` 单独存在，不要混成 RSS。
-- 前端首页当前显示阶段 5 进度；数据源页应能继续验收阶段 3 的增删改工作台统一一级/二级标签策略、单源启用/权重/日限、手动触发 RSS/paper RSS/page_manual/page_monitor 抓取；单源配置里不得维护标签。
+- 前端首页当前显示阶段 5 进度；数据源页应能继续验收阶段 3 的增删改工作台统一一级/二级标签策略、查看和保存工作台新闻结构字段、单源启用/权重/日限、手动触发 RSS/paper RSS/page_manual/page_monitor 抓取；单源配置里不得维护标签。
 - 重复抓取同一个 RSS 源时，`raw_items` 按 `(data_source_id, entry_key)` 更新，不重复插入。
 - `POST /api/ingestion/runs` 能创建工作台级抓取 run；`GET /api/ingestion/runs` 和 `GET /api/ingestion/runs/{id}` 能查看历史与详情。
 
@@ -304,7 +304,7 @@ class SourceAdapter:
 
 ### 5.8 推荐
 
-当前进度：已实现可回填闭环。`POST /api/pipeline/daily-runs` 可按工作台和 `day_key` 执行抓取、标准化/去重、推荐和日报草稿；`POST /api/recommendation/runs` 可只重跑推荐层。推荐读取目标日期的 `dedupe_groups` winner，写入 `recommendation_runs/recommendation_items`，并为 selected 推荐生成 `generated_news`。推荐分数包含 `quality_score/topic_score/freshness_score/feedback_score/diversity_score/source_score/heat_score/final_score` 和 `recommendation_reason`。MiniMax 生成通过 `MINIMAX_GENERATION_ENABLED=true` 开启，按旧参考脚本已验证的中国区 OpenAI-compatible `https://api.minimaxi.com/v1/chat/completions` 调用，失败时不阻塞流水线，会落回规则生成。
+当前进度：已实现可回填闭环。`POST /api/pipeline/daily-runs` 可按工作台和 `day_key` 执行抓取、标准化/去重、推荐和日报草稿；`POST /api/recommendation/runs` 可只重跑推荐层。推荐读取目标日期的 `dedupe_groups` winner，写入 `recommendation_runs/recommendation_items`，并为 selected 推荐生成 `generated_news`。推荐分数包含 `quality_score/topic_score/freshness_score/feedback_score/diversity_score/source_score/heat_score/final_score` 和 `recommendation_reason`。`planning_intel` 默认采用技术情报优先策略：提升 `paper_rss`、研究机构、AI 软件、AI 基础设施、模型工程、推理/训练、RAG、多智能体、Agent 记忆和工程实践，降权融资、财报、股价、消费硬件和泛商业市场新闻。MiniMax 生成通过 `MINIMAX_GENERATION_ENABLED=true` 开启，按旧参考脚本已验证的中国区 OpenAI-compatible `https://api.minimaxi.com/v1/chat/completions` 调用，失败时不阻塞流水线，会落回规则生成。
 
 `backend/app/pipeline/daily.py` 已提供每日完整流水线：可选抓取、标准化/去重、按 `day_key` 推荐、结构化生成和日报草稿。`POST /api/pipeline/daily-runs` 与 scheduler 都调用同一套 service；如果只想抓取，设置 `SCHEDULER_JOB_MODE=ingestion_only`。
 
@@ -330,7 +330,7 @@ class SourceAdapter:
 
 ### 5.9 日报与编辑
 
-当前进度：已实现可回填闭环。推荐 run 可创建或替换 `daily_reports/daily_report_items` 草稿；`GET /api/daily-reports`、`GET /api/daily-reports/{id}` 可查看日报；`PATCH /api/daily-report-items/{id}` 可编辑日报层覆盖字段；`POST /api/daily-reports/{id}/publish` 可发布。前端 `/daily-reports` 可选择日期并点击生成日报草稿，触发完整流水线，并支持正文展示、采信切换、条目编辑、点赞、评分、评论和追溯查看。
+当前进度：已实现可回填闭环。推荐 run 可创建或替换 `daily_reports/daily_report_items` 草稿；`GET /api/daily-reports`、`GET /api/daily-reports/{id}` 可查看日报；`PATCH /api/daily-report-items/{id}` 可编辑日报层覆盖字段；`POST /api/daily-reports/{id}/publish` 可发布。`generated_news.content_json` 已按 `company_sql_v1` 保证 `background/effects/eventSummary/technologyAndInnovation/valueAndImpact` 必填字段，MiniMax 和规则 fallback 都遵循同一格式。前端 `/daily-reports` 可选择日期并点击生成日报草稿，触发完整流水线；列表只展示 brief，点击条目后在详情弹窗里查看完整结构化正文，并立即完成采信切换、条目编辑、点赞、评分、评论和追溯查看。
 
 实现：
 
@@ -359,6 +359,8 @@ POST /api/daily-report-items/{id}/comments
 反馈会同时挂到 `daily_report_item` 和对应 `news_item`，后续推荐 run 可读取这些数据进入 `heat_score/feedback_score`。
 
 ### 5.11 公司 SQL 导出
+
+当前进度：已实现标准日报 SQL 导出。`POST /api/exports/company-sql/daily-reports/{daily_report_id}` 会校验日报必须 `status = published`，并且只导出 `daily_report_items.adoption_status = 2` 的采信项；每条采信项写出旧系统兼容的 4 条 SQL，同时写入 `export_jobs` 和 `export_job_items`。导出的 `content_json` 只保留 `background/effects/eventSummary/technologyAndInnovation/valueAndImpact` 五个旧内网字段，InfoWatchtower 自己的 `source/raw/news` 追溯信息保留在关系表，不进入公司 SQL 的 JSON。`ai_journal.source_title` 和 `ai_journal.content` 导出前必须清洗为纯文本，去除 HTML 标签和 script/style 内容；原始 HTML 保留在 `raw_items.raw_content/raw_payload_json`。
 
 实现标准导出：
 

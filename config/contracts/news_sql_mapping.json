@@ -12,6 +12,7 @@
         "raw_items": [
           "id",
           "data_source_id",
+          "workspace_code",
           "domain_code",
           "visibility_scope",
           "sync_policy",
@@ -19,38 +20,43 @@
           "source_name",
           "entry_key",
           "source_url",
-          "canonical_url",
           "source_title",
-          "raw_summary",
           "raw_content",
           "published_at",
           "fetched_at",
-          "raw_payload_json",
-          "source_specific_json"
+          "raw_payload_json"
         ],
         "news_items": [
           "id",
           "raw_item_id",
+          "data_source_id",
+          "workspace_code",
           "domain_code",
           "visibility_scope",
           "sync_policy",
+          "source_type",
+          "source_name",
           "source_url",
           "canonical_url",
           "source_title",
+          "normalized_title",
+          "summary",
           "content",
-          "created_at",
+          "published_at",
           "focus_id",
-          "source_kind",
-          "source_name",
           "dedupe_key",
-          "duplicate_of",
+          "duplicate_of_id",
           "active",
           "normalization_status"
         ],
         "generated_news": [
           "id",
+          "recommendation_item_id",
           "news_item_id",
+          "workspace_code",
           "domain_code",
+          "visibility_scope",
+          "sync_policy",
           "category",
           "title",
           "summary",
@@ -58,21 +64,24 @@
           "content_json",
           "source_url",
           "created_at",
-          "model_provider",
-          "model_name",
-          "prompt_version"
+          "generated_by",
+          "generation_status"
         ],
         "daily_report_items": [
           "id",
           "daily_report_id",
-          "news_item_id",
           "generated_news_id",
-          "position",
+          "workspace_code",
+          "domain_code",
+          "visibility_scope",
+          "sync_policy",
           "adoption_status",
+          "sort_order",
           "editor_title",
           "editor_summary",
+          "editor_key_points",
           "editor_content_json",
-          "locked"
+          "editor_notes"
         ],
         "feedback_tables": [
           "reactions",
@@ -97,10 +106,12 @@
         "technologyAndInnovation",
         "valueAndImpact"
       ],
-      "notes": "sourceUrl and created are forced from the original news item, not trusted from the model."
+      "notes": "sourceUrl and created are forced from the original news item, not trusted from the model. Runtime GeneratedNews stores content_json directly; exporter projects it back to the legacy content object."
     },
     "company_sql": {
       "export_scope": "Only published/adopted daily report items are exported by default. Candidate-only items and non-adopted retained items stay inside InfoWatchtower unless an admin explicitly creates a special export job.",
+      "implemented_endpoint": "POST /api/exports/company-sql/daily-reports/{daily_report_id}",
+      "implemented_service": "backend/app/exports/company_sql.py",
       "tables_in_order": [
         "ai_journal",
         "ai_journal_focus",
@@ -108,22 +119,40 @@
         "t_news_data_info"
       ],
       "one_news_item_sql_statement_count": 4,
-      "safe_write_pattern": "INSERT IGNORE ai_journal first; later tables use INSERT ... SELECT id FROM ai_journal WHERE source_url = :source_url LIMIT 1."
+      "safe_write_pattern": "INSERT IGNORE ai_journal first; later tables use INSERT ... SELECT id FROM ai_journal WHERE source_url = :source_url LIMIT 1.",
+      "content_json_export_shape": {
+        "source": "daily_report_items.editor_content_json overrides generated_news.content_json.",
+        "include_fields_only": [
+          "background",
+          "effects",
+          "eventSummary",
+          "technologyAndInnovation",
+          "valueAndImpact"
+        ],
+        "excluded_fields": [
+          "source",
+          "recommendationReason",
+          "news_item_id",
+          "raw_item_id",
+          "data_source_id"
+        ],
+        "reason": "Company intranet SQL expects legacy analysis.content only. InfoWatchtower lineage stays in local relational tables and must not be serialized into company content_json."
+      }
     }
   },
   "field_mapping": {
     "data_sources.domain_code": ["raw_items.domain_code", "news_items.domain_code", "generated_news.domain_code"],
     "raw_items.source_url": ["news_items.source_url", "generated_news.source_url", "ai_journal.source_url", "ai_journal_analysis.source_url", "t_news_data_info.source_url"],
-    "raw_items.source_title": ["news_items.source_title", "ai_journal.source_title"],
-    "raw_items.raw_content": ["news_items.content", "ai_journal.content"],
-    "raw_items.published_at": ["news_items.created_at", "generated_news.created_at", "ai_journal.created_at", "ai_journal_analysis.created_at"],
+    "raw_items.source_title": ["news_items.source_title", "cleaned ai_journal.source_title"],
+    "raw_items.raw_content": ["news_items.content", "cleaned ai_journal.content"],
+    "raw_items.published_at": ["news_items.published_at", "ai_journal.created_at", "ai_journal_analysis.created_at"],
     "news_items.focus_id": ["ai_journal_focus.focus_id"],
     "daily_report_items.adoption_status": ["t_news_data_info.adoption_status"],
     "generated_news.category": ["ai_journal_analysis.category", "t_news_data_info.category"],
-    "generated_news.title": ["ai_journal_analysis.title", "t_news_data_info.title"],
-    "generated_news.summary": ["ai_journal_analysis.summary", "t_news_data_info.summary"],
-    "generated_news.key_points": ["ai_journal_analysis.key_points", "t_news_data_info.key_points"],
-    "generated_news.content_json": ["ai_journal_analysis.content_json", "t_news_data_info.content_json"]
+    "daily_report_items.editor_title || generated_news.title": ["ai_journal_analysis.title", "t_news_data_info.title"],
+    "daily_report_items.editor_summary || generated_news.summary": ["ai_journal_analysis.summary", "t_news_data_info.summary"],
+    "daily_report_items.editor_key_points || generated_news.key_points": ["ai_journal_analysis.key_points", "t_news_data_info.key_points"],
+    "daily_report_items.editor_content_json merged with generated_news.content_json": ["ai_journal_analysis.content_json", "t_news_data_info.content_json"]
   },
   "company_sql_templates": {
     "ai_journal": "INSERT IGNORE INTO ai_journal (source_url, source_title, content, created_at) VALUES (:source_url, :source_title, :raw_content, :created_at);",
@@ -138,6 +167,7 @@
     "source_url is required and should be checked against the company ai_journal.source_url max length before export.",
     "title, summary, key_points, and content_json are required for ai_journal_analysis and t_news_data_info.",
     "content_json must contain background/effects/eventSummary/technologyAndInnovation/valueAndImpact.",
+    "ai_journal.source_title and ai_journal.content must be plain text in exported SQL; raw_items.raw_payload_json and raw_items.raw_content preserve the original unmodified payload for lineage.",
     "created_at should preserve original published time; do not redistribute dates.",
     "standard daily export writes adoption_status = 2. Non-daily candidates are not exported by default."
   ]

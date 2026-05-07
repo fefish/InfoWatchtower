@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select
@@ -12,7 +13,11 @@ from app.models.content import GeneratedNews, RawItem, RecommendationItem, Recom
 from app.models.reports import DailyReport, DailyReportItem
 from app.models.workspace import Workspace, WorkspaceSourceLink
 from app.normalization.news import NewsNormalizationRequest, normalize_workspace_raw_items
-from app.recommendations.service import RecommendationRunRequest, run_daily_recommendation
+from app.recommendations.service import (
+    RecommendationRunRequest,
+    _key_points,
+    run_daily_recommendation,
+)
 from tests.test_news_normalization import add_raw_item, seed_source, seed_workspace
 
 
@@ -67,6 +72,16 @@ def test_recommendation_run_creates_scores_generated_news_and_daily_draft():
     assert session.scalar(select(func.count(RecommendationItem.id))) == 2
     assert session.scalar(select(func.count(GeneratedNews.id))) == 2
     assert session.scalar(select(func.count(DailyReportItem.id))) == 2
+    generated = session.scalars(select(GeneratedNews)).all()
+    required_content_fields = {
+        "background",
+        "effects",
+        "eventSummary",
+        "technologyAndInnovation",
+        "valueAndImpact",
+        "source",
+    }
+    assert all(required_content_fields.issubset(item.content_json) for item in generated)
 
     report = session.scalar(select(DailyReport))
     assert report is not None
@@ -78,6 +93,88 @@ def test_recommendation_run_creates_scores_generated_news_and_daily_draft():
         report.items[0].generated_news.news_item.raw_item.raw_payload_json["author"]
         == "Example Team"
     )
+
+
+def test_technical_recommendation_prefers_research_over_commercial_ai_news():
+    session = make_session()
+    workspace = seed_workspace(session)
+    paper_source = seed_source(
+        session,
+        workspace,
+        source_type="paper_rss",
+        name="Apple Machine Learning Research",
+    )
+    commercial_source = seed_source(
+        session,
+        workspace,
+        source_type="rss",
+        name="Mobile World Live",
+    )
+    add_raw_item(
+        session,
+        paper_source,
+        "paper:technical",
+        "Research paper introduces an inference benchmark for agent memory",
+        "https://machinelearning.apple.com/research/agent-memory-benchmark",
+        (
+            "This research paper studies LLM agent memory architecture, inference latency, "
+            "benchmark evaluation, retrieval quality, and deployment tradeoffs for AI "
+            "engineering teams."
+        ),
+    )
+    add_raw_item(
+        session,
+        commercial_source,
+        "rss:commercial",
+        "AI startup raises funding as revenue growth accelerates",
+        "https://example.com/ai-startup-funding",
+        (
+            "The company announced a funding round, valuation growth, sales momentum, "
+            "commercial partnerships, and revenue expansion for its AI product business."
+        ),
+    )
+    normalize_workspace_raw_items(
+        session,
+        NewsNormalizationRequest(workspace_code="planning_intel", source_types=[], limit=None),
+    )
+
+    result = run_daily_recommendation(
+        session,
+        RecommendationRunRequest(
+            workspace_code="planning_intel",
+            day_key="2026-05-05",
+            limit=1,
+            source_daily_limit=2,
+            create_daily_draft=True,
+        ),
+        now=datetime(2026, 5, 5, 10, tzinfo=UTC),
+    )
+    session.commit()
+
+    selected_item = session.scalar(
+        select(RecommendationItem).where(RecommendationItem.selected.is_(True)),
+    )
+    assert result.selected_total == 1
+    assert selected_item is not None
+    assert selected_item.news_item.source_type == "paper_rss"
+    assert "benchmark" in selected_item.news_item.source_title.lower()
+
+
+def test_rule_generated_key_points_use_content_keywords_not_source_metadata():
+    keywords = _key_points(
+        SimpleNamespace(
+            source_title="Apple发布STARFlow-V：基于归一化流的端到端视频生成模型",
+            summary="STARFlow-V 是 Apple 机器学习团队发布的视频生成研究。",
+            content="该模型讨论归一化流、扩散模型、原生似然估计和因果预测。",
+        ),
+        "模型",
+    )
+
+    assert "STARFlow-V" in keywords
+    assert "归一化流" in keywords
+    assert "视频生成" in keywords
+    assert "rss" not in keywords
+    assert "canonical_url" not in keywords
 
 
 def test_source_daily_limit_selects_at_most_configured_items_per_source():

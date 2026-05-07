@@ -12,6 +12,7 @@ from app.core.database import get_db_session
 from app.models.identity import User
 from app.models.workspace import Workspace, WorkspaceSection
 from app.schemas.workspaces import (
+    DEFAULT_REQUIRED_CONTENT_FIELDS,
     WorkspaceLabelPolicyRead,
     WorkspaceLabelPolicyUpdate,
     WorkspaceRead,
@@ -33,7 +34,10 @@ def list_workspaces(
     ).all()
     workspaces = sorted(
         workspaces,
-        key=lambda workspace: ((workspace.config_json or {}).get("sort_order", 1000), workspace.code),
+        key=lambda workspace: (
+            (workspace.config_json or {}).get("sort_order", 1000),
+            workspace.code,
+        ),
     )
     return [_workspace_to_read(workspace) for workspace in workspaces]
 
@@ -85,7 +89,22 @@ def update_workspace_label_policy(
     allowed_categories = _normalize_policy_categories(payload.allowed_primary_categories)
     if not allowed_categories:
         allowed_categories = _taxonomy_categories()
-    secondary_labels = _normalize_secondary_labels(payload.secondary_labels_by_primary, allowed_categories)
+    secondary_labels = _normalize_secondary_labels(
+        payload.secondary_labels_by_primary,
+        allowed_categories,
+    )
+    required_content_fields = _normalize_required_content_fields(payload.required_content_fields)
+    if payload.news_format_code == "company_sql_v1":
+        missing_fields = [
+            field
+            for field in DEFAULT_REQUIRED_CONTENT_FIELDS
+            if field not in required_content_fields
+        ]
+        if missing_fields:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="company_sql_v1 required_content_fields cannot remove SQL fields",
+            )
     if payload.default_category not in allowed_categories:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -100,6 +119,8 @@ def update_workspace_label_policy(
     config = dict(workspace.config_json or {})
     config["label_policy"] = {
         "label_set_code": payload.label_set_code,
+        "news_format_code": payload.news_format_code,
+        "required_content_fields": required_content_fields,
         "allowed_primary_categories": allowed_categories,
         "secondary_labels_by_primary": secondary_labels,
         "default_category": payload.default_category,
@@ -161,7 +182,10 @@ def _normalize_policy_categories(categories: list[str]) -> list[str]:
     return normalized
 
 
-def _normalize_secondary_labels(labels_by_primary: dict[str, list[str]], allowed_categories: list[str]) -> dict[str, list[str]]:
+def _normalize_secondary_labels(
+    labels_by_primary: dict[str, list[str]],
+    allowed_categories: list[str],
+) -> dict[str, list[str]]:
     normalized: dict[str, list[str]] = {}
     allowed = set(allowed_categories)
     for primary, labels in labels_by_primary.items():
@@ -176,6 +200,15 @@ def _normalize_secondary_labels(labels_by_primary: dict[str, list[str]], allowed
         if clean_labels:
             normalized[primary_value] = clean_labels
     return normalized
+
+
+def _normalize_required_content_fields(fields: list[str]) -> list[str]:
+    normalized: list[str] = []
+    for field in fields:
+        value = field.strip()
+        if value and value not in normalized:
+            normalized.append(value)
+    return normalized or list(DEFAULT_REQUIRED_CONTENT_FIELDS)
 
 
 def _workspace_label_policy_to_read(workspace: Workspace) -> WorkspaceLabelPolicyRead:
@@ -196,9 +229,15 @@ def _workspace_label_policy_to_read(workspace: Workspace) -> WorkspaceLabelPolic
     return WorkspaceLabelPolicyRead(
         workspace_code=workspace.code,
         label_set_code=str(policy.get("label_set_code") or "ai_sql_categories"),
+        news_format_code=str(policy.get("news_format_code") or "company_sql_v1"),
+        required_content_fields=_normalize_required_content_fields(
+            list(policy.get("required_content_fields") or DEFAULT_REQUIRED_CONTENT_FIELDS),
+        ),
         allowed_primary_categories=allowed_categories,
         secondary_labels_by_primary=secondary_labels,
         default_category=default_category,
         fallback_category=fallback_category,
-        tagging_stages=list(policy.get("tagging_stages") or ["news_generation", "post_dedupe_labeling"]),
+        tagging_stages=list(
+            policy.get("tagging_stages") or ["news_generation", "post_dedupe_labeling"],
+        ),
     )

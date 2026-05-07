@@ -11,7 +11,8 @@ import {
   Save,
   Send,
   Sparkles,
-  Star
+  Star,
+  X
 } from "lucide-vue-next";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 
@@ -37,6 +38,7 @@ const generating = ref(false);
 const publishingId = ref("");
 const selectedReportId = ref("");
 const selectedItemId = ref("");
+const detailOpen = ref(false);
 const editingItemId = ref("");
 const savingItemId = ref("");
 const actingItemId = ref("");
@@ -46,11 +48,62 @@ const message = ref("");
 const targetDayKey = ref(todayKey());
 const commentsByItem = ref<Record<string, CommentRecord[]>>({});
 const commentDrafts = ref<Record<string, string>>({});
+const contentFieldLabels = [
+  ["background", "背景"],
+  ["effects", "效果总结"],
+  ["eventSummary", "事件总结"],
+  ["technologyAndInnovation", "技术和创新点总结"],
+  ["valueAndImpact", "价值和影响"]
+] as const;
+const keywordNoiseMarkers = [
+  "采用",
+  "作为",
+  "支持",
+  "提升",
+  "具备",
+  "适用于",
+  "通过",
+  "实现",
+  "提供",
+  "能够",
+  "旨在",
+  "面向",
+  "解决"
+];
+const keywordHints = [
+  "AI Infra",
+  "AI 应用",
+  "测评技术",
+  "大厂动态",
+  "模型",
+  "算法",
+  "推理加速",
+  "训练技术",
+  "智能体",
+  "基础竞争力",
+  "工具新功能",
+  "工具新案例",
+  "工具新技术",
+  "视频生成",
+  "端到端",
+  "归一化流",
+  "扩散模型",
+  "原生似然估计",
+  "因果预测",
+  "多模态",
+  "模型评估",
+  "基准测试",
+  "Cursor",
+  "Claude Code",
+  "OpenCode",
+  "Codex"
+];
 
 const editorDraft = reactive({
   title: "",
   summary: "",
   keyPoints: "",
+  contentJson: {} as Record<string, string>,
   notes: "",
   adoptionStatus: 2
 });
@@ -62,8 +115,10 @@ const selectedReport = computed(() => {
 const reportItems = computed(() => selectedReport.value?.items ?? []);
 
 const selectedItem = computed(() => {
-  return reportItems.value.find((item) => item.id === selectedItemId.value) ?? reportItems.value[0] ?? null;
+  return reportItems.value.find((item) => item.id === selectedItemId.value) ?? null;
 });
+
+const detailItem = computed(() => (detailOpen.value ? selectedItem.value : null));
 
 const adoptedCount = computed(() => reportItems.value.filter((item) => item.adoption_status === 2).length);
 const averageRating = computed(() => {
@@ -144,21 +199,32 @@ function ensureSelectedItem() {
   const report = selectedReport.value;
   if (!report) {
     selectedItemId.value = "";
+    detailOpen.value = false;
     return;
   }
   if (!report.items.some((item) => item.id === selectedItemId.value)) {
-    selectedItemId.value = report.items[0]?.id ?? "";
+    selectedItemId.value = "";
+    detailOpen.value = false;
+    editingItemId.value = "";
   }
 }
 
 function selectReport(report: DailyReportRecord) {
   selectedReportId.value = report.id;
-  selectedItemId.value = report.items[0]?.id ?? "";
+  selectedItemId.value = "";
+  detailOpen.value = false;
   editingItemId.value = "";
 }
 
 function selectItem(item: DailyReportItemRecord) {
   selectedItemId.value = item.id;
+  detailOpen.value = true;
+  editingItemId.value = "";
+}
+
+function closeItemDetail() {
+  detailOpen.value = false;
+  editingItemId.value = "";
 }
 
 function displayTitle(item: DailyReportItemRecord) {
@@ -171,6 +237,62 @@ function displaySummary(item: DailyReportItemRecord) {
 
 function displayKeyPoints(item: DailyReportItemRecord) {
   return item.editor_key_points || item.generated_news.key_points;
+}
+
+function displayKeywordList(item: DailyReportItemRecord) {
+  const raw = displayKeyPoints(item);
+  const keywords = raw
+    .split(/[，,；;、。.!?\n]/)
+    .map((part) => part.trim())
+    .filter((keyword) => isDisplayKeyword(keyword) && keyword !== item.generated_news.category)
+    .slice(0, 8);
+  if (keywords.length >= 2) {
+    return keywords;
+  }
+  return deriveKeywordList(item);
+}
+
+function isDisplayKeyword(keyword: string) {
+  if (!keyword || keyword.length > 32) {
+    return false;
+  }
+  if (keyword.length >= 7 && keywordNoiseMarkers.some((marker) => keyword.includes(marker))) {
+    return false;
+  }
+  return true;
+}
+
+function deriveKeywordList(item: DailyReportItemRecord) {
+  const text = [displayTitle(item), displaySummary(item), detailContentText(item)].join(" ");
+  const candidates = [
+    ...Array.from(text.matchAll(/\b[A-Z][A-Za-z0-9][A-Za-z0-9+._:-]{1,}\b/g)).map((match) => match[0]),
+    ...keywordHints.filter((hint) => text.toLowerCase().includes(hint.toLowerCase()))
+  ];
+  const seen = new Set<string>();
+  return candidates
+    .map((keyword) => keyword.trim())
+    .filter((keyword) => {
+      const key = keyword.toLowerCase();
+      if (!isDisplayKeyword(keyword) || keyword === item.generated_news.category || seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 8);
+}
+
+function detailContentText(item: DailyReportItemRecord) {
+  return contentFieldLabels.map(([key]) => contentField(item, key)).join(" ");
+}
+
+function normalizeKeyPointString(value: string) {
+  return value
+    .split(/[，,；;、。.!?\n]/)
+    .map((part) => part.trim())
+    .filter(isDisplayKeyword)
+    .slice(0, 8)
+    .join(", ");
 }
 
 function contentField(item: DailyReportItemRecord, key: string) {
@@ -215,7 +337,14 @@ function beginEdit(item: DailyReportItemRecord) {
   editingItemId.value = item.id;
   editorDraft.title = displayTitle(item);
   editorDraft.summary = displaySummary(item);
-  editorDraft.keyPoints = displayKeyPoints(item);
+  editorDraft.keyPoints = displayKeywordList(item).join(", ");
+  const content = item.editor_content_json || item.generated_news.content_json || {};
+  editorDraft.contentJson = Object.fromEntries(
+    contentFieldLabels.map(([key]) => {
+      const value = content[key];
+      return [key, typeof value === "string" ? value : ""];
+    })
+  );
   editorDraft.notes = item.editor_notes;
   editorDraft.adoptionStatus = item.adoption_status;
 }
@@ -233,7 +362,12 @@ async function saveEdit(item: DailyReportItemRecord) {
       adoption_status: editorDraft.adoptionStatus,
       editor_title: editorDraft.title,
       editor_summary: editorDraft.summary,
-      editor_key_points: editorDraft.keyPoints,
+      editor_key_points: normalizeKeyPointString(editorDraft.keyPoints) || displayKeywordList(item).join(", "),
+      editor_content_json: {
+        ...item.generated_news.content_json,
+        ...(item.editor_content_json ?? {}),
+        ...editorDraft.contentJson
+      },
       editor_notes: editorDraft.notes
     });
     replaceItem(updated);
@@ -335,7 +469,7 @@ function replaceItem(updated: DailyReportItemRecord) {
 
 watch(selectedReport, ensureSelectedItem);
 
-watch(selectedItem, (item) => {
+watch(detailItem, (item) => {
   if (item && commentsByItem.value[item.id] === undefined) {
     void loadComments(item);
   }
@@ -346,6 +480,7 @@ watch(
   () => {
     selectedReportId.value = "";
     selectedItemId.value = "";
+    detailOpen.value = false;
     editingItemId.value = "";
     void loadReports();
   }
@@ -426,192 +561,253 @@ onMounted(loadReports);
           v-for="(item, index) in reportItems"
           :key="item.id"
           class="daily-item story"
-          :class="{ active: selectedItem?.id === item.id }"
+          :class="{ active: detailItem?.id === item.id }"
           @click="selectItem(item)"
         >
           <div class="story-index">{{ String(index + 1).padStart(2, "0") }}</div>
           <div class="story-body">
             <div class="daily-item-meta">
-              <span>{{ item.generated_news.category }}</span>
-              <span>{{ adoptionLabel(item.adoption_status) }}</span>
+              <span class="category-chip">{{ item.generated_news.category }}</span>
+              <span class="state-chip">{{ adoptionLabel(item.adoption_status) }}</span>
               <span>{{ item.reaction_count }} 赞</span>
               <span>{{ item.comment_count }} 评论</span>
             </div>
             <h4>{{ displayTitle(item) }}</h4>
             <p>{{ displaySummary(item) }}</p>
-            <div class="story-content-grid">
-              <p v-if="contentField(item, 'technologyAndInnovation')">
-                {{ contentField(item, "technologyAndInnovation") }}
-              </p>
-              <p v-if="contentField(item, 'valueAndImpact')">
-                {{ contentField(item, "valueAndImpact") }}
-              </p>
+            <div class="story-footer">
+              <a
+                v-if="item.generated_news.source_url"
+                :href="item.generated_news.source_url"
+                target="_blank"
+                @click.stop
+              >
+                <ExternalLink :size="14" />
+                <span>{{ item.generated_news.source_url }}</span>
+              </a>
+              <span>点击查看详情并处理</span>
             </div>
-            <a v-if="item.generated_news.source_url" :href="item.generated_news.source_url" target="_blank">
-              <ExternalLink :size="14" />
-              <span>{{ item.generated_news.source_url }}</span>
-            </a>
           </div>
         </article>
       </div>
     </article>
-
-    <aside v-if="selectedItem" class="report-editor-panel">
-      <div class="editor-panel-section">
-        <p class="eyebrow">当前条目</p>
-        <h3>{{ displayTitle(selectedItem) }}</h3>
-        <div class="editor-actions">
-          <button
-            type="button"
-            class="mini-action"
-            :class="{ active: selectedItem.adoption_status === 2 }"
-            :disabled="actingItemId === selectedItem.id"
-            @click="setAdoption(selectedItem, 2)"
-          >
-            <CheckCircle2 :size="15" />
-            <span>采信</span>
-          </button>
-          <button
-            type="button"
-            class="mini-action"
-            :class="{ active: selectedItem.adoption_status === 1 }"
-            :disabled="actingItemId === selectedItem.id"
-            @click="setAdoption(selectedItem, 1)"
-          >
-            <FileText :size="15" />
-            <span>备选</span>
-          </button>
-          <button
-            type="button"
-            class="mini-action"
-            :class="{ active: selectedItem.adoption_status === 0 }"
-            :disabled="actingItemId === selectedItem.id"
-            @click="setAdoption(selectedItem, 0)"
-          >
-            <CircleSlash2 :size="15" />
-            <span>剔除</span>
-          </button>
-        </div>
-      </div>
-
-      <div class="editor-panel-section">
-        <div class="section-title-row">
-          <p class="eyebrow">编辑</p>
-          <button
-            v-if="editingItemId !== selectedItem.id"
-            type="button"
-            class="mini-action"
-            @click="beginEdit(selectedItem)"
-          >
-            <Pencil :size="15" />
-            <span>编辑</span>
-          </button>
-        </div>
-        <div v-if="editingItemId === selectedItem.id" class="editor-form">
-          <label>
-            标题
-            <input v-model="editorDraft.title" />
-          </label>
-          <label>
-            摘要
-            <textarea v-model="editorDraft.summary" rows="5" />
-          </label>
-          <label>
-            要点
-            <textarea v-model="editorDraft.keyPoints" rows="3" />
-          </label>
-          <label>
-            编辑备注
-            <textarea v-model="editorDraft.notes" rows="3" />
-          </label>
-          <div class="editor-actions">
-            <button
-              type="button"
-              class="mini-action active"
-              :disabled="savingItemId === selectedItem.id"
-              @click="saveEdit(selectedItem)"
-            >
-              <Save :size="15" />
-              <span>{{ savingItemId === selectedItem.id ? "保存中" : "保存" }}</span>
-            </button>
-            <button type="button" class="mini-action" @click="cancelEdit">取消</button>
-          </div>
-        </div>
-        <div v-else class="editor-readonly">
-          <p>{{ displaySummary(selectedItem) }}</p>
-          <small>{{ displayKeyPoints(selectedItem) }}</small>
-        </div>
-      </div>
-
-      <div class="editor-panel-section">
-        <p class="eyebrow">反馈</p>
-        <div class="feedback-row">
-          <button
-            type="button"
-            class="mini-action"
-            :disabled="actingItemId === selectedItem.id"
-            @click="likeItem(selectedItem)"
-          >
-            <Heart :size="15" />
-            <span>{{ selectedItem.reaction_count }}</span>
-          </button>
-          <button
-            v-for="score in 5"
-            :key="score"
-            type="button"
-            class="star-button"
-            :disabled="actingItemId === selectedItem.id"
-            @click="rateItem(selectedItem, score)"
-          >
-            <Star :size="15" :fill="score <= Math.round(selectedItem.rating_avg) ? 'currentColor' : 'none'" />
-          </button>
-        </div>
-        <div class="comment-box">
-          <textarea
-            v-model="commentDrafts[selectedItem.id]"
-            rows="3"
-            placeholder="写一条评论或判断依据"
-          />
-          <button
-            type="button"
-            class="mini-action active"
-            :disabled="actingItemId === selectedItem.id"
-            @click="submitComment(selectedItem)"
-          >
-            <Send :size="15" />
-            <span>发送</span>
-          </button>
-        </div>
-        <div class="comment-list">
-          <p v-if="loadingCommentsId === selectedItem.id" class="muted-line">评论加载中</p>
-          <article v-for="comment in commentsByItem[selectedItem.id] || []" :key="comment.id">
-            <MessageCircle :size="14" />
-            <p>{{ comment.body }}</p>
-          </article>
-        </div>
-      </div>
-
-      <div class="editor-panel-section">
-        <p class="eyebrow">追溯</p>
-        <dl class="lineage-list">
-          <div>
-            <dt>news</dt>
-            <dd>{{ sourceLineage(selectedItem, "news_item_id") || selectedItem.generated_news.news_item_id }}</dd>
-          </div>
-          <div>
-            <dt>raw</dt>
-            <dd>{{ sourceLineage(selectedItem, "raw_item_id") || "未返回" }}</dd>
-          </div>
-          <div>
-            <dt>source</dt>
-            <dd>{{ sourceLineage(selectedItem, "data_source_id") || "未返回" }}</dd>
-          </div>
-        </dl>
-      </div>
-    </aside>
   </section>
 
-  <section v-else class="placeholder-panel">
+  <Teleport to="body">
+    <div v-if="detailItem" class="report-modal-backdrop" @click.self="closeItemDetail">
+      <section class="report-detail-modal" role="dialog" aria-modal="true">
+        <header class="report-modal-header">
+          <div>
+            <div class="headline-chip-row">
+              <span class="category-chip large">{{ detailItem.generated_news.category }}</span>
+              <span class="state-chip">{{ adoptionLabel(detailItem.adoption_status) }}</span>
+            </div>
+            <h3>{{ displayTitle(detailItem) }}</h3>
+          </div>
+          <button type="button" class="panel-close" aria-label="关闭详情" @click="closeItemDetail">
+            <X :size="18" />
+          </button>
+        </header>
+
+        <div class="report-modal-body">
+          <article class="modal-story-detail">
+            <p class="modal-summary">{{ displaySummary(detailItem) }}</p>
+            <div class="modal-keyword-row">
+              <div class="keyword-list" aria-label="关键词">
+                <span
+                  v-for="keyword in displayKeywordList(detailItem)"
+                  :key="keyword"
+                  class="keyword-chip key-chip"
+                >
+                  {{ keyword }}
+                </span>
+              </div>
+              <div class="daily-item-meta">
+                <span>{{ detailItem.reaction_count }} 赞</span>
+                <span>{{ detailItem.comment_count }} 评论</span>
+              </div>
+            </div>
+            <section v-for="[fieldKey, fieldLabel] in contentFieldLabels" :key="fieldKey" v-show="contentField(detailItem, fieldKey)">
+              <h4>{{ fieldLabel }}</h4>
+              <p>{{ contentField(detailItem, fieldKey) }}</p>
+            </section>
+            <a v-if="detailItem.generated_news.source_url" :href="detailItem.generated_news.source_url" target="_blank">
+              <ExternalLink :size="14" />
+              <span>{{ detailItem.generated_news.source_url }}</span>
+            </a>
+          </article>
+
+          <aside class="modal-editor-panel">
+            <div class="editor-panel-section">
+              <p class="eyebrow">当前处理</p>
+              <div class="editor-actions">
+                <button
+                  type="button"
+                  class="mini-action"
+                  :class="{ active: detailItem.adoption_status === 2 }"
+                  :disabled="actingItemId === detailItem.id"
+                  @click="setAdoption(detailItem, 2)"
+                >
+                  <CheckCircle2 :size="15" />
+                  <span>采信</span>
+                </button>
+                <button
+                  type="button"
+                  class="mini-action"
+                  :class="{ active: detailItem.adoption_status === 1 }"
+                  :disabled="actingItemId === detailItem.id"
+                  @click="setAdoption(detailItem, 1)"
+                >
+                  <FileText :size="15" />
+                  <span>备选</span>
+                </button>
+                <button
+                  type="button"
+                  class="mini-action"
+                  :class="{ active: detailItem.adoption_status === 0 }"
+                  :disabled="actingItemId === detailItem.id"
+                  @click="setAdoption(detailItem, 0)"
+                >
+                  <CircleSlash2 :size="15" />
+                  <span>剔除</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="editor-panel-section">
+              <div class="section-title-row">
+                <p class="eyebrow">编辑</p>
+                <button
+                  v-if="editingItemId !== detailItem.id"
+                  type="button"
+                  class="mini-action"
+                  @click="beginEdit(detailItem)"
+                >
+                  <Pencil :size="15" />
+                  <span>编辑</span>
+                </button>
+              </div>
+              <div v-if="editingItemId === detailItem.id" class="editor-form">
+                <label>
+                  标题
+                  <input v-model="editorDraft.title" />
+                </label>
+                <label>
+                  摘要 / 一句话概括
+                  <textarea v-model="editorDraft.summary" rows="5" />
+                </label>
+                <label>
+                  关键词（逗号或分号分隔，避免整句）
+                  <textarea v-model="editorDraft.keyPoints" rows="3" />
+                </label>
+                <div class="editor-content-fields">
+                  <label v-for="[fieldKey, fieldLabel] in contentFieldLabels" :key="fieldKey">
+                    {{ fieldLabel }}
+                    <textarea v-model="editorDraft.contentJson[fieldKey]" rows="4" />
+                  </label>
+                </div>
+                <label>
+                  编辑备注
+                  <textarea v-model="editorDraft.notes" rows="3" />
+                </label>
+                <div class="editor-actions">
+                  <button
+                    type="button"
+                    class="mini-action active"
+                    :disabled="savingItemId === detailItem.id"
+                    @click="saveEdit(detailItem)"
+                  >
+                    <Save :size="15" />
+                    <span>{{ savingItemId === detailItem.id ? "保存中" : "保存" }}</span>
+                  </button>
+                  <button type="button" class="mini-action" @click="cancelEdit">取消</button>
+                </div>
+              </div>
+              <div v-else class="editor-readonly">
+                <p>{{ displaySummary(detailItem) }}</p>
+                <div class="keyword-list compact" aria-label="关键词">
+                  <span
+                    v-for="keyword in displayKeywordList(detailItem)"
+                    :key="keyword"
+                    class="keyword-chip key-chip"
+                  >
+                    {{ keyword }}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div class="editor-panel-section">
+              <p class="eyebrow">反馈</p>
+              <div class="feedback-row">
+                <button
+                  type="button"
+                  class="mini-action"
+                  :disabled="actingItemId === detailItem.id"
+                  @click="likeItem(detailItem)"
+                >
+                  <Heart :size="15" />
+                  <span>{{ detailItem.reaction_count }}</span>
+                </button>
+                <button
+                  v-for="score in 5"
+                  :key="score"
+                  type="button"
+                  class="star-button"
+                  :disabled="actingItemId === detailItem.id"
+                  @click="rateItem(detailItem, score)"
+                >
+                  <Star :size="15" :fill="score <= Math.round(detailItem.rating_avg) ? 'currentColor' : 'none'" />
+                </button>
+              </div>
+              <div class="comment-box">
+                <textarea
+                  v-model="commentDrafts[detailItem.id]"
+                  rows="3"
+                  placeholder="写一条评论或判断依据"
+                />
+                <button
+                  type="button"
+                  class="mini-action active"
+                  :disabled="actingItemId === detailItem.id"
+                  @click="submitComment(detailItem)"
+                >
+                  <Send :size="15" />
+                  <span>发送</span>
+                </button>
+              </div>
+              <div class="comment-list">
+                <p v-if="loadingCommentsId === detailItem.id" class="muted-line">评论加载中</p>
+                <article v-for="comment in commentsByItem[detailItem.id] || []" :key="comment.id">
+                  <MessageCircle :size="14" />
+                  <p>{{ comment.body }}</p>
+                </article>
+              </div>
+            </div>
+
+            <div class="editor-panel-section">
+              <p class="eyebrow">追溯</p>
+              <dl class="lineage-list">
+                <div>
+                  <dt>news</dt>
+                  <dd>{{ sourceLineage(detailItem, "news_item_id") || detailItem.generated_news.news_item_id }}</dd>
+                </div>
+                <div>
+                  <dt>raw</dt>
+                  <dd>{{ sourceLineage(detailItem, "raw_item_id") || "未返回" }}</dd>
+                </div>
+                <div>
+                  <dt>source</dt>
+                  <dd>{{ sourceLineage(detailItem, "data_source_id") || "未返回" }}</dd>
+                </div>
+              </dl>
+            </div>
+          </aside>
+        </div>
+      </section>
+    </div>
+  </Teleport>
+
+  <section v-if="!selectedReport" class="placeholder-panel">
     <div>
       <p class="eyebrow">日报草稿</p>
       <h2>{{ loading ? "正在加载" : "还没有日报" }}</h2>

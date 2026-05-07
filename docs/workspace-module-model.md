@@ -138,10 +138,13 @@ config/taxonomy/news_categories.json
 - 每个工作台启用哪些共享数据源。
 - 每个工作台的统一一级标签列表。
 - 每个一级标签下有哪些二级标签。
+- 每个工作台的新闻生成格式 `news_format_code` 和必填内容字段。
 - 默认标签、兜底标签和模型打标阶段。
 - 每个共享源在当前工作台的启用状态、权重、日限和抓取相关配置。
 
 第一版不要在单个数据源上维护标签映射。一个源可能同时覆盖多个关注方向，标签应在 raw 到 news 结构化和去重后标签定稿阶段，基于新闻内容和工作台统一标签策略生成。
+
+`planning_intel` 第一版使用 `company_sql_v1` 新闻结构，必须保留 `background/effects/eventSummary/technologyAndInnovation/valueAndImpact` 五个内容字段，后续 SQL 导出才可以从 `generated_news.content_json` 稳定映射到公司内网表。AI 工具桌面可以使用独立 `tool_intel_v1`，但仍复用相同主链路。
 
 后续硬件、半导体、政策等板块可以增加新的 label set；但仍通过 `label_sets/labels/content_labels` 扩展，不新建一套工具目录表。
 

@@ -2,7 +2,7 @@
 
 规划部全自动热点追踪与情报生产系统。
 
-当前状态：阶段 0-5 已完成可回填闭环。阶段 3 已完成旧种子源导入、共享数据源池、默认工作台源链接、工作台统一标签策略、adapter 框架、RSS/paper RSS/页面源抓取到 `raw_items`、工作台级 ingestion run API，以及 Redis/RQ worker + scheduler 调度入口。阶段 4 已完成 `raw_items -> news_items -> dedupe_groups`：可按工作台标准化 raw、生成 canonical URL 与 dedupe key、执行工作台隔离硬去重，并查询 winner/loser。阶段 5 已完成按 `day_key` 的推荐 run、可解释推荐分、可选 MiniMax 结构化生成、`generated_news`、日报草稿、发布、日报条目编辑和点赞/评分/评论最小 API；前端 `/daily-reports` 已可按日期触发完整流水线，并支持日报正文展示、采信切换、编辑、点赞、评分、评论和追溯查看。scheduler 开启后默认执行每日完整流水线：抓取、标准化/去重、推荐和日报草稿。`planning_intel` 与 `ai_tools` 的标签策略已在后端隔离。下一步进入候选池页面和阶段 6 公司 SQL 导出。
+当前状态：阶段 0-6 已完成可回填闭环。阶段 3 已完成旧种子源导入、共享数据源池、默认工作台源链接、工作台统一标签策略、adapter 框架、RSS/paper RSS/页面源抓取到 `raw_items`、工作台级 ingestion run API，以及 Redis/RQ worker + scheduler 调度入口。阶段 4 已完成 `raw_items -> news_items -> dedupe_groups`：可按工作台标准化 raw、生成 canonical URL 与 dedupe key、执行工作台隔离硬去重，并查询 winner/loser。阶段 5 已完成按 `day_key` 的推荐 run、可解释推荐分、可选 MiniMax 结构化生成、`generated_news`、日报草稿、发布、日报条目编辑和点赞/评分/评论最小 API；`planning_intel` 推荐默认技术情报优先，提升论文、研究机构、AI 软件、AI 基础设施、模型工程、推理/训练、RAG、多智能体和 Agent 工程信号，降权泛商业新闻。阶段 6 已完成已发布日报的公司 SQL 标准导出，导出只取 `adoption_status = 2` 的采信项，`content_json` 只保留旧系统五段字段，`ai_journal.source_title/content` 导出前会清洗为纯文本。前端 `/daily-reports` 已可按日期触发完整流水线，并支持日报正文展示、采信切换、编辑、点赞、评分、评论和追溯查看。scheduler 开启后默认执行每日完整流水线：抓取、标准化/去重、推荐和日报草稿。`planning_intel` 与 `ai_tools` 的标签策略已在后端隔离。下一步进入候选池页面、SQL 导出前端页和公网/内网同步骨架。
 
 ## 接手入口
 

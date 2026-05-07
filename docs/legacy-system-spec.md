@@ -100,10 +100,10 @@ CREATE TABLE candidates (
 
 - `category`：必须属于一级标签列表。
 - `content.background`：背景，旧 prompt 要求不少于 120 字。
-- `content.effects`：影响，旧 prompt 要求不少于 150 字。
-- `content.eventSummary`：事件概述，旧 prompt 要求不少于 120 字。
-- `content.technologyAndInnovation`：技术与创新，旧 prompt 要求不少于 220 字。
-- `content.valueAndImpact`：价值与影响，旧 prompt 要求不少于 180 字。
+- `content.effects`：效果总结，旧 prompt 要求不少于 150 字。
+- `content.eventSummary`：事件总结，旧 prompt 要求不少于 120 字。
+- `content.technologyAndInnovation`：技术和创新点总结，旧 prompt 要求不少于 220 字。
+- `content.valueAndImpact`：价值和影响，旧 prompt 要求不少于 180 字。
 - `keyPoints`：4-6 个核心关键词，逗号分隔。
 - `sourceUrl`：必须回填真实 `source_url`。
 - `summary`：2-3 句话核心洞察。

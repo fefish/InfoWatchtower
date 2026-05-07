@@ -22,10 +22,120 @@ from app.models.content import (
 from app.models.feedback import Comment, Rating, Reaction
 from app.models.reports import DailyReport, DailyReportItem
 from app.models.workspace import Workspace, WorkspaceSourceLink
+from app.news_keywords import fallback_key_points
 
 BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 DEFAULT_RECOMMENDATION_LIMIT = 15
 DEFAULT_SOURCE_DAILY_LIMIT = 2
+SQL_EFFECTS_FALLBACK = (
+    "该信号可能影响规划部对技术路线、产品节奏、竞争态势或内部需求转化的"
+    "后续判断，需要结合业务场景继续观察。"
+)
+TECHNICAL_SOURCE_HINTS = (
+    "machine learning",
+    "ml blog",
+    "research",
+    "science",
+    "aws ml",
+    "google research",
+    "deepmind",
+    "microsoft research",
+    "ibm research",
+    "apple machine learning",
+    "langchain",
+    "llamaindex",
+    "anthropic",
+    "openai",
+    "qwen",
+    "kimi",
+    "智东西",
+)
+COMMERCIAL_SOURCE_HINTS = (
+    "mobile world live",
+    "telecoms",
+    "light reading",
+    "venturebeat",
+    "businesswire",
+    "pr newswire",
+)
+TECHNICAL_TEXT_HINTS = (
+    "agent",
+    "agents",
+    "architecture",
+    "arxiv",
+    "benchmark",
+    "dataset",
+    "deployment",
+    "evaluation",
+    "fine-tuning",
+    "framework",
+    "inference",
+    "latency",
+    "llm",
+    "memory",
+    "model",
+    "multi-agent",
+    "paper",
+    "privacy",
+    "rag",
+    "reasoning",
+    "research",
+    "retrieval",
+    "training",
+    "workflow",
+    "工程",
+    "架构",
+    "大模型",
+    "训练",
+    "推理",
+    "模型",
+    "智能体",
+    "多智能体",
+    "多模态",
+    "新模态",
+    "记忆",
+    "评测",
+    "基准",
+    "论文",
+    "研究",
+    "技术",
+    "开源",
+    "框架",
+    "部署",
+)
+COMMERCIAL_TEXT_HINTS = (
+    "acquisition",
+    "earnings",
+    "funding",
+    "growth",
+    "investment",
+    "profit",
+    "revenue",
+    "round",
+    "sales",
+    "shares",
+    "stock",
+    "valuation",
+    "并购",
+    "财报",
+    "融资",
+    "估值",
+    "股价",
+    "营收",
+    "净利",
+    "订单",
+    "投资",
+    "收购",
+    "商业化",
+    "发布手机",
+    "发手机",
+    "联合创始人",
+    "扫地机",
+    "充电宝",
+    "庭审",
+    "吸金",
+    "市值",
+)
 
 
 @dataclass(frozen=True)
@@ -302,9 +412,19 @@ def _topic_score(news_item: NewsItem, workspace: Workspace) -> float:
         if category in allowed and any(keyword in text for keyword in keywords):
             score += 20.0
             break
+    technical_hits = _keyword_hit_count(text, TECHNICAL_TEXT_HINTS)
+    commercial_hits = _keyword_hit_count(text, COMMERCIAL_TEXT_HINTS)
+    score += min(25.0, technical_hits * 5.0)
+    score -= min(30.0, commercial_hits * 8.0)
+    if news_item.source_type == "paper_rss":
+        score += 18.0
+    if _contains_any(_source_identity(news_item), TECHNICAL_SOURCE_HINTS):
+        score += 10.0
+    if _contains_any(_source_identity(news_item), COMMERCIAL_SOURCE_HINTS):
+        score -= 12.0
     if news_item.domain_code == workspace.default_domain_code:
         score += 15.0
-    return min(100.0, score)
+    return max(0.0, min(100.0, score))
 
 
 def _freshness_score(news_item: NewsItem, now: datetime) -> float:
@@ -324,9 +444,16 @@ def _source_score(session: Session, workspace: Workspace, news_item: NewsItem) -
     )
     weight = link.source_weight if link else 1.0
     base = 60.0 + min(weight, 2.0) * 15.0
-    if "official" in (news_item.source_name or "").lower():
+    source_identity = _source_identity(news_item)
+    if "official" in source_identity:
         base += 10.0
-    return min(100.0, base)
+    if news_item.source_type == "paper_rss":
+        base += 18.0
+    if _contains_any(source_identity, TECHNICAL_SOURCE_HINTS):
+        base += 12.0
+    if _contains_any(source_identity, COMMERCIAL_SOURCE_HINTS):
+        base -= 15.0
+    return max(0.0, min(100.0, base))
 
 
 def _heat_score(session: Session, news_item: NewsItem) -> float:
@@ -359,10 +486,34 @@ def _feedback_score(session: Session, news_item: NewsItem) -> float:
 
 def _diversity_score(news_item: NewsItem) -> float:
     if news_item.source_type == "paper_rss":
-        return 4.0
+        return 14.0
     if news_item.source_type == "wiseflow":
         return 3.0
+    source_identity = _source_identity(news_item)
+    text = f"{news_item.source_title} {news_item.summary} {news_item.content}".lower()
+    if _contains_any(source_identity, COMMERCIAL_SOURCE_HINTS):
+        return -6.0
+    if _contains_any(source_identity, TECHNICAL_SOURCE_HINTS):
+        return 5.0
+    if _keyword_hit_count(text, TECHNICAL_TEXT_HINTS) >= 3:
+        return 4.0
     return 0.0
+
+
+def _source_identity(news_item: NewsItem) -> str:
+    return (
+        f"{news_item.source_name or ''} "
+        f"{news_item.source_url or ''} "
+        f"{news_item.canonical_url or ''}"
+    ).lower()
+
+
+def _contains_any(text: str, keywords: tuple[str, ...]) -> bool:
+    return any(keyword.lower() in text for keyword in keywords)
+
+
+def _keyword_hit_count(text: str, keywords: tuple[str, ...]) -> int:
+    return sum(1 for keyword in keywords if keyword.lower() in text)
 
 
 def _recommendation_reason(
@@ -402,10 +553,11 @@ def _create_generated_news(
     )
     if llm_draft is None:
         content_json = {
+            "background": f"来源：{news_item.source_name}；类型：{news_item.source_type}",
+            "effects": SQL_EFFECTS_FALLBACK,
             "eventSummary": news_item.summary or news_item.source_title,
             "technologyAndInnovation": _content_excerpt(news_item.content),
             "valueAndImpact": "该信号进入日报候选，后续由管理员结合业务场景判断采信和改写。",
-            "background": f"来源：{news_item.source_name}；类型：{news_item.source_type}",
         }
         generated_fields = {
             "category": category,
@@ -541,14 +693,7 @@ def _generated_title(news_item: NewsItem) -> str:
 
 
 def _key_points(news_item: NewsItem, category: str) -> str:
-    parts = [
-        category,
-        news_item.source_type,
-        news_item.source_name,
-    ]
-    if news_item.canonical_url:
-        parts.append("canonical_url")
-    return ", ".join(parts)
+    return fallback_key_points(news_item, category)
 
 
 def _content_excerpt(content: str) -> str:

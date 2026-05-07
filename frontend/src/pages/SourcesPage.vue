@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Bot, DownloadCloud, FileText, Globe2, Monitor, Plus, RefreshCw, Rss, Settings, Trash2, X } from "lucide-vue-next";
+import { Bot, DownloadCloud, FileText, Globe2, Monitor, Plus, RefreshCw, Rss, Settings, Tag, Trash2, X } from "lucide-vue-next";
 import { computed, reactive, ref, watch } from "vue";
 
 import {
@@ -26,6 +26,7 @@ const fetchingSourceId = ref("");
 const error = ref("");
 const lastImportMessage = ref("");
 const selectedSource = ref<DataSourceRecord | null>(null);
+const activePolicyTab = ref<"level1" | "level2" | "format">("level1");
 
 const legacyPrimaryCategories = [
   "AI Infra",
@@ -39,12 +40,28 @@ const legacyPrimaryCategories = [
   "智能体",
   "基础竞争力"
 ];
+const companySqlContentFields = [
+  "background",
+  "effects",
+  "eventSummary",
+  "technologyAndInnovation",
+  "valueAndImpact"
+];
+const contentFieldLabels: Record<string, string> = {
+  background: "背景",
+  effects: "效果总结",
+  eventSummary: "事件总结",
+  technologyAndInnovation: "技术和创新点总结",
+  valueAndImpact: "价值和影响"
+};
 const aiToolPrimaryCategories = ["工具新功能", "工具新案例", "工具新技术"];
 const aiToolSecondaryLabels = ["cursor", "claude code", "opencode", "codex"];
 
 const workspacePolicyPresets = {
   planning_intel: {
     labelSetCode: "ai_sql_categories",
+    newsFormatCode: "company_sql_v1",
+    requiredContentFields: [...companySqlContentFields],
     primaryCategories: legacyPrimaryCategories,
     secondaryLabelsByPrimary: {} as Record<string, string[]>,
     defaultCategory: "AI 应用",
@@ -52,6 +69,8 @@ const workspacePolicyPresets = {
   },
   ai_tools: {
     labelSetCode: "ai_tools_categories",
+    newsFormatCode: "tool_intel_v1",
+    requiredContentFields: [...companySqlContentFields],
     primaryCategories: aiToolPrimaryCategories,
     secondaryLabelsByPrimary: Object.fromEntries(
       aiToolPrimaryCategories.map((category) => [category, [...aiToolSecondaryLabels]])
@@ -63,12 +82,15 @@ const workspacePolicyPresets = {
 
 const policyForm = reactive({
   labelSetCode: "ai_sql_categories",
+  newsFormatCode: "company_sql_v1",
+  requiredContentFields: [...companySqlContentFields],
   allowedPrimaryCategories: [...legacyPrimaryCategories],
   secondaryLabelsByPrimary: {} as Record<string, string[]>,
   defaultCategory: "AI 应用",
   fallbackCategory: "AI 应用"
 });
 const categoryDraft = ref("");
+const contentFieldDraft = ref("");
 const secondaryDraft = reactive({
   primary: "",
   label: ""
@@ -123,6 +145,8 @@ async function loadWorkspacePolicy() {
 
 function fillPolicyForm(policy: WorkspaceLabelPolicy) {
   policyForm.labelSetCode = policy.label_set_code;
+  policyForm.newsFormatCode = policy.news_format_code;
+  policyForm.requiredContentFields = normalizeContentFields(policy.required_content_fields);
   policyForm.allowedPrimaryCategories = [...policy.allowed_primary_categories];
   policyForm.secondaryLabelsByPrimary = normalizeSecondaryLabels(
     policy.secondary_labels_by_primary ?? {},
@@ -306,6 +330,8 @@ function removePolicyCategory(index: number) {
 function resetPolicyCategories() {
   const preset = currentPolicyPreset.value;
   policyForm.labelSetCode = preset.labelSetCode;
+  policyForm.newsFormatCode = preset.newsFormatCode;
+  policyForm.requiredContentFields = [...preset.requiredContentFields];
   policyForm.allowedPrimaryCategories = [...preset.primaryCategories];
   policyForm.secondaryLabelsByPrimary = normalizeSecondaryLabels(
     preset.secondaryLabelsByPrimary,
@@ -314,6 +340,46 @@ function resetPolicyCategories() {
   policyForm.defaultCategory = preset.defaultCategory;
   policyForm.fallbackCategory = preset.fallbackCategory;
   secondaryDraft.primary = policyForm.allowedPrimaryCategories[0] ?? "";
+}
+
+function normalizeContentFields(fields: string[]) {
+  const next: string[] = [];
+  for (const field of fields) {
+    const value = field.trim();
+    if (value && !next.includes(value)) {
+      next.push(value);
+    }
+  }
+  return next.length ? next : [...companySqlContentFields];
+}
+
+function addContentField() {
+  const value = contentFieldDraft.value.trim();
+  if (!value || policyForm.requiredContentFields.includes(value)) {
+    contentFieldDraft.value = "";
+    return;
+  }
+  policyForm.requiredContentFields.push(value);
+  contentFieldDraft.value = "";
+}
+
+function contentFieldLabel(field: string) {
+  return contentFieldLabels[field] ?? "自定义字段";
+}
+
+function renameContentField(index: number, value: string) {
+  policyForm.requiredContentFields[index] = value;
+}
+
+function removeContentField(index: number) {
+  if (
+    policyForm.newsFormatCode === "company_sql_v1" &&
+    policyForm.requiredContentFields.length <= companySqlContentFields.length
+  ) {
+    error.value = "company_sql_v1 不能删除公司 SQL 必填字段";
+    return;
+  }
+  policyForm.requiredContentFields.splice(index, 1);
 }
 
 function addSecondaryLabel() {
@@ -351,6 +417,7 @@ async function saveWorkspacePolicy() {
     return;
   }
   policyForm.allowedPrimaryCategories = categories;
+  policyForm.requiredContentFields = normalizeContentFields(policyForm.requiredContentFields);
   policyForm.secondaryLabelsByPrimary = normalizeSecondaryLabels(
     policyForm.secondaryLabelsByPrimary,
     categories
@@ -362,6 +429,8 @@ async function saveWorkspacePolicy() {
   try {
     const updated = await updateWorkspaceLabelPolicy(workspace.currentCode, {
       label_set_code: policyForm.labelSetCode,
+      news_format_code: policyForm.newsFormatCode,
+      required_content_fields: policyForm.requiredContentFields,
       allowed_primary_categories: categories,
       secondary_labels_by_primary: policyForm.secondaryLabelsByPrimary,
       default_category: policyForm.defaultCategory,
@@ -480,6 +549,7 @@ watch(
           v-for="source in sources"
           :key="source.id"
           class="source-row"
+          :data-source-type="source.source_type"
           :class="{
             inactive: !source.workspace_link_enabled,
             selected: selectedSource?.id === source.id
@@ -551,42 +621,75 @@ watch(
         </header>
 
         <div class="label-policy-grid">
-          <div class="label-section">
+          <div class="policy-tabs" role="tablist" aria-label="标签策略配置">
+            <button
+              type="button"
+              :class="{ active: activePolicyTab === 'level1' }"
+              @click="activePolicyTab = 'level1'"
+            >
+              一级标签 {{ activePrimaryCategories.length }}
+            </button>
+            <button
+              type="button"
+              :class="{ active: activePolicyTab === 'level2' }"
+              @click="activePolicyTab = 'level2'"
+            >
+              二级标签 {{ secondaryLabelTotal }}
+            </button>
+            <button
+              type="button"
+              :class="{ active: activePolicyTab === 'format' }"
+              @click="activePolicyTab = 'format'"
+            >
+              新闻结构
+            </button>
+          </div>
+
+          <section v-if="activePolicyTab === 'level1'" class="policy-tab-panel">
             <div class="label-section-title">
               <span>一级标签</span>
               <small>用于模型分类与去重后定稿</small>
             </div>
-            <div class="label-primary-grid">
+            <div class="tag-cloud editable">
               <label
                 v-for="(category, index) in policyForm.allowedPrimaryCategories"
                 :key="`${category}-${index}`"
-                class="label-token-row"
+                class="tag-chip-edit"
               >
                 <input
-                  class="label-primary-input"
                   :value="category"
                   @input="renamePolicyCategory(index, ($event.target as HTMLInputElement).value)"
                   aria-label="一级标签名称"
                 />
                 <button
                   type="button"
-                  class="mini-icon-button danger"
                   :disabled="policyForm.allowedPrimaryCategories.length <= 1"
                   @click="removePolicyCategory(index)"
                   title="删除一级标签"
                 >
-                  <Trash2 :size="14" />
+                  <Trash2 :size="13" />
                 </button>
               </label>
             </div>
-          </div>
+            <div class="quick-add-card">
+              <label>
+                <span>新增一级标签</span>
+                <div class="inline-control">
+                  <input v-model="categoryDraft" placeholder="输入标签名称" @keydown.enter.prevent="addPolicyCategory" />
+                  <button type="button" class="mini-icon-button add" @click="addPolicyCategory" title="新增一级标签">
+                    <Plus :size="16" />
+                  </button>
+                </div>
+              </label>
+            </div>
+          </section>
 
-          <div v-if="secondaryLabelTotal > 0" class="label-section">
+          <section v-else-if="activePolicyTab === 'level2'" class="policy-tab-panel">
             <div class="label-section-title">
               <span>二级标签</span>
               <small>只显示已配置项</small>
             </div>
-            <div class="secondary-groups">
+            <div v-if="secondaryLabelTotal > 0" class="secondary-groups">
               <div
                 v-for="category in activePrimaryCategories"
                 v-show="secondaryLabelsFor(category).length > 0"
@@ -612,60 +715,95 @@ watch(
                 </div>
               </div>
             </div>
-          </div>
-
-          <div class="label-editor-panel">
-            <label>
-              <span>新增一级</span>
-              <div class="inline-control">
-                <input v-model="categoryDraft" placeholder="标签名" @keydown.enter.prevent="addPolicyCategory" />
-                <button type="button" class="mini-icon-button add" @click="addPolicyCategory" title="新增一级标签">
-                  <Plus :size="16" />
-                </button>
-              </div>
-            </label>
-            <label>
-              <span>新增二级</span>
-              <div class="inline-control stackable">
-                <select v-model="secondaryDraft.primary">
-                  <option v-for="category in activePrimaryCategories" :key="category" :value="category">
-                    {{ category }}
-                  </option>
-                </select>
-                <input v-model="secondaryDraft.label" placeholder="二级标签" @keydown.enter.prevent="addSecondaryLabel" />
-                <button type="button" class="mini-icon-button add" @click="addSecondaryLabel" title="新增二级标签">
-                  <Plus :size="16" />
-                </button>
-              </div>
-            </label>
-
-            <div class="policy-selects">
+            <div v-else class="empty-policy-card">
+              <Tag :size="24" />
+              <p>暂无二级标签</p>
+            </div>
+            <div class="quick-add-card">
               <label>
-                <span>默认</span>
-                <select v-model="policyForm.defaultCategory">
-                  <option v-for="category in activePrimaryCategories" :key="category" :value="category">
-                    {{ category }}
-                  </option>
-                </select>
-              </label>
-              <label>
-                <span>兜底</span>
-                <select v-model="policyForm.fallbackCategory">
-                  <option v-for="category in activePrimaryCategories" :key="category" :value="category">
-                    {{ category }}
-                  </option>
-                </select>
+                <span>新增二级标签</span>
+                <div class="inline-control stackable">
+                  <select v-model="secondaryDraft.primary">
+                    <option v-for="category in activePrimaryCategories" :key="category" :value="category">
+                      {{ category }}
+                    </option>
+                  </select>
+                  <input v-model="secondaryDraft.label" placeholder="输入二级标签名" @keydown.enter.prevent="addSecondaryLabel" />
+                  <button type="button" class="mini-icon-button add" @click="addSecondaryLabel" title="新增二级标签">
+                    <Plus :size="16" />
+                  </button>
+                </div>
               </label>
             </div>
+          </section>
 
-            <div class="policy-actions">
-              <button type="button" class="ghost-button" @click="resetPolicyCategories">恢复默认</button>
-              <button type="button" class="config-save" :disabled="savingPolicy" @click="saveWorkspacePolicy">
-                {{ savingPolicy ? "保存中" : "保存策略" }}
-              </button>
+          <section v-else class="policy-tab-panel">
+            <div class="label-section-title">
+              <span>新闻结构</span>
+              <small>生成稿与 SQL 导出字段</small>
             </div>
-          </div>
+            <label class="format-code-field">
+              <span>格式代码</span>
+              <input v-model="policyForm.newsFormatCode" placeholder="company_sql_v1" />
+            </label>
+            <div class="format-field-list">
+              <label
+                v-for="(field, index) in policyForm.requiredContentFields"
+                :key="`${field}-${index}`"
+                class="tag-chip-edit format-chip"
+              >
+                <input
+                  :value="field"
+                  @input="renameContentField(index, ($event.target as HTMLInputElement).value)"
+                  aria-label="新闻内容字段"
+                />
+                <small>{{ contentFieldLabel(field) }}</small>
+                <button type="button" @click="removeContentField(index)" title="删除新闻字段">
+                  <Trash2 :size="13" />
+                </button>
+              </label>
+            </div>
+            <div class="quick-add-card">
+              <label>
+                <span>新增新闻字段</span>
+                <div class="inline-control">
+                  <input v-model="contentFieldDraft" placeholder="新增字段" @keydown.enter.prevent="addContentField" />
+                  <button type="button" class="mini-icon-button add" @click="addContentField" title="新增新闻字段">
+                    <Plus :size="16" />
+                  </button>
+                </div>
+              </label>
+            </div>
+          </section>
         </div>
+
+        <footer class="policy-footer">
+          <div class="policy-selects">
+            <label>
+              <span>默认标签</span>
+              <select v-model="policyForm.defaultCategory">
+                <option v-for="category in activePrimaryCategories" :key="category" :value="category">
+                  {{ category }}
+                </option>
+              </select>
+            </label>
+            <label>
+              <span>兜底标签</span>
+              <select v-model="policyForm.fallbackCategory">
+                <option v-for="category in activePrimaryCategories" :key="category" :value="category">
+                  {{ category }}
+                </option>
+              </select>
+            </label>
+          </div>
+
+          <div class="policy-actions">
+            <button type="button" class="ghost-button" @click="resetPolicyCategories">恢复默认</button>
+            <button type="button" class="config-save" :disabled="savingPolicy" @click="saveWorkspacePolicy">
+              {{ savingPolicy ? "保存中" : "保存策略" }}
+            </button>
+          </div>
+        </footer>
       </section>
 
     </aside>
