@@ -162,6 +162,7 @@ workspace_sections     当前工作台启用的页面
 - 展示工作台级抓取 run 历史、状态、处理源数量、成功/失败源、raw 新增/更新数量。
 - 当前后端已提供 `POST /api/ingestion/runs`、`GET /api/ingestion/runs`、`GET /api/ingestion/runs/{id}`；scheduler/worker 已接入每日完整流水线，默认关闭自动任务，开启后执行抓取、标准化/去重、按日期推荐和日报草稿。
 - 页面上线前可以通过 `limit=0` 验收 API 与权限链路，不触发真实外网抓取。
+- 下一阶段要把它升级成抓取覆盖率页面：按日期展示启用源数、尝试抓取源数、成功源数、失败源数、每源贡献 raw 数、候选数、active winner 数和失败原因。这个页面用于解释“为什么 70+ 启用源当天只有少量候选”，避免把抓取覆盖问题误判为推荐器漏选。
 
 `/news`：
 
@@ -195,6 +196,7 @@ workspace_sections     当前工作台启用的页面
 `/exports`：
 
 - 公司 SQL 生成、导出历史、导出追溯。第一版 API 直接返回 SQL 文本；后续如果文件很大，再补下载文件。
+- 页面必须能清楚显示：导出范围是已发布日报且 `adoption_status = 2` 的条目；每条新闻生成 4 类 SQL；`content_json` 只包含 `background/effects/eventSummary/technologyAndInnovation/valueAndImpact` 五段旧字段；从任意 SQL 条目能追溯回 daily item、generated news、news item、raw item 和 data source。
 
 `/sync`：
 

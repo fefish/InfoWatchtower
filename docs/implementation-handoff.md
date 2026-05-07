@@ -362,6 +362,16 @@ POST /api/daily-report-items/{id}/comments
 
 当前进度：已实现标准日报 SQL 导出。`POST /api/exports/company-sql/daily-reports/{daily_report_id}` 会校验日报必须 `status = published`，并且只导出 `daily_report_items.adoption_status = 2` 的采信项；每条采信项写出旧系统兼容的 4 条 SQL，同时写入 `export_jobs` 和 `export_job_items`。导出的 `content_json` 只保留 `background/effects/eventSummary/technologyAndInnovation/valueAndImpact` 五个旧内网字段，InfoWatchtower 自己的 `source/raw/news` 追溯信息保留在关系表，不进入公司 SQL 的 JSON。`ai_journal.source_title` 和 `ai_journal.content` 导出前必须清洗为纯文本，去除 HTML 标签和 script/style 内容；原始 HTML 保留在 `raw_items.raw_content/raw_payload_json`。
 
+已验证的本地输出：
+
+- `2026-04-30` 规划部日报草稿、发布和公司 SQL 预览。
+- `2026-05-01` 到 `2026-05-07` 批量日报、发布和合并 SQL 预览。
+- 批量 SQL 中每条采信新闻固定生成 4 类 SQL，`content_json` 只含旧系统五段字段。
+- 第一版 `focus_id` 默认 `1`，`adoption_status` 默认 `2`，日报日期和 SQL 日期按 `day_key` 对齐。
+- 导出 SQL 不应包含 `<span>`、`<p>`、script/style 等 HTML 污染。
+
+注意：`outputs/sql/previews/` 是本地验收产物，已被 `.gitignore` 忽略，不提交 Git。
+
 实现标准导出：
 
 ```text
@@ -381,6 +391,33 @@ daily_report_items.adoption_status = 2
 - 字段映射与 `config/contracts/news_sql_mapping.json` 完全一致。
 - SQL 使用旧系统安全写法。
 - SQL 导出任务写入 `export_jobs` 和 `export_job_items`。
+
+### 5.11.1 抓取覆盖率和候选数解释
+
+启用源数量不是当天候选数量。当天候选必须经过：
+
+```text
+workspace_source_links enabled
+-> adapter 抓取成功
+-> feed 或页面当天实际有条目
+-> published_at 归入目标 day_key
+-> raw 标准化成 news
+-> dedupe 后保留 active winner
+```
+
+例如规划部当前有 `rss` 与 `paper_rss` 启用源 70+，但某一天只有少量候选时，常见原因是：
+
+- 源当天没有发布内容，尤其周末。
+- RSS 只暴露最近窗口，无法从今天回拉完整历史。
+- 源返回 403、timeout 或解析失败。
+- 条目的 `published_at` 落在别的日期。
+- 去重后多个来源合并成一个 winner。
+
+后续实现必须补：
+
+- 抓取覆盖率页面或 API：按 day_key 展示启用源数、成功源数、失败源数、每源 raw 数、失败原因、最近成功时间。
+- 失败源重试和告警。
+- 历史补采/backfill：RSS 当前窗口以外的日期要走页面归档、官方 API 或 crawler，不能只靠普通 RSS 拉取。
 
 ### 5.12 公网到内网同步骨架
 

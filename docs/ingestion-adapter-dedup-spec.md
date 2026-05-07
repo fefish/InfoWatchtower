@@ -222,6 +222,46 @@ workspace ingestion run
 
 日报和周报都从候选池采信，不直接从 raw 原始数据里挑。
 
+## 6.4 覆盖率、失败源和历史补采
+
+不要把“配置了多少源”和“某天有多少候选”混为一谈。某个工作台启用了 70+ 个 RSS/论文源，只说明这些源会被纳入抓取计划；它不保证每个源在目标日期都贡献候选。
+
+候选数量取决于：
+
+- 该源是否被当前工作台启用，且源本身没有停用。
+- adapter 是否抓取成功。
+- RSS/feed 当前窗口是否还保留目标日期条目。
+- 原始条目的 `published_at` 是否能解析，且按 Asia/Shanghai 归入目标 `day_key`。
+- raw 是否满足标准化进入 `news_items` 的最低条件。
+- 去重后是否是 active winner。
+
+第一版当前已经记录 `ingestion_runs.summary_json.sources`，但还缺少面向运营的覆盖率视图。下一阶段必须把这些信息产品化：
+
+```text
+day_key
+workspace_code
+enabled_source_count
+attempted_source_count
+succeeded_source_count
+failed_source_count
+raw_created_count
+raw_updated_count
+news_candidate_count
+active_winner_count
+top_failure_reasons
+per_source_breakdown
+```
+
+历史补采不能只靠普通 RSS。很多 RSS 只暴露最近 N 条，今天拉取不一定能还原 5 天前或 1 个月前的完整内容。需要为关键源逐步补：
+
+- 官方归档页分页抓取。
+- 官方 API 或搜索 API。
+- paper API，例如 arXiv、OpenAlex、Semantic Scholar。
+- 页面详情 crawler。
+- 手工补录或 CSV/SQL 导入。
+
+没有覆盖率和补采之前，日报候选少时应先查 `ingestion_runs`、`raw_items` 和 `news_items` 的日期分布，再判断推荐策略是否需要调整。
+
 ## 7. 去重逻辑
 
 第一阶段采用硬去重，沿用旧系统已经验证过的保守逻辑。

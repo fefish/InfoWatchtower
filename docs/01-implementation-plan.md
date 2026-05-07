@@ -398,6 +398,8 @@ daily_report_items.adoption_status = 2
 
 当前实现状态：阶段 6 标准日报 SQL 导出已落地。`backend/app/exports/company_sql.py` 从已发布日报读取采信项，按旧 `generate_ai_sql.py` 顺序生成四张表 SQL，并写入 `export_jobs/export_job_items`；`POST /api/exports/company-sql/daily-reports/{daily_report_id}` 返回完整 SQL 文本。导出的 `content_json` 严格投影为 `background/effects/eventSummary/technologyAndInnovation/valueAndImpact`，不会把新系统追溯字段混入公司内网字段。`ai_journal.source_title/content` 导出前清洗为纯文本，避免 RSS/网页 HTML 的 `<span>`、`<p>`、script/style 等污染公司 SQL；原始抓取内容仍保存在 `raw_items`。
 
+本地已验证 `2026-04-30` 单日日报 SQL 预览，以及 `2026-05-01` 到 `2026-05-07` 批量日报和合并 SQL 预览。预览文件在 `outputs/sql/previews/`，不进 Git。批量结果中，日报条目均按 `day_key` 对齐；公司 SQL 输出只包含已发布日报里 `adoption_status = 2` 的采信项。
+
 实现要求：
 
 - 字段映射完全遵守 `config/contracts/news_sql_mapping.json`。
@@ -524,18 +526,18 @@ trace SQL -> raw_payload_json
 backup restore smoke test
 ```
 
-## 14. 第一轮编码任务
+## 14. 下一轮编码任务
 
-下一次开始写代码时，按这个顺序做，不要跳到业务 UI：
+阶段 0-6 已完成，不再按早期骨架任务推进。下一轮编码按这个顺序做：
 
-1. 创建 `backend/`、`frontend/`、`deploy/` 骨架。
-2. 后端实现 `/healthz`、配置读取、数据库连接、Alembic。
-3. 前端实现 Vite/Vue/Router/Pinia 基础骨架和登录占位页。
-4. Docker Compose 本地启动 PostgreSQL、Redis、backend、frontend。
-5. 写最小 CI 或本地验证脚本。
-6. 提交前跑通阶段 0 验收命令。
+1. 候选池页面：接入 `GET /api/dedupe-groups` 和推荐分，展示 winner/loser、来源覆盖、标签、推荐原因和追溯链路。
+2. 抓取覆盖率与历史补采：在 `ingestion_runs.summary_json.sources` 基础上做覆盖率 API/页面，展示启用源、成功源、失败源、每源 raw 数、候选数和失败原因；为关键 RSS/论文源补 backfill 入口。
+3. SQL 导出前端页：接入 `POST /api/exports/company-sql/daily-reports/{daily_report_id}`，展示导出历史、下载/复制 SQL、字段校验和追溯链路。
+4. 部署和登录安全：补公网登录限流、默认密码治理、Google OIDC 预留、公司 IDaaS code flow adapter 预留、生产 Compose 和反向代理配置。
+5. 公网/内网同步骨架：先做同步包导出/导入和审计，不做实时双写。
+6. 周报与战略闭环：基于候选池和日报采信沉淀 insight、requirement、task 的最小页面和 API。
 
-阶段 0 完成后，再进入数据库模型和主链路实现。
+每一轮提交前都要重新跑对应后端测试、前端 build，并确认 `docs/00-system-design.md`、本文和相关模块文档没有出现两套口径。
 
 ## 15. 不能延期的底线
 
@@ -549,3 +551,20 @@ backup restore smoke test
 - 公网和内网登录同源，只替换 `AuthAdapter`。
 - adapter 注册机制一开始就存在，不能只写 RSS 特例。
 - 数据库不暴露到公网。
+
+## 16. 当前能力与远景差距
+
+当前已经做到“从多源抓取到日报/SQL”的最小闭环，但还没有达到规划部长期运转平台的远景。差距按优先级拆成：
+
+| 差距 | 当前状态 | 下一步交付 | 验收方式 |
+| --- | --- | --- | --- |
+| 候选池运营 | 后端有去重组和推荐数据，前端仍弱 | 候选池页面展示 winner/loser、分数、追溯、采信入口 | 管理员能判断一条日报候选来自哪些源，为什么被推荐 |
+| 抓取覆盖率 | 有 ingestion run 摘要，但没有运营看板 | 按日期/源展示成功、失败、raw 数、候选数和失败原因 | 能解释“70+ 源为什么当天只有少量候选” |
+| 历史补采 | 普通 RSS 只能拉当前窗口 | 为关键 RSS、论文和页面源补 backfill/crawler/API | 能补齐目标日期缺失候选，而不是只生成当天 feed 里残留内容 |
+| SQL 前端 | 后端可导出 SQL，前端页面未完成 | SQL 导出页、导出历史、复制/下载、字段校验 | 管理员不进后端也能拿到内网可导入 SQL |
+| 周报 | 表结构预留，自动周报未实现 | 周报候选、采信、生成、编辑、发布 | 一周日报采信能汇总成周报草稿 |
+| 战略闭环 | insight/requirement/task 表已预留 | 从日报新闻沉淀洞察、影响、需求和指派任务 | 任一内部需求能追溯到外部原始信号 |
+| 公网部署 | 本地/Compose 骨架具备 | 生产 Compose、Caddy/Nginx、GitHub Actions SSH 部署 | 云服务器可滚动部署，数据库不暴露公网 |
+| 内网适配 | `intranet_header` 已有，IDaaS 仍是计划 | `intranet_oidc` code flow adapter | 公司登录拿到工号/姓名后能映射本地用户 |
+| 多环境同步 | 表结构和策略设计已有 | sync package 导出/导入 | 公网公开信号能同步到内网，敏感数据不回流 |
+| 板块扩展 | domain pack 目录和概念已设计 | 硬件/半导体等 domain pack 样例 | 新板块不改主链路即可接入源、标签、评分和导出 |

@@ -15,7 +15,9 @@
 7. 只在需要模块细节时阅读对应专题附录。
 8. 旧系统事实从私有参考仓查询；主仓说明见 `references/README.md`，不从旧代码直接继承新架构。
 
-当前进度：阶段 0-6 标准日报链路已完成可回填闭环。阶段 3 已完成旧种子源导入、共享数据源池、默认工作台源链接、工作台统一标签/新闻结构策略、adapter 框架、RSS/paper RSS/页面源抓取到 `raw_items`、工作台级 ingestion run API 和 Redis/RQ worker + scheduler 调度入口；阶段 4 已完成 raw 到 news 标准化、canonical URL、dedupe key、工作台隔离硬去重、winner/loser 回写和查询 API；阶段 5 已完成完整流水线 API、按 `day_key` 推荐 run、可解释推荐分、可选 MiniMax 中国区 OpenAI-compatible `generated_news`、日报草稿、发布、条目编辑和点赞/评分/评论最小 API；阶段 6 已实现已发布日报的公司 SQL 标准导出，`POST /api/exports/company-sql/daily-reports/{daily_report_id}` 只导出 `adoption_status = 2` 的采信项并写入 `export_jobs/export_job_items`。`planning_intel/company_sql_v1` 生成稿必须带 `background/effects/eventSummary/technologyAndInnovation/valueAndImpact`；导出时 `content_json` 只保留这五个旧内网字段。scheduler 开启后默认执行每日完整流水线：抓取、标准化/去重、推荐和日报草稿。前端首页必须显示阶段 5；工作台壳和导航必须来自后端工作台配置；数据源页采用信息流式共享源列表和右侧标签/新闻结构 tab 面板，日报页可按日期生成日报草稿，并通过 brief 列表 + 详情弹窗完成正文查看、采信、编辑、点赞、评分、评论和追溯。`planning_intel` 与 `ai_tools` 的默认标签策略必须保持后端隔离。下一步进入候选池页面、SQL 导出前端页和公网/内网同步骨架。
+当前进度：阶段 0-6 标准日报链路已完成可回填闭环。阶段 3 已完成旧种子源导入、共享数据源池、默认工作台源链接、工作台统一标签/新闻结构策略、adapter 框架、RSS/paper RSS/页面源抓取到 `raw_items`、工作台级 ingestion run API 和 Redis/RQ worker + scheduler 调度入口；阶段 4 已完成 raw 到 news 标准化、canonical URL、dedupe key、工作台隔离硬去重、winner/loser 回写和查询 API；阶段 5 已完成完整流水线 API、按 `day_key` 推荐 run、可解释推荐分、可选 MiniMax 中国区 OpenAI-compatible `generated_news`、日报草稿、发布、条目编辑和点赞/评分/评论最小 API；阶段 6 已实现已发布日报的公司 SQL 标准导出，`POST /api/exports/company-sql/daily-reports/{daily_report_id}` 只导出 `adoption_status = 2` 的采信项并写入 `export_jobs/export_job_items`。`planning_intel/company_sql_v1` 生成稿必须带 `background/effects/eventSummary/technologyAndInnovation/valueAndImpact`；导出时 `content_json` 只保留这五个旧内网字段。scheduler 开启后默认执行每日完整流水线：抓取、标准化/去重、推荐和日报草稿。前端首页必须显示阶段 5；工作台壳和导航必须来自后端工作台配置；数据源页采用信息流式共享源列表和右侧标签/新闻结构 tab 面板，日报页可按日期生成日报草稿，并通过 brief 列表 + 详情弹窗完成正文查看、采信、编辑、点赞、评分、评论和追溯。`planning_intel` 与 `ai_tools` 的默认标签策略必须保持后端隔离。
+
+最近已验证：本地已生成 `2026-04-30` 单日日报 SQL 预览，以及 `2026-05-01` 到 `2026-05-07` 批量日报和合并 SQL 预览。预览文件放在 `outputs/sql/previews/`，该目录不进 Git。下一步不是继续扩字段，而是把候选池页面、抓取覆盖率/历史补采、SQL 导出前端页、公网/内网同步骨架和部署硬化补齐。
 
 ## 2. 单一事实源
 
