@@ -96,3 +96,14 @@ def test_key_points_are_short_keywords_not_sentence_summary():
     assert "STARFlow-V" in keywords
     assert "视频生成" in keywords
     assert "归一化流" in keywords
+
+
+def test_key_points_preserve_api_names_and_decimal_numbers():
+    keywords = coerce_key_points(
+        "torch.accelerator.Graph, GPT-5.6内部测试, 收入增长12.9%, AI.IF语义过滤",
+    )
+
+    assert "torch.accelerator.Graph" in keywords
+    assert "GPT-5.6内部测试" in keywords
+    assert "收入增长12.9%" in keywords
+    assert "AI.IF语义过滤" in keywords

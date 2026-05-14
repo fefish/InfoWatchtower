@@ -174,8 +174,16 @@ def _source_to_read(source: DataSource, workspace_link: WorkspaceSourceLink | No
         last_error=source.last_error,
         primary_category=str(metadata.get("primary_category") or ""),
         info_category=str(metadata.get("info_category") or ""),
+        source_tags=_string_list(metadata.get("source_tags")),
+        source_secondary_tags=_string_list(metadata.get("source_secondary_tags")),
         workspace_link_enabled=workspace_link.enabled if workspace_link else False,
         workspace_source_weight=workspace_link.source_weight if workspace_link else None,
         workspace_daily_limit=workspace_link.daily_limit if workspace_link else None,
         workspace_clustering_config=dict(link_config.get("clustering_config") or {}),
     )
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if str(item).strip()]

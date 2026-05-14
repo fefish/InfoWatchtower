@@ -4,7 +4,12 @@ import asyncio
 from typing import Any
 
 from app.core.database import get_session_factory
-from app.ingestion.runs import WorkspaceIngestionRequest, run_workspace_ingestion
+from app.ingestion.runs import (
+    DEFAULT_INGESTION_CONCURRENCY,
+    DEFAULT_SOURCE_TIMEOUT_SECONDS,
+    WorkspaceIngestionRequest,
+    run_workspace_ingestion,
+)
 
 INGESTION_QUEUE_NAME = "infowatchtower"
 
@@ -13,14 +18,26 @@ def run_workspace_ingestion_job(
     workspace_code: str = "planning_intel",
     source_types: list[str] | None = None,
     limit: int | None = None,
+    concurrency: int = DEFAULT_INGESTION_CONCURRENCY,
+    source_timeout_seconds: float = DEFAULT_SOURCE_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
-    return asyncio.run(_run_workspace_ingestion_job(workspace_code, source_types or [], limit))
+    return asyncio.run(
+        _run_workspace_ingestion_job(
+            workspace_code,
+            source_types or [],
+            limit,
+            concurrency,
+            source_timeout_seconds,
+        ),
+    )
 
 
 async def _run_workspace_ingestion_job(
     workspace_code: str,
     source_types: list[str],
     limit: int | None,
+    concurrency: int,
+    source_timeout_seconds: float,
 ) -> dict[str, Any]:
     session_factory = get_session_factory()
     if session_factory is None:
@@ -33,6 +50,8 @@ async def _run_workspace_ingestion_job(
                 workspace_code=workspace_code,
                 source_types=source_types,
                 limit=limit,
+                concurrency=concurrency,
+                source_timeout_seconds=source_timeout_seconds,
             ),
         )
         payload = {

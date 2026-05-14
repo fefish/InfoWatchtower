@@ -235,7 +235,7 @@ PATCH /api/users/{id}/roles
 
 前置调整：工作台模型按共享主链路收束。`workspaces/workspace_sections/workspace_memberships` 管工作范围、页面和权限；`workspace_source_links` 管工作台启用哪些共享数据源；`domain_code` 继续只表达情报主题板块。
 
-当前实现状态：导入、工作台统一标签/新闻结构策略、adapter 框架、RSS/paper RSS/page_manual/page_monitor 抓取到 raw 入库、工作台级 ingestion run API 和 Redis/RQ worker + scheduler 调度入口已完成。`backend/app/adapters/` 已有统一 `SourceAdapter`、RSS adapter、页面源 adapter 和 wiseflow/paper/manual 等骨架；`/api/sources/import-legacy-seeds` 可以导入 113 个旧源；`/api/sources?workspace_code=...` 可以展示共享源池及当前工作台配置；`/api/workspaces/{workspace_code}/label-policy` 可以增删改工作台统一一级/二级标签策略，并返回/保存 `news_format_code` 与 `required_content_fields`；`planning_intel` 默认 `ai_sql_categories + company_sql_v1`，`ai_tools` 默认 `ai_tools_categories + tool_intel_v1`；`/api/sources/{source_id}/workspace-link` 可以更新当前工作台对单源的启用状态、权重和日限；`/api/sources/{source_id}/fetch` 可以触发单个 RSS/paper RSS/page_manual/page_monitor 源抓取并幂等写入 `raw_items`；`/api/ingestion/runs` 可以按工作台创建同步执行的抓取 run，默认处理该工作台已启用的 `rss/paper_rss` 源并写入 `ingestion_runs` 摘要；完整日报流水线通过 `/api/pipeline/daily-runs` 可覆盖 `rss/paper_rss/page_manual/page_monitor`。scheduler 可按环境变量定时把每日完整流水线入队给 worker 执行，默认关闭自动任务；`workspace_source_links` 会为所有已启用默认工作台建立链接。
+当前实现状态：导入、工作台统一标签/新闻结构策略、adapter 框架、RSS/paper RSS/page_manual/page_monitor 抓取到 raw 入库、工作台级 ingestion run API 和 Redis/RQ worker + scheduler 调度入口已完成。`backend/app/adapters/` 已有统一 `SourceAdapter`、RSS adapter、页面源 adapter 和 wiseflow/paper/manual 等骨架；`/api/sources/import-legacy-seeds` 可以导入旧 113 个种子源和 `information_source_registry_20260511.csv` 补充台账，361 条导入记录按 URL 去重后形成 294 个共享源，规划部工作台 v1 默认全部启用；`/api/sources?workspace_code=...` 可以展示共享源池及当前工作台配置；`/api/workspaces/{workspace_code}/label-policy` 可以增删改工作台统一新闻一级/二级标签策略，并返回/保存 `news_format_code`、`export_category_mode` 与 `required_content_fields`；`planning_intel` 默认 `ai_sql_categories + company_sql_v1 + news_primary`，`ai_tools` 默认 `ai_tools_categories + tool_intel_v1`；数据源侧方向标签来自 `planning_source_tags/source_tags.json`，只用于源管理和评分先验；`/api/sources/{source_id}/workspace-link` 可以更新当前工作台对单源的启用状态、权重和日限；`/api/sources/{source_id}/fetch` 可以触发单个 RSS/paper RSS/page_manual/page_monitor 源抓取并幂等写入 `raw_items`；`/api/ingestion/runs` 可以按工作台创建同步执行的抓取 run，默认处理该工作台已启用的 `rss/paper_rss/page_manual/page_monitor/wiseflow` 源并写入 `ingestion_runs` 摘要；抓取 run 支持并发池和单源超时，默认 `INGESTION_CONCURRENCY=8`、`INGESTION_SOURCE_TIMEOUT_SECONDS=25`；完整日报流水线通过 `/api/pipeline/daily-runs` 默认覆盖同一套全量源类型。scheduler 可按环境变量定时把每日完整流水线入队给 worker 执行，默认关闭自动任务；`workspace_source_links` 会为规划部工作台建立全量启用链接。
 
 实现：
 
@@ -268,7 +268,7 @@ class SourceAdapter:
 
 - 数据源导入数量与 contract 的 seed counts 对齐。
 - 旧 wiseflow 不被混成 RSS。
-- `planning_intel` 和 `ai_tools` 都能看到 113 个共享源链接，其中 79 个启用。
+- `planning_intel` 和 `ai_tools` 都能看到 294 个共享源链接；规划部工作台默认 294 个全部启用。
 - 单个 RSS/paper RSS/page_manual/page_monitor 源可以手动触发抓取，首次创建 `raw_items`，重复抓取更新已有 raw 记录而不重复插入。
 - 可以创建工作台级 ingestion run，run 记录 source 成功/失败、拉取数、raw 新增数和 raw 更新数；`limit=0` 可用于无网络验收 API。
 - 可以启动 worker/scheduler 容器；默认 `INGESTION_SCHEDULER_ENABLED=false` 不会自动执行，设为 `true` 后按 `INGESTION_SCHEDULER_INTERVAL_SECONDS` 入队完整日报流水线；如需旧的只抓取行为，设置 `SCHEDULER_JOB_MODE=ingestion_only`。
@@ -326,7 +326,7 @@ cd backend && ruff check app/normalization app/schemas/news.py app/api/routes/ne
 
 目标：形成可解释推荐，并能进入日报编辑。
 
-当前实现状态：已完成可回填闭环。服务位于 `backend/app/recommendations/service.py`，完整流水线 API 位于 `backend/app/api/routes/pipeline.py`，推荐/日报 API 位于 `backend/app/api/routes/recommendations.py` 和 `backend/app/api/routes/reports.py`。`POST /api/pipeline/daily-runs` 会按工作台和 `day_key` 执行抓取、标准化/去重、推荐、结构化生成和日报草稿；`POST /api/recommendation/runs` 仍可只重跑推荐层。推荐读取当前工作台目标日期 active winner，生成可解释推荐分，写入 `recommendation_items`，为 selected 项生成 `generated_news`，并创建或替换日报草稿。`planning_intel` 评分默认技术情报优先：`paper_rss`、研究机构、AI 软件、AI 基础设施、模型工程、推理/训练、RAG、多智能体、Agent 记忆和工程实践加分，融资、财报、股价、消费硬件和泛商业市场新闻降权。`generated_news` 优先使用 MiniMax 中国区 OpenAI-compatible `https://api.minimaxi.com/v1/chat/completions`（`MINIMAX_GENERATION_ENABLED=true` 且有 key），失败或未启用时使用规则 fallback；两条路径都必须输出 `background/effects/eventSummary/technologyAndInnovation/valueAndImpact`，满足旧参考和后续 SQL 映射。`backend/app/pipeline/daily.py` 提供同一套每日完整流水线，scheduler 开启后自动执行。`daily_reports` 已按 `workspace_code + domain_code + day_key` 唯一，避免多个工作台同一天同板块互相覆盖。前端 `/daily-reports` 已接入按日期生成日报草稿，列表展示 brief，点击打开详情弹窗后完成正文查看、采信切换、条目编辑、点赞、评分、评论和追溯查看。
+当前实现状态：已完成可回填闭环，并新增内容准入层。服务位于 `backend/app/recommendations/service.py`，完整流水线 API 位于 `backend/app/api/routes/pipeline.py`，推荐/日报 API 位于 `backend/app/api/routes/recommendations.py` 和 `backend/app/api/routes/reports.py`。`POST /api/pipeline/daily-runs` 会按工作台和 `day_key` 执行抓取、标准化/去重、推荐、结构化生成和日报草稿；`POST /api/recommendation/runs` 仍可只重跑推荐层。推荐读取当前工作台目标日期 active winner，先按主题相关性、专家影响、证据强度、新颖性、技术成熟度/实现细节、时效性和噪声惩罚计算 `P0/P1/P2/P3/R` 准入等级，再生成可解释推荐分，写入 `recommendation_items`，为 selected 项生成 `generated_news`，并创建或替换日报草稿。`planning_intel` 评分默认技术情报优先：AI 软件、AI 基础设施、模型工程、推理/训练、RAG、多智能体、Agent 记忆、硬件厂商技术路线、友商技术动态、AI 芯片、GPU 集群、数据中心架构、通信系统和标准进展加分；但源侧方向标签只是弱先验，厂商源/硬件源必须叠加内容里的架构、推理、模型服务、芯片、数据中心、通信系统、标准或工程实现证据才会进入强准入。融资、财报、股价、采购/中标/集采、消费硬件、活动预告、宣传推广会/品牌行动、泛商业合作、纯营销、航天火箭等离题工程新闻、纯市场新闻、法律/版权元讨论、标题党、社会/教育离题内容和离题生物医学/纯学术论文降权。日报选择先选 `P0/P1`，再用无噪声且有明确技术信号的 `P2` 补足；`P2 paper_rss`、带噪声 `P2`、`P3/R` 默认不进日报；单源、`paper_rss` 和单一内容池都有占比控制，避免内容过度集中。`generated_news` 优先使用 MiniMax 中国区 OpenAI-compatible `https://api.minimaxi.com/v1/chat/completions`（`MINIMAX_GENERATION_ENABLED=true` 且有 key）；prompt 强制简体中文、短关键词和旧系统五段正文。失败或未启用时使用 `rule_v1:fallback` 待复核草稿，不再标记为可发布成品，标准公司 SQL 导出会拒绝这类条目。`backend/app/pipeline/daily.py` 提供同一套每日完整流水线，scheduler 开启后自动执行。`daily_reports` 已按 `workspace_code + domain_code + day_key` 唯一，避免多个工作台同一天同板块互相覆盖。前端 `/daily-reports` 已接入按日期生成日报草稿，列表展示 brief，点击打开详情弹窗后完成正文查看、采信切换、条目编辑、点赞、评分、评论和追溯查看。
 
 推荐字段：
 
@@ -396,30 +396,32 @@ daily_report_items.adoption_status = 2
 3. `ai_journal_analysis`
 4. `t_news_data_info`
 
-当前实现状态：阶段 6 标准日报 SQL 导出已落地。`backend/app/exports/company_sql.py` 从已发布日报读取采信项，按旧 `generate_ai_sql.py` 顺序生成四张表 SQL，并写入 `export_jobs/export_job_items`；`POST /api/exports/company-sql/daily-reports/{daily_report_id}` 返回完整 SQL 文本。导出的 `content_json` 严格投影为 `background/effects/eventSummary/technologyAndInnovation/valueAndImpact`，不会把新系统追溯字段混入公司内网字段。`ai_journal.source_title/content` 导出前清洗为纯文本，避免 RSS/网页 HTML 的 `<span>`、`<p>`、script/style 等污染公司 SQL；原始抓取内容仍保存在 `raw_items`。
+当前实现状态：阶段 6 标准日报 SQL 导出已落地。`backend/app/exports/company_sql.py` 从已发布日报读取采信且 `generated_news.generation_status = ready`、`generated_by` 非 `rule_v1` 的条目，按旧 `generate_ai_sql.py` 顺序生成四张表 SQL，并写入 `export_jobs/export_job_items`；`POST /api/exports/company-sql/daily-reports/{daily_report_id}` 返回完整 SQL 文本。导出的 `content_json` 严格投影为 `background/effects/eventSummary/technologyAndInnovation/valueAndImpact`，不会把新系统追溯字段混入公司内网字段。`ai_journal.source_title/content` 导出前清洗为纯文本，避免 RSS/网页 HTML 的 `<span>`、`<p>`、script/style 等污染公司 SQL；`created_at` 必须严格对齐旧脚本和已验证合集 SQL 的列顺序与字面量样式，导出为 `'YYYY-MM-DD HH:MM:SS'`，来源缺失发布时间时兜底为日报 `day_key 09:00:00`，不得改成 `STR_TO_DATE`、`CAST`，也不得省略 `ai_journal_analysis.created_at`；SQL 文件头统一为 `InfoWatchtower Company SQL Preview`；所有预览 SQL 必须先通过 `scripts/validate_company_sql.py`，脚本以 `outputs/sql/previews/planning_intel_2026-05-05_company_sql_preview.sql` 为基准逐字段校验四表顺序、列名、URL 串联、日期、五段正文 JSON、HTML 污染和禁用写法；原始抓取内容仍保存在 `raw_items`。
 
 本地已验证 `2026-04-30` 单日日报 SQL 预览，以及 `2026-05-01` 到 `2026-05-07` 批量日报和合并 SQL 预览。预览文件在 `outputs/sql/previews/`，不进 Git。批量结果中，日报条目均按 `day_key` 对齐；公司 SQL 输出只包含已发布日报里 `adoption_status = 2` 的采信项。
 
 实现要求：
 
 - 字段映射完全遵守 `config/contracts/news_sql_mapping.json`。
-- category 默认兼容 `config/taxonomy/news_categories.json` 的 10 个一级标签。
+- category 默认使用 `config/taxonomy/news_categories.json` 的 10 个 AI 一级标签；`config/taxonomy/source_tags.json` 的源侧方向标签不得导出为 SQL category。
 - `source_url` 必须来自 `news_items.source_url`，不能信任模型生成的 URL。
 - 导出任务写 `export_jobs` 和 `export_job_items`。
 - 导出文件可下载，且能追溯到 daily item/news/raw/source。
+- 每次导出或手工整理 SQL 后必须运行 `scripts/validate_company_sql.py`；需要统一标题时先运行 `scripts/validate_company_sql.py --fix-headers`。
 
 验收：
 
 - 一条日报新闻生成 4 条 SQL，顺序正确。
 - 只导出已发布且采信状态为 2 的日报条目。
 - SQL 字段和旧系统格式一致。
+- `scripts/validate_company_sql.py` 全量通过。
 - 单条 SQL 失败不影响整批审计记录。
 
 ## 11. 阶段 7：前端工作台
 
 目标：让主链路变成可操作看板，不做营销首页。
 
-当前实现状态：浅色工作台壳、登录页、用户权限页和数据源管理页已可用。工作台列表与左侧导航已从后端 `workspaces/workspace_sections` 读取，不再前端硬编码；第一版默认不显示工具目录、工具任务、独立热点专题等插件页。数据源页采用参考高保真风格的信息流式共享源列表，展示共享源池、当前工作台启用数、源类型分布、工作台启用状态和抓取状态；右侧标签面板用一级/二级/新闻结构 tab 管理工作台统一策略。单个源配置只包含启用、权重和日限，不维护标签。日报页采用 brief 列表 + 详情处理弹窗，避免正文和处理区互相遮挡。
+当前实现状态：浅色工作台壳、登录页、用户权限页、数据源管理页、候选池页、推荐运行页、抓取覆盖率页、SQL 导出页、数据源详情页和日报详情/编辑路由已可用。工作台列表与左侧导航已从后端 `workspaces/workspace_sections` 读取，不再前端硬编码；第一版默认不显示工具目录、工具任务、独立热点专题等插件页。数据源页采用参考高保真风格的信息流式共享源列表，展示共享源池、当前工作台启用数、源类型分布、工作台启用状态和抓取状态；右侧标签面板用一级/二级/新闻结构 tab 管理工作台统一策略。单个源配置只包含启用、权重和日限，不维护标签。候选池页接入 `GET /api/dedupe-groups` 和 `GET /api/news-items`，展示 winner、重复来源和来源排序；推荐运行页接入 `GET/POST /api/recommendation/runs`，展示分数拆解和是否进入日报；抓取覆盖率页接入 `GET/POST /api/ingestion/runs`，可用 `limit=0` 做安全验收；SQL 导出页接入 `GET /api/daily-reports`、`GET /api/exports` 和 `POST /api/exports/company-sql/daily-reports/{daily_report_id}`，支持预览和下载 SQL。日报页采用 brief 列表 + 详情处理弹窗，避免正文和处理区互相遮挡。周报、需求、任务、同步和审计页面目前是模块化路线页，已替代通用空白占位，但后端 API 仍待补齐。
 
 页面顺序：
 
@@ -428,6 +430,7 @@ daily_report_items.adoption_status = 2
 /dashboard
 /sources
 /sources/:id
+/ingestion-runs
 /news
 /recommendations
 /daily-reports
@@ -459,14 +462,23 @@ daily_report_items.adoption_status = 2
 - 登录后进入工作台。
 - 可以导入旧种子源并看到数据源列表。
 - 切换工作台后左侧导航仍来自后端 section 配置，且不会默认出现工具目录、工具任务或独立热点专题。
-- 数据源页能看到当前工作台启用 79 个源，并能区分共享源定义和工作台配置。
-- `planning_intel` 默认展示旧公司 SQL 兼容的 10 个一级标签；`ai_tools` 默认展示“工具新功能、工具新案例、工具新技术”，且每个一级下有 `cursor/claude code/opencode/codex` 二级标签。
+- 数据源页能看到 294 个共享源、当前工作台启用 294 个源，并能区分共享源定义和工作台配置。
+- `planning_intel` 默认展示 AI 十分类新闻一级标签；数据源行可展示源侧方向标签；`ai_tools` 默认展示“工具新功能、工具新案例、工具新技术”，且每个一级下有 `cursor/claude code/opencode/codex` 二级标签。
 - 数据源页和其他占位页在常见桌面宽度下不应出现横向截断；标签策略的一级/二级/新闻结构应通过显式 tab 切换，避免用户不知道还有隐藏内容。
 - 可以触发一次抓取和推荐。
 - 可以查看 winner/loser 和推荐原因。
 - 可以编辑并发布日报。
 - 可以点赞、评分、评论和回复。
 - 可以生成并下载公司 SQL。
+
+当前已验证：
+
+```text
+cd frontend && npm run build
+浏览器打开 /news、/recommendations、/exports、/ingestion-runs、/weekly-reports、/requirements、/tasks、/sync、/audit-logs
+```
+
+以上页面不再落入通用 `PlaceholderPage`。`/weekly-reports`、`/requirements`、`/tasks`、`/sync`、`/audit-logs` 只展示模块能力和后续接口任务，不能被误读为后端能力已完成。
 
 ## 12. 阶段 8：同步、部署和自动发布
 
@@ -528,14 +540,14 @@ backup restore smoke test
 
 ## 14. 下一轮编码任务
 
-阶段 0-6 已完成，不再按早期骨架任务推进。下一轮编码按这个顺序做：
+阶段 0-7 的主页面已经有可操作骨架。下一轮编码按这个顺序做：
 
-1. 候选池页面：接入 `GET /api/dedupe-groups` 和推荐分，展示 winner/loser、来源覆盖、标签、推荐原因和追溯链路。
-2. 抓取覆盖率与历史补采：在 `ingestion_runs.summary_json.sources` 基础上做覆盖率 API/页面，展示启用源、成功源、失败源、每源 raw 数、候选数和失败原因；为关键 RSS/论文源补 backfill 入口。
-3. SQL 导出前端页：接入 `POST /api/exports/company-sql/daily-reports/{daily_report_id}`，展示导出历史、下载/复制 SQL、字段校验和追溯链路。
+1. 抓取覆盖率增强与历史补采：在 `ingestion_runs.summary_json.sources` 基础上补覆盖率详情 API，按日期/源展示启用源、成功源、失败源、每源 raw 数、候选数和失败原因；为关键 RSS/论文源补 backfill 入口。历史补采第一阶段按三类源建设：论文/API 源可按日期回查，厂商技术博客/标准组织源走 archive、sitemap 和分页 crawler，普通 RSS 只作为当前窗口抓取。补采 run 必须记录 `target_day_start/target_day_end/backfill_mode/source_scope/retry_policy`，验收时要能解释 5/10 这类周末历史日期为什么候选少，以及补采后新增了多少 raw/news/winner。
+2. 候选池增强：把推荐分、标签、日报采信状态和追溯链路并入 `/news`，从候选项能看到它是否进入日报和被推荐原因。
+3. SQL 导出增强：补导出前字段长度、URL 长度、HTML 污染校验；把 SQL 条目追溯到 daily item、generated news、news item、raw item 和 source。
 4. 部署和登录安全：补公网登录限流、默认密码治理、Google OIDC 预留、公司 IDaaS code flow adapter 预留、生产 Compose 和反向代理配置。
 5. 公网/内网同步骨架：先做同步包导出/导入和审计，不做实时双写。
-6. 周报与战略闭环：基于候选池和日报采信沉淀 insight、requirement、task 的最小页面和 API。
+6. 周报与战略闭环：补 weekly_reports、requirements、tasks 后端 API，再把当前模块路线页升级为真实业务页。
 
 每一轮提交前都要重新跑对应后端测试、前端 build，并确认 `docs/00-system-design.md`、本文和相关模块文档没有出现两套口径。
 
@@ -558,10 +570,10 @@ backup restore smoke test
 
 | 差距 | 当前状态 | 下一步交付 | 验收方式 |
 | --- | --- | --- | --- |
-| 候选池运营 | 后端有去重组和推荐数据，前端仍弱 | 候选池页面展示 winner/loser、分数、追溯、采信入口 | 管理员能判断一条日报候选来自哪些源，为什么被推荐 |
-| 抓取覆盖率 | 有 ingestion run 摘要，但没有运营看板 | 按日期/源展示成功、失败、raw 数、候选数和失败原因 | 能解释“70+ 源为什么当天只有少量候选” |
+| 候选池运营 | 前端已展示 winner/loser 和重复来源，推荐分/日报采信状态仍需合并 | 候选池页面展示分数、标签、追溯、采信入口 | 管理员能判断一条日报候选来自哪些源，为什么被推荐 |
+| 抓取覆盖率 | 前端已展示 ingestion run 摘要，但缺每源明细和按日期覆盖 | 按日期/源展示成功、失败、raw 数、候选数和失败原因 | 能解释“294 个源全启用为什么当天仍只有少量候选” |
 | 历史补采 | 普通 RSS 只能拉当前窗口 | 为关键 RSS、论文和页面源补 backfill/crawler/API | 能补齐目标日期缺失候选，而不是只生成当天 feed 里残留内容 |
-| SQL 前端 | 后端可导出 SQL，前端页面未完成 | SQL 导出页、导出历史、复制/下载、字段校验 | 管理员不进后端也能拿到内网可导入 SQL |
+| SQL 前端 | 前端已能选择已发布日报、生成、预览和下载 SQL | 补复制、字段校验和逐条追溯 | 管理员不进后端也能拿到内网可导入 SQL |
 | 周报 | 表结构预留，自动周报未实现 | 周报候选、采信、生成、编辑、发布 | 一周日报采信能汇总成周报草稿 |
 | 战略闭环 | insight/requirement/task 表已预留 | 从日报新闻沉淀洞察、影响、需求和指派任务 | 任一内部需求能追溯到外部原始信号 |
 | 公网部署 | 本地/Compose 骨架具备 | 生产 Compose、Caddy/Nginx、GitHub Actions SSH 部署 | 云服务器可滚动部署，数据库不暴露公网 |

@@ -127,11 +127,13 @@ labels
 content_labels
 ```
 
-第一版内置 AI SQL 导出的 10 个一级标题，来自：
+第一版内置规划部成品新闻一级标题，来自：
 
 ```text
 config/taxonomy/news_categories.json
 ```
+
+数据源侧方向标签来自 `config/taxonomy/source_tags.json`。它们可以描述源覆盖范围，但不能替代成品新闻一级标题，也不能写入 SQL category。
 
 一级标题就是第一版的“工具目录”式配置入口。数据源管理页面应允许管理员配置：
 

@@ -21,9 +21,9 @@ SQL_EFFECTS_FALLBACK = (
 )
 CATEGORY_ALIASES = {
     "AI Agent": "智能体",
-    "AI应用": "AI 应用",
     "AI 智能体": "智能体",
     "AI智能体": "智能体",
+    "AI应用": "AI 应用",
 }
 
 
@@ -50,8 +50,11 @@ def generate_news_with_minimax(
         return None
 
     system_prompt = (
-        "你是产业情报日报编辑。只输出一个 JSON 对象，不要 markdown，"
-        "不要解释。字段必须适合直接写入 generated_news。"
+        "你是公司规划部的产业情报日报编辑，面向关注 AI 软件能力、AI 工程能力、"
+        "AI 基础设施、硬件芯片和通信系统的内部读者。你必须用简体中文写作；"
+        "除了公司名、产品名、模型名、论文名、协议名等专有名词，不得整句保留英文。"
+        "只输出一个 JSON 对象，不要 markdown，不要解释。字段必须适合直接写入 "
+        "generated_news，并且后续可无损映射到公司内网 SQL。"
     )
     user_prompt = _build_user_prompt(
         news_item=news_item,
@@ -67,7 +70,9 @@ def generate_news_with_minimax(
 
     allowed = list(allowed_categories)
     category = str(parsed.get("category") or fallback_category)
-    category = CATEGORY_ALIASES.get(category, category)
+    alias = CATEGORY_ALIASES.get(category)
+    if alias and (alias in allowed or category not in allowed):
+        category = alias
     if category not in allowed:
         category = _category_fallback(news_item, fallback_category, allowed)
 
@@ -80,6 +85,8 @@ def generate_news_with_minimax(
     if not key_points:
         key_points = fallback_key_points(news_item, category)
     content_json = _coerce_content(parsed.get("content"), news_item, recommendation_reason)
+    if not _passes_generation_quality(title, summary, key_points, content_json):
+        return None
     model_name = settings.minimax_model[:48]
     return GeneratedNewsDraft(
         category=category,
@@ -101,28 +108,39 @@ def _build_user_prompt(
     content = _trim(news_item.content or news_item.summary or "", 5000)
     return json.dumps(
         {
-            "task": "把来源新闻改写成公司内网 SQL 兼容的规划部日报条目。",
+            "task": (
+                "把来源新闻改写成公司内网 SQL 兼容的规划部日报条目。"
+                "这不是翻译摘要，而是形成可给规划部阅读、采信、导出的中文情报卡片。"
+            ),
             "constraints": {
                 "categoryMustBeOneOf": list(allowed_categories),
                 "fallbackCategory": fallback_category,
-                "language": "zh-CN",
+                "language": "必须使用简体中文；英文来源需要翻译并改写成中文情报表达",
                 "doNotInventFacts": True,
                 "keepSourceTraceable": True,
                 "requiredForCompanySql": True,
+                "qualityBar": [
+                    "不要输出原文 HTML、markdown、span 标签或脚本内容",
+                    "不要把 keyPoints 写成一句长话；keyPoints 必须是 4-6 个短关键词，用中文逗号分隔；专有 API/模型名要整体保留，不要拆成零碎英文词",
+                    "不要只写泛泛的“值得关注”“可能影响行业”；每段都要结合来源事实",
+                    "如果公开材料缺少细节，可以写明“公开材料未披露”，但不能编造指标、参数或结论",
+                    "优先突出 AI 软件能力、AI 工程能力、AI 基础设施、硬件芯片、模型/算法/智能体/推理/训练/评测等技术信息",
+                    "商业合作、融资、营销或客户案例只有在包含明确技术路线、产品能力、性能指标、架构变化或竞争影响时才可强化",
+                ],
                 "outputSchema": {
-                    "category": "一级标签",
-                    "title": "80 字以内中文标题",
-                    "summary": "3-4 句业务洞察摘要，避免一句话带过",
-                    "keyPoints": "4-6 个核心关键词，用逗号分隔",
+                    "category": "新闻一级标签，必须从 categoryMustBeOneOf 里选择",
+                    "title": "80 字以内中文标题；不能直接保留英文原标题",
+                    "summary": "3-4 句中文业务洞察摘要，避免一句话带过",
+                    "keyPoints": "4-6 个核心关键词，用中文逗号分隔；每个关键词建议 2-8 个字，专有名词如 torch.accelerator.Graph 必须作为一个词组",
                     "sourceUrl": "原文 URL",
                     "content": {
                         "background": "对应「背景」，不少于 180 字，说明背景、来源语境和问题成因",
-                        "effects": "对应「效果总结」，不少于 220 字，说明短中期外部影响、组织影响或产业变化",
-                        "eventSummary": "对应「事件总结」，不少于 180 字，概括事件本身、涉及主体和关键进展",
+                        "effects": "对应「效果总结」，不少于 220 字，说明结果、性能/效率/生态变化、短中期外部影响或组织影响",
+                        "eventSummary": "对应「事件总结」，不少于 180 字，概括事件本身、涉及主体、时间和关键进展",
                         "technologyAndInnovation": (
                             "对应「技术和创新点总结」，不少于 320 字，说明技术路线、创新点、工程实现或差异化"
                         ),
-                        "valueAndImpact": "对应「价值和影响」，不少于 260 字，说明长期价值、应用潜力、风险和规划判断",
+                        "valueAndImpact": "对应「价值和影响」，不少于 260 字，说明长期价值、应用潜力、风险和规划部判断",
                     },
                 },
             },
@@ -292,6 +310,38 @@ def _coerce_content(
             content[key] = fallback
     content["recommendationReason"] = recommendation_reason
     return content
+
+
+def _passes_generation_quality(
+    title: str,
+    summary: str,
+    key_points: str,
+    content: dict[str, Any],
+) -> bool:
+    required = (
+        "background",
+        "effects",
+        "eventSummary",
+        "technologyAndInnovation",
+        "valueAndImpact",
+    )
+    body_parts = [summary, key_points]
+    body_parts.extend(_coerce_text(content.get(field)) for field in required)
+    body = "\n".join(body_parts)
+    cjk_count = len(re.findall(r"[\u4e00-\u9fff]", body))
+    latin_count = len(re.findall(r"[A-Za-z]", body))
+    if cjk_count < 240:
+        return False
+    if latin_count > cjk_count * 1.6:
+        return False
+    if len(re.findall(r"[\u4e00-\u9fff]", title)) < 4:
+        return False
+    for field in required:
+        if len(re.findall(r"[\u4e00-\u9fff]", _coerce_text(content.get(field)))) < 40:
+            return False
+    if "<span" in body.lower() or "<script" in body.lower():
+        return False
+    return True
 
 
 def _trim(value: str | None, limit: int) -> str:

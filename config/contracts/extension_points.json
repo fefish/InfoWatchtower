@@ -66,8 +66,8 @@
       "registry_key": "model_provider plus model_name plus prompt_version",
       "input": "news_items, raw_items, recommendation_items",
       "output": "generated_news",
-      "first_phase_provider": "MiniMax optional provider with rule_v1 fallback",
-      "rule": "Generated sourceUrl, category and trace IDs are not trusted blindly; final source values are forced from news_items/raw_items and category must be allowed by workspace label_policy."
+      "first_phase_provider": "MiniMax optional provider with rule_v1:fallback review draft",
+      "rule": "Generated sourceUrl, category and trace IDs are not trusted blindly; final source values are forced from news_items/raw_items, category must be allowed by workspace label_policy, and rule_v1 fallback must not be treated as SQL-export-ready content."
     },
     "report_builder": {
       "purpose": "Build daily reports, weekly reports, and topic reports from recommendation or editor-selected items.",
@@ -107,9 +107,11 @@
       "purpose": "Add configurable first-level and second-level labels for source configuration, candidate pool review, reports and future domains.",
       "registry_key": "label_set_code",
       "first_phase_label_sets": [
-        "ai_sql_categories"
+        "ai_sql_categories",
+        "planning_source_tags",
+        "ai_tools_categories"
       ],
-      "rule": "Labels attach through content_labels. Do not add custom per-workspace label columns."
+      "rule": "News labels attach through content_labels. Source-side tags are metadata hints and must not replace generated_news.category."
     },
     "domain_pack": {
       "purpose": "Add a new strategic intelligence board such as hardware, semiconductor, robotics, policy, market, or competitor without changing the core pipeline.",

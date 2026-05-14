@@ -103,7 +103,29 @@
     "current_api": "POST /api/pipeline/daily-runs for full pipeline; POST /api/recommendation/runs for recommendation-only reruns",
     "candidate_rule": "Only active dedupe winners from the requested workspace and target day_key can enter a recommendation run. Losers remain traceable but are not recommended directly.",
     "day_key_rule": "Daily recommendation filters candidates by (news_items.published_at or created_at) in Asia/Shanghai. Freshness scoring for backfill uses the target day end instead of the wall-clock current day.",
-    "planning_intel_priority_rule": "The default planning_intel scorer is technical-intelligence-first: boost paper_rss, research labs, AI software, AI infrastructure, model engineering, inference/training, RAG, multi-agent and agent memory signals; demote finance, funding, earnings, consumer gadget, generic partnership and market-news signals unless editors explicitly override.",
+    "planning_intel_priority_rule": "The default planning_intel scorer is technical-intelligence-first and uses a content admission layer before daily selection. It boosts AI software, AI infrastructure, model engineering, inference/training, RAG, multi-agent, agent memory, hardware vendor technology, competitor technical roadmaps, AI chips, GPU clusters, data center architecture and telecom system signals. Source-level tags are only weak priors: a vendor or hardware source is not enough by itself; the item must contain concrete technical, architecture, AI, chip, data-center or telecom evidence. It demotes finance, funding, earnings, procurement/bidding, consumer gadgets, event promotion, marketing launch events, generic partnership, pure marketing, legal/meta discussion, clickbait, social/education off-scope items, aerospace/rocket off-scope items and off-scope academic/biomedical papers unless editors explicitly override.",
+    "content_admission_levels": {
+      "P0": "major insight, may affect technical roadmap, architecture, cost, standards or competitive landscape",
+      "P1": "high-value technical signal, eligible for daily report",
+      "P2": "medium-value observation, may enter daily when budget remains or weekly/observation pool",
+      "P3": "low-value archive/search-only signal, not selected into daily by default",
+      "R": "rejected or noise, not selected into daily by default"
+    },
+    "content_admission_dimensions": [
+      "topic relevance",
+      "expert impact",
+      "evidence strength",
+      "novelty",
+      "technical maturity or implementation detail",
+      "freshness",
+      "noise penalty"
+    ],
+    "selection_caps": {
+      "source_daily_limit": "hard per-source selected item cap",
+      "paper_rss_daily_ratio": "paper_rss selected items are capped at about 10% of the requested limit",
+      "pool_daily_ratio": "one admission pool should not exceed about 40% of the requested limit",
+      "selected_levels": "select P0/P1 first, then clean P2 with daily-worthy technical signal; noisy P2, P2 paper_rss, P3 and R are not selected by default"
+    },
     "default_limit": 15,
     "default_source_daily_limit": 2,
     "score_dimensions": [
@@ -128,20 +150,23 @@
   },
   "generator_stage": {
     "current_provider": "MiniMax China OpenAI-compatible chat/completions at MINIMAX_BASE_URL or default https://api.minimaxi.com/v1 when MINIMAX_GENERATION_ENABLED=true and MINIMAX_API_KEY is set; deterministic rule_v1 fallback otherwise",
-    "provider_rule": "Model output must be strict JSON and category must be one of the workspace label policy primary labels. Source trace IDs are forced by backend after generation.",
+    "provider_rule": "Model output must be strict JSON, must be Simplified Chinese except for proper nouns, and category must be one of the workspace label policy primary labels. Source trace IDs are forced by backend after generation.",
     "news_format_rule": "For planning_intel/company_sql_v1, generated_news.content_json must contain background, effects, eventSummary, technologyAndInnovation and valueAndImpact so later SQL export can map without guessing.",
-    "fallback_rule": "LLM failure must not abort the daily pipeline; selected recommendations still generate rule_v1 drafts with the same required content_json fields."
+    "fallback_rule": "LLM failure must not abort the daily pipeline; selected recommendations still generate rule_v1:fallback drafts with the same required content_json fields, but generation_status must be fallback_needs_review and standard Company SQL export must reject them until an LLM-ready or edited-ready version exists."
   },
   "scheduled_daily_pipeline": {
     "current_job": "app.pipeline.daily.run_daily_pipeline_job",
     "current_api": "POST /api/pipeline/daily-runs",
     "scheduler_default_mode": "daily_pipeline",
+    "default_source_types": ["rss", "paper_rss", "page_manual", "page_monitor", "wiseflow"],
     "legacy_ingestion_only_mode": "ingestion_only",
     "enabled_by": "INGESTION_SCHEDULER_ENABLED=true",
     "uses_scope_settings": [
       "INGESTION_SCHEDULER_WORKSPACE_CODE",
       "INGESTION_SCHEDULER_SOURCE_TYPES",
-      "INGESTION_SCHEDULER_LIMIT"
+      "INGESTION_SCHEDULER_LIMIT",
+      "INGESTION_CONCURRENCY",
+      "INGESTION_SOURCE_TIMEOUT_SECONDS"
     ],
     "ordered_steps": [
       "optional workspace_ingestion_run",
@@ -152,6 +177,25 @@
       "daily_report_draft"
     ],
     "rule": "The scheduled job must call the same service functions as the manual APIs. It must not bypass adapter, normalization, dedupe or recommendation contracts."
+  },
+  "historical_backfill_stage": {
+    "status": "planned",
+    "purpose": "Recover target-date raw/news candidates that cannot be restored from current RSS windows.",
+    "run_record": "Reuse ingestion_runs in phase 1 with params_json.run_type=historical_backfill and explicit target_day_start, target_day_end, backfill_mode, source_scope and retry_policy.",
+    "mode_priority": [
+      "paper_api: arXiv/OpenAlex/Semantic Scholar/OpenReview/Hugging Face Papers date queries",
+      "archive_page: vendor blogs, standard organizations, cloud/hardware archives and paginated lists",
+      "sitemap: discover dated article URLs from official sitemaps",
+      "retry_failed: low-concurrency long-timeout retry for failed sources",
+      "manual_import: CSV/SQL/manual raw import with full raw_payload_json lineage"
+    ],
+    "success_metrics": [
+      "target-date raw_items created or updated",
+      "target-date news_items normalized",
+      "active winners created or replaced after dedupe",
+      "recommendation candidates and selected daily report items added"
+    ],
+    "rule": "Backfill output must enter raw_items first and then reuse the same normalization, dedupe, recommendation and SQL export pipeline. It must not insert generated_news or SQL rows directly."
   },
   "soft_clustering_stage": {
     "status": "phase_2",

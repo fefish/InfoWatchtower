@@ -2,7 +2,7 @@
 
 规划部全自动热点追踪与情报生产系统。
 
-当前状态：阶段 0-6 已完成可回填闭环。阶段 3 已完成旧种子源导入、共享数据源池、默认工作台源链接、工作台统一标签策略、adapter 框架、RSS/paper RSS/页面源抓取到 `raw_items`、工作台级 ingestion run API，以及 Redis/RQ worker + scheduler 调度入口。阶段 4 已完成 `raw_items -> news_items -> dedupe_groups`：可按工作台标准化 raw、生成 canonical URL 与 dedupe key、执行工作台隔离硬去重，并查询 winner/loser。阶段 5 已完成按 `day_key` 的推荐 run、可解释推荐分、可选 MiniMax 结构化生成、`generated_news`、日报草稿、发布、日报条目编辑和点赞/评分/评论最小 API；`planning_intel` 推荐默认技术情报优先，提升论文、研究机构、AI 软件、AI 基础设施、模型工程、推理/训练、RAG、多智能体和 Agent 工程信号，降权泛商业新闻。阶段 6 已完成已发布日报的公司 SQL 标准导出，导出只取 `adoption_status = 2` 的采信项，`content_json` 只保留旧系统五段字段，`ai_journal.source_title/content` 导出前会清洗为纯文本。前端 `/daily-reports` 已可按日期触发完整流水线，并支持日报正文展示、采信切换、编辑、点赞、评分、评论和追溯查看。scheduler 开启后默认执行每日完整流水线：抓取、标准化/去重、推荐和日报草稿。`planning_intel` 与 `ai_tools` 的标签策略已在后端隔离。下一步进入候选池页面、SQL 导出前端页和公网/内网同步骨架。
+当前状态：阶段 0-6 已完成可回填闭环。阶段 3 已完成旧种子源导入、补充信息源台账导入、共享数据源池、默认工作台源链接、工作台统一标签策略、adapter 框架、RSS/paper RSS/页面源抓取到 `raw_items`、工作台级 ingestion run API，以及 Redis/RQ worker + scheduler 调度入口；规划部工作台 v1 默认 294 个共享源全部启用。阶段 4 已完成 `raw_items -> news_items -> dedupe_groups`：可按工作台标准化 raw、生成 canonical URL 与 dedupe key、执行工作台隔离硬去重，并查询 winner/loser。阶段 5 已完成完整日报流水线、内容准入等级、可解释推荐分、可选 MiniMax 结构化生成、`generated_news`、日报草稿、发布、日报条目编辑和点赞/评分/评论最小 API；`planning_intel` 推荐默认技术情报优先，提升 AI 软件、AI 基础设施、模型工程、推理/训练、Agent、硬件厂商技术路线和通信系统信号，降权泛商业新闻、营销、财报、消费硬件和弱相关内容。阶段 6 已完成已发布日报的公司 SQL 标准导出，导出只取 `adoption_status = 2`、`generation_status = ready` 且非 `rule_v1` 的采信项，`content_json` 只保留旧系统五段字段，`created_at` 使用旧内网可导入的 `'YYYY-MM-DD HH:MM:SS'` 字面量并在缺失发布时间时兜底到日报 `day_key 09:00:00`。所有 SQL 预览必须通过 `scripts/validate_company_sql.py`，0505 预览是字段校验基准。前端已包含浅色工作台壳、数据源管理、候选池、推荐运行、抓取覆盖率、日报、SQL 导出和用户权限页面。scheduler 开启后默认执行每日完整流水线：抓取、标准化/去重、推荐和日报草稿。`planning_intel` 与 `ai_tools` 的标签策略已在后端隔离。下一步进入候选质量治理、历史补采、周报/需求/任务后端 API、公网/内网同步骨架和部署硬化。
 
 ## 接手入口
 
@@ -33,7 +33,7 @@
 
 本地旧 `.env` 已复制到 `config/.env` 以便复用，但不会进入 Git。
 
-当前种子源统计：wiseflow 1 个、RSS 108 个、页面源 4 个，合并索引 113 个。
+当前种子源统计：旧 113 个种子源 + 补充 CSV 台账 248 条导入记录，按 `source_type + url` 去重后形成 294 个共享源；规划部工作台 v1 默认全部启用。`config/taxonomy/source_tags.json` 是数据源侧方向标签，只用于源管理、覆盖分析和评分先验，不进入成品新闻一级标签或公司 SQL category。
 
 当前数据库骨架：40 张业务表，覆盖用户/RBAC、工作台、共享数据源、标签、raw/news、去重、推荐、日报/周报、互动反馈、SQL 导出、同步回流和战略需求闭环。任意日报条目应能沿外键追回 `raw_items.raw_payload_json`。
 
@@ -91,7 +91,7 @@ make build
 - 数据源页右侧展示工作台统一标签策略，规划部默认使用旧系统兼容的 10 个一级标签，AI 工具桌面默认使用独立工具标签；一级/二级标签都支持新增、重命名、删除，且不在单个源里维护标签。
 - 数据源页每个源都有“配置”入口，可设置当前工作台启用状态、权重和日限；配置开关文案为“启用”。
 - 左侧导航来自数据库，不出现工具目录、工具任务或独立热点专题。
-- 数据源页显示共享源 113、当前工作台启用 79。
+- 数据源页显示共享源 294、规划部工作台默认全部启用。
 - 数据源列表和右侧标签策略在桌面宽度下不应被横向截断；其他占位页应使用统一内容容器，不出现显示不全。
 - 对任意启用的 `rss`、`paper_rss`、`page_manual` 或 `page_monitor` 源点击“抓取”，成功后会提示拉取、新增、更新数量。
 - 重复抓取同一个 RSS 源时，`raw_items` 不重复插入，应表现为新增 0、更新大于 0。
@@ -101,3 +101,5 @@ make build
 - `GET /api/dedupe-groups?workspace_code=planning_intel` 可看到去重 winner/loser。
 - `/daily-reports` 页面可选择日期并点击“生成日报草稿”，调用 `POST /api/pipeline/daily-runs`，执行抓取、标准化/去重、推荐、结构化稿和日报草稿。
 - `/daily-reports` 页面可按日报正文阅读，支持发布、采信/备选/剔除切换、编辑标题/摘要/要点、点赞、评分、评论和查看 raw/news/source 追溯 ID。
+- `/exports` 页面可选择已发布日报，生成、预览和下载公司 SQL。
+- 所有本地 SQL 预览导入内网前必须通过 `scripts/validate_company_sql.py`；需要统一标题时先运行 `scripts/validate_company_sql.py --fix-headers`。

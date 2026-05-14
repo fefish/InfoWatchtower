@@ -28,6 +28,8 @@ async def create_daily_pipeline_run(
                 day_key=payload.day_key,
                 source_types=payload.source_types,
                 ingestion_limit=payload.ingestion_limit,
+                ingestion_concurrency=payload.ingestion_concurrency,
+                ingestion_source_timeout_seconds=payload.ingestion_source_timeout_seconds,
                 recommendation_limit=payload.recommendation_limit,
                 source_daily_limit=payload.source_daily_limit,
                 create_daily_draft=payload.create_daily_draft,

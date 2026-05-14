@@ -139,7 +139,7 @@ AI 应用
 - `AI 智能体` -> `智能体`
 - `AI智能体` -> `智能体`
 
-新系统可以扩展标签体系，但内网 SQL 导出必须默认兼容这 10 个一级标签，除非内部平台字段和展示规则明确升级。
+新系统标准导出已经恢复为这 10 个 AI 一级标签。数据源侧方向标签只用于源管理和评分先验，不进入公司 SQL category。
 
 ## 5. 内网 SQL 固定格式
 
@@ -176,7 +176,7 @@ VALUES
 - `source_url`：原始新闻 URL。
 - `source_title`：原始标题，不是生成后的标题。
 - `content`：原始摘要/正文材料。
-- `created_at`：原始发布时间，转 MySQL `YYYY-MM-DD HH:MM:SS`；解析失败时为 `NULL`。
+- `created_at`：原始发布时间，转 MySQL `YYYY-MM-DD HH:MM:SS`。旧脚本曾可能在解析失败时写 `NULL`；新系统标准导出为了避免内网 `strftime` 类报错，统一写带引号的 `'YYYY-MM-DD HH:MM:SS'` 字面量，缺失发布时间时兜底为日报 `day_key 09:00:00`，并由 `scripts/validate_company_sql.py` 校验。
 
 ### 5.2 ai_journal_focus
 
@@ -218,7 +218,7 @@ LIMIT 1;
 - `key_points`：关键词字符串。
 - `content_json`：只存 `analysis.content` 对象的 JSON 字符串，也就是 `background/effects/eventSummary/technologyAndInnovation/valueAndImpact`。
 - `source_url`：原始 URL。
-- `created_at`：原始发布时间。
+- `created_at`：必须与 `ai_journal.created_at` 一致，使用带引号的 `'YYYY-MM-DD HH:MM:SS'` 字面量；新系统不得省略该列，也不得写 `NULL`、`STR_TO_DATE` 或 `CAST`。
 
 ### 5.4 t_news_data_info
 

@@ -1,5 +1,18 @@
 <script setup lang="ts">
-import { Activity, CalendarDays, Database, FileText, Layers, LogOut, Radio, ShieldCheck, SquareStack, Users } from "lucide-vue-next";
+import {
+  Activity,
+  Bell,
+  CalendarDays,
+  Database,
+  FileText,
+  Layers,
+  LogOut,
+  Radio,
+  Search,
+  ShieldCheck,
+  SquareStack,
+  Users
+} from "lucide-vue-next";
 import { computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
 
@@ -102,9 +115,20 @@ async function logout() {
           <h1>{{ workspace.current?.name || "工作台" }}</h1>
           <p class="topbar-subtitle">{{ workspace.error || workspace.current?.description || "正在加载工作台配置" }}</p>
         </div>
-        <div class="user-chip">
-          <span>{{ session.user?.display_name }}</span>
-          <strong>{{ session.user?.roles[0] }}</strong>
+
+        <div class="topbar-tools">
+          <label class="global-search" aria-label="搜索资源">
+            <Search :size="16" />
+            <input type="search" placeholder="搜索资源..." />
+          </label>
+          <button class="notification-button" type="button" title="通知">
+            <Bell :size="19" />
+            <span aria-hidden="true"></span>
+          </button>
+          <div class="user-chip">
+            <span>{{ session.user?.display_name }}</span>
+            <strong>{{ session.user?.roles[0] }}</strong>
+          </div>
         </div>
       </header>
 

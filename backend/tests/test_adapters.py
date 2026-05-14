@@ -8,6 +8,7 @@ def test_default_adapter_registry_contains_first_phase_source_types():
 
     assert registry.list_types() == [
         "crawler",
+        "csv",
         "internal",
         "manual",
         "page_manual",

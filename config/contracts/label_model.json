@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "description": "Configurable first-level and second-level label model for model tagging, candidate pool items, reports and future domains.",
-  "core_rule": "A workspace owns one unified label policy. The first-level labels constrain model-generated news structure and post-dedupe label finalization; per-source label configuration is not used because one source may contain multiple directions.",
+  "description": "Configurable news first-level labels plus independent source-side tags.",
+  "core_rule": "A workspace owns one unified news label policy. For planning_intel, generated_news.category, daily reports and company SQL category must use the AI 10 labels in config/taxonomy/news_categories.json. Source-side tags describe what a data source may cover, but they do not constrain or replace the final news category.",
   "tables": {
     "label_sets": [
       "workspace_code",
@@ -37,8 +37,14 @@
   },
   "first_phase_label_sets": {
     "ai_sql_categories": {
+      "workspace_code": "planning_intel",
       "source": "config/taxonomy/news_categories.json",
-      "purpose": "The 10 first-level labels required by the current company SQL export and first-phase clustering/recommendation directory."
+      "purpose": "The planning workspace news first-level taxonomy. Company SQL category uses these 10 labels."
+    },
+    "planning_source_tags": {
+      "workspace_code": "planning_intel",
+      "source": "config/taxonomy/source_tags.json",
+      "purpose": "Source-side strategic tags for source filtering, coverage analysis and score priors. They are not generated_news.category."
     },
     "ai_tools_categories": {
       "workspace_code": "ai_tools",
@@ -56,6 +62,7 @@
     "fields": [
       "label_set_code",
       "news_format_code",
+      "export_category_mode",
       "required_content_fields",
       "allowed_primary_categories",
       "secondary_labels_by_primary",
@@ -65,6 +72,7 @@
     ],
     "planning_intel_default_label_set_code": "ai_sql_categories",
     "planning_intel_default_news_format_code": "company_sql_v1",
+    "planning_intel_default_export_category_mode": "news_primary",
     "company_sql_v1_required_content_fields": [
       "background",
       "effects",
@@ -78,7 +86,7 @@
       "news_generation",
       "post_dedupe_labeling"
     ],
-    "source_label_config": "disabled"
+    "source_tag_config": "enabled_as_metadata_only"
   },
   "target_types": [
     "data_source",
@@ -100,15 +108,15 @@
     "import"
   ],
   "rules": [
-    "Source management pages must expose the workspace unified label policy before per-source controls.",
+    "Source management pages must expose the workspace unified news label policy before per-source controls.",
     "Model prompts for raw-to-news generation must use workspaces.config_json.label_policy.allowed_primary_categories as the legal category list.",
     "Model prompts may use workspaces.config_json.label_policy.secondary_labels_by_primary as optional second-level labels under the selected primary category.",
     "After dedupe, model/rule label finalization must use the same workspace label policy, not per-source labels.",
-    "Source management pages must not configure labels per source in the first phase; one source can contain multiple strategic directions.",
+    "Source management pages may display source-side tags from planning_source_tags, but these tags are only source metadata/hints.",
     "Second-level labels are stored as labels with parent_label_id pointing to a first-level label.",
     "Clustering and recommendation rules should reference label_set_code, label code and optional parent/child label paths.",
     "Candidate pool pages should display labels attached to the dedupe winner and its group.",
-    "Company SQL export must map adopted daily report items to config/taxonomy/news_categories.json until the internal platform supports broader taxonomies.",
+    "Company SQL export uses generated_news.category, which for planning_intel must be one of the AI 10 labels.",
     "Adding hardware or semiconductor labels should add a label set or domain pack, not new columns."
   ]
 }

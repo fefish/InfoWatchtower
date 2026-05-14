@@ -104,6 +104,8 @@ async def test_workspace_ingestion_run_fetches_enabled_sources_idempotently():
     assert first.raw_created == 2
     assert first.raw_updated == 0
     assert first.params_json["workspace_code"] == "planning_intel"
+    assert first.params_json["concurrency"] == 8
+    assert first.params_json["source_timeout_seconds"] == 25.0
     assert first.summary_json["sources"][0]["data_source_id"] == source.id
     assert session.scalar(select(func.count(RawItem.id))) == 2
 

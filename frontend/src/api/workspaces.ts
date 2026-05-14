@@ -18,6 +18,7 @@ export interface WorkspaceLabelPolicy {
   workspace_code: string;
   label_set_code: string;
   news_format_code: string;
+  export_category_mode: string;
   required_content_fields: string[];
   allowed_primary_categories: string[];
   secondary_labels_by_primary: Record<string, string[]>;
@@ -29,6 +30,7 @@ export interface WorkspaceLabelPolicy {
 export interface WorkspaceLabelPolicyUpdate {
   label_set_code: string;
   news_format_code: string;
+  export_category_mode: string;
   required_content_fields: string[];
   allowed_primary_categories: string[];
   secondary_labels_by_primary: Record<string, string[]>;

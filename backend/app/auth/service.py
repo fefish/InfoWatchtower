@@ -66,6 +66,7 @@ WORKSPACE_DEFINITIONS = {
 DEFAULT_WORKSPACE_LABEL_POLICY = {
     "label_set_code": "ai_sql_categories",
     "news_format_code": "company_sql_v1",
+    "export_category_mode": "news_primary",
     "required_content_fields": [
         "background",
         "effects",
@@ -83,6 +84,7 @@ AI_TOOLS_SECONDARY_LABELS = ["cursor", "claude code", "opencode", "codex"]
 AI_TOOLS_LABEL_POLICY = {
     "label_set_code": "ai_tools_categories",
     "news_format_code": "tool_intel_v1",
+    "export_category_mode": "news_primary",
     "required_content_fields": [
         "background",
         "effects",
@@ -364,11 +366,10 @@ def _ensure_workspaces(session: Session) -> dict[str, Workspace]:
 
 
 def _default_workspace_label_policy() -> dict:
-    taxonomy_path = REPO_ROOT / "config" / "taxonomy" / "news_categories.json"
-    categories = json.loads(taxonomy_path.read_text(encoding="utf-8"))["categories"]
+    taxonomy = _news_taxonomy()
     return {
         **DEFAULT_WORKSPACE_LABEL_POLICY,
-        "allowed_primary_categories": categories,
+        "allowed_primary_categories": taxonomy["categories"],
         "secondary_labels_by_primary": {},
     }
 
@@ -378,7 +379,7 @@ def _workspace_label_policy_for_seed(workspace_code: str, existing_policy: dict 
         if not existing_policy or existing_policy.get("label_set_code") != "ai_tools_categories":
             return _copy_policy(AI_TOOLS_LABEL_POLICY)
         return _merge_policy_defaults(existing_policy, AI_TOOLS_LABEL_POLICY)
-    if existing_policy:
+    if existing_policy and existing_policy.get("label_set_code") == "ai_sql_categories":
         return _merge_policy_defaults(existing_policy, _default_workspace_label_policy())
     return _default_workspace_label_policy()
 
@@ -393,6 +394,8 @@ def _merge_policy_defaults(policy: dict, default_policy: dict) -> dict:
         or default_policy.get("required_content_fields", []),
         "tagging_stages": policy.get("tagging_stages")
         or default_policy.get("tagging_stages", ["news_generation", "post_dedupe_labeling"]),
+        "export_category_mode": policy.get("export_category_mode")
+        or default_policy.get("export_category_mode", "news_primary"),
     }
 
 
@@ -470,17 +473,28 @@ def _ensure_super_admin_workspace_memberships(
 
 
 def _ensure_default_label_sets(session: Session) -> None:
-    taxonomy_path = REPO_ROOT / "config" / "taxonomy" / "news_categories.json"
-    categories = json.loads(taxonomy_path.read_text(encoding="utf-8"))["categories"]
+    news_taxonomy = _news_taxonomy()
+    source_taxonomy = _source_tag_taxonomy()
     _ensure_label_set(
         session=session,
-        workspace_code="shared",
+        workspace_code="planning_intel",
         domain_code="ai",
         code="ai_sql_categories",
         name="AI SQL 一级标签",
-        description="兼容当前公司 SQL 导出的 10 个一级标签。",
-        categories=categories,
+        description="规划部成品新闻和公司 SQL 导出的 10 个一级标签。",
+        categories=news_taxonomy["categories"],
         secondary_labels_by_primary={},
+    )
+    _ensure_label_set(
+        session=session,
+        workspace_code="planning_intel",
+        domain_code="ai",
+        code="planning_source_tags",
+        name="规划部数据源方向标签",
+        description="只用于数据源覆盖范围、过滤、评分先验和看板展示，不写入 generated_news.category。",
+        categories=source_taxonomy["tags"],
+        secondary_labels_by_primary=source_taxonomy["secondary_tags_by_primary"],
+        target_types=["data_source", "workspace_source_link"],
     )
     _ensure_label_set(
         session=session,
@@ -494,6 +508,23 @@ def _ensure_default_label_sets(session: Session) -> None:
     )
 
 
+def _news_taxonomy() -> dict[str, object]:
+    taxonomy_path = REPO_ROOT / "config" / "taxonomy" / "news_categories.json"
+    taxonomy = json.loads(taxonomy_path.read_text(encoding="utf-8"))
+    return {
+        "categories": list(taxonomy.get("categories") or []),
+    }
+
+
+def _source_tag_taxonomy() -> dict[str, object]:
+    taxonomy_path = REPO_ROOT / "config" / "taxonomy" / "source_tags.json"
+    taxonomy = json.loads(taxonomy_path.read_text(encoding="utf-8"))
+    return {
+        "tags": list(taxonomy.get("tags") or []),
+        "secondary_tags_by_primary": dict(taxonomy.get("secondary_tags_by_primary") or {}),
+    }
+
+
 def _ensure_label_set(
     session: Session,
     workspace_code: str,
@@ -503,7 +534,16 @@ def _ensure_label_set(
     description: str,
     categories: list[str],
     secondary_labels_by_primary: dict[str, list[str]],
+    target_types: list[str] | None = None,
 ) -> None:
+    label_targets = target_types or [
+        "data_source",
+        "workspace_source_link",
+        "news_item",
+        "dedupe_group",
+        "daily_report_item",
+        "weekly_report_item",
+    ]
     label_set = session.scalar(
         select(LabelSet).where(
             LabelSet.workspace_code == workspace_code,
@@ -519,16 +559,7 @@ def _ensure_label_set(
             name=name,
             description=description,
             scope_type="domain",
-            target_types={
-                "target_types": [
-                    "data_source",
-                    "workspace_source_link",
-                    "news_item",
-                    "dedupe_group",
-                    "daily_report_item",
-                    "weekly_report_item",
-                ],
-            },
+            target_types={"target_types": label_targets},
             enabled=True,
         )
         session.add(label_set)
@@ -539,6 +570,7 @@ def _ensure_label_set(
         label_set.name = name
         label_set.description = description
         label_set.scope_type = "domain"
+        label_set.target_types = {"target_types": label_targets}
         label_set.enabled = True
 
     existing_labels = {label.code: label for label in label_set.labels}

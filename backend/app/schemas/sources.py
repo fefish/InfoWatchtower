@@ -22,6 +22,8 @@ class DataSourceRead(BaseModel):
     last_error: str
     primary_category: str
     info_category: str
+    source_tags: list[str] = Field(default_factory=list)
+    source_secondary_tags: list[str] = Field(default_factory=list)
     workspace_link_enabled: bool | None = None
     workspace_source_weight: float | None = None
     workspace_daily_limit: int | None = None

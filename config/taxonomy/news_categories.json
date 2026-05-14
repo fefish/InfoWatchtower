@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "description": "Primary news category list used by the legacy generation prompt and company SQL export.",
+  "description": "Planning-intel news first-level category list. generated_news.category and company SQL category must use one of these 10 labels.",
   "categories": [
     "AI Infra",
     "AI 应用",

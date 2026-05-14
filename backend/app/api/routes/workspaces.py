@@ -120,6 +120,7 @@ def update_workspace_label_policy(
     config["label_policy"] = {
         "label_set_code": payload.label_set_code,
         "news_format_code": payload.news_format_code,
+        "export_category_mode": _normalize_export_category_mode(payload.export_category_mode),
         "required_content_fields": required_content_fields,
         "allowed_primary_categories": allowed_categories,
         "secondary_labels_by_primary": secondary_labels,
@@ -171,6 +172,20 @@ def _taxonomy_categories() -> list[str]:
     return list(taxonomy.get("categories") or [])
 
 
+def _taxonomy_secondary_labels() -> dict[str, list[str]]:
+    return {}
+
+
+def _normalize_export_category_mode(value: str) -> str:
+    mode = (value or "news_primary").strip()
+    if mode != "news_primary":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="export_category_mode must be news_primary",
+        )
+    return mode
+
+
 def _normalize_policy_categories(categories: list[str]) -> list[str]:
     normalized: list[str] = []
     for category in categories:
@@ -215,9 +230,16 @@ def _workspace_label_policy_to_read(workspace: Workspace) -> WorkspaceLabelPolic
     categories = _taxonomy_categories()
     config = workspace.config_json or {}
     policy = config.get("label_policy") or {}
+    if workspace.code == "planning_intel" and policy.get("label_set_code") not in {None, "ai_sql_categories"}:
+        policy = {}
     allowed_categories = list(policy.get("allowed_primary_categories") or categories)
+    raw_secondary_labels = (
+        policy.get("secondary_labels_by_primary")
+        if "secondary_labels_by_primary" in policy
+        else _taxonomy_secondary_labels()
+    )
     secondary_labels = _normalize_secondary_labels(
-        dict(policy.get("secondary_labels_by_primary") or {}),
+        dict(raw_secondary_labels or {}),
         allowed_categories,
     )
     default_category = str(policy.get("default_category") or "AI 应用")
@@ -230,6 +252,7 @@ def _workspace_label_policy_to_read(workspace: Workspace) -> WorkspaceLabelPolic
         workspace_code=workspace.code,
         label_set_code=str(policy.get("label_set_code") or "ai_sql_categories"),
         news_format_code=str(policy.get("news_format_code") or "company_sql_v1"),
+        export_category_mode=_normalize_export_category_mode(str(policy.get("export_category_mode") or "news_primary")),
         required_content_fields=_normalize_required_content_fields(
             list(policy.get("required_content_fields") or DEFAULT_REQUIRED_CONTENT_FIELDS),
         ),

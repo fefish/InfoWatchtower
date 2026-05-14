@@ -2,6 +2,7 @@
   "schema_version": 1,
   "description": "Canonical mapping from source data through InfoWatchtower news records to company intranet SQL.",
   "taxonomy_file": "config/taxonomy/news_categories.json",
+  "source_tag_taxonomy_file": "config/taxonomy/source_tags.json",
   "layers": {
     "source_config": {
       "contract_file": "config/contracts/source_fields.json",
@@ -109,7 +110,7 @@
       "notes": "sourceUrl and created are forced from the original news item, not trusted from the model. Runtime GeneratedNews stores content_json directly; exporter projects it back to the legacy content object."
     },
     "company_sql": {
-      "export_scope": "Only published/adopted daily report items are exported by default. Candidate-only items and non-adopted retained items stay inside InfoWatchtower unless an admin explicitly creates a special export job.",
+      "export_scope": "Only published/adopted daily report items with generation_status=ready and non-rule_v1 generated content are exported by default. Candidate-only items, non-adopted retained items, and fallback_needs_review generated drafts stay inside InfoWatchtower unless an admin explicitly creates a special export job.",
       "implemented_endpoint": "POST /api/exports/company-sql/daily-reports/{daily_report_id}",
       "implemented_service": "backend/app/exports/company_sql.py",
       "tables_in_order": [
@@ -120,6 +121,10 @@
       ],
       "one_news_item_sql_statement_count": 4,
       "safe_write_pattern": "INSERT IGNORE ai_journal first; later tables use INSERT ... SELECT id FROM ai_journal WHERE source_url = :source_url LIMIT 1.",
+      "datetime_literal_rule": "ai_journal.created_at and ai_journal_analysis.created_at must keep the legacy generate_ai_sql.py column shape and literal style: a quoted MySQL datetime literal 'YYYY-MM-DD HH:MM:SS'. If the source item has no published time, standard daily export falls back to daily_reports.day_key 09:00:00 instead of writing NULL. Do not replace this with STR_TO_DATE/CAST and do not omit ai_journal_analysis.created_at unless the intranet importer contract is explicitly changed and revalidated.",
+      "canonical_header_title": "InfoWatchtower Company SQL Preview",
+      "validation_script": "scripts/validate_company_sql.py",
+      "validation_baseline": "outputs/sql/previews/planning_intel_2026-05-05_company_sql_preview.sql",
       "content_json_export_shape": {
         "source": "daily_report_items.editor_content_json overrides generated_news.content_json.",
         "include_fields_only": [
@@ -163,12 +168,17 @@
   "export_validation_rules": [
     "default export query must start from published daily_report_items joined to generated_news/news_items/raw_items.",
     "only daily_report_items with adoption_status == 2 are exported by the standard daily SQL job.",
-    "category must be one of config/taxonomy/news_categories.json categories.",
+    "adopted items must point to generated_news.generation_status == ready and generated_by must not start with rule_v1.",
+    "category must be one of config/taxonomy/news_categories.json AI 10 first-level labels.",
+    "source tags from config/taxonomy/source_tags.json must not be exported as category.",
     "source_url is required and should be checked against the company ai_journal.source_url max length before export.",
     "title, summary, key_points, and content_json are required for ai_journal_analysis and t_news_data_info.",
     "content_json must contain background/effects/eventSummary/technologyAndInnovation/valueAndImpact.",
     "ai_journal.source_title and ai_journal.content must be plain text in exported SQL; raw_items.raw_payload_json and raw_items.raw_content preserve the original unmodified payload for lineage.",
-    "created_at should preserve original published time; do not redistribute dates.",
+    "ai_journal.created_at and ai_journal_analysis.created_at should preserve original published time; do not redistribute dates.",
+    "created_at literals must match the old validated SQL shape: quoted 'YYYY-MM-DD HH:MM:SS', with no STR_TO_DATE/CAST wrapper and no omitted ai_journal_analysis.created_at column. Missing source published_at falls back to daily_reports.day_key 09:00:00 for import stability.",
+    "Every SQL preview must pass scripts/validate_company_sql.py before it is imported into the intranet. The script validates the 4-table order, exact column lists, field-level value rules, source_url lineage, matching created_at fields, content_json five-key shape, no HTML tags, no NULL created_at, and no STR_TO_DATE/CAST wrapper.",
+    "SQL preview headers must use the canonical InfoWatchtower Company SQL Preview title block. Run scripts/validate_company_sql.py --fix-headers to normalize local preview file titles before validation.",
     "standard daily export writes adoption_status = 2. Non-daily candidates are not exported by default."
   ]
 }

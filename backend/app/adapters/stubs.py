@@ -27,6 +27,10 @@ class CustomCrawlerAdapter(EmptyAdapter):
     source_type = "crawler"
 
 
+class CsvFileAdapter(EmptyAdapter):
+    source_type = "csv"
+
+
 class PaperApiAdapter(EmptyAdapter):
     source_type = "paper_api"
 

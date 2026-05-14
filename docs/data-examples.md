@@ -184,6 +184,19 @@ GET  /api/dedupe-groups?workspace_code=planning_intel
   "workspace_code": "planning_intel",
   "label_set_code": "ai_sql_categories",
   "news_format_code": "company_sql_v1",
+  "export_category_mode": "news_primary",
+  "allowed_primary_categories": [
+    "AI Infra",
+    "AI 应用",
+    "测评技术",
+    "大厂动态",
+    "模型",
+    "算法",
+    "推理加速",
+    "训练技术",
+    "智能体",
+    "基础竞争力"
+  ],
   "required_content_fields": [
     "background",
     "effects",
@@ -257,7 +270,7 @@ GET  /api/dedupe-groups?workspace_code=planning_intel
 }
 ```
 
-注意：`adoption_status = 2` 只是表示它已进入日报草稿的采信集合；标准 SQL 导出仍然要求日报本身 `status = published`。
+注意：`adoption_status = 2` 只是表示它已进入日报草稿的采信集合；标准 SQL 导出仍然要求日报本身 `status = published`，并且对应 `generated_news.generation_status = ready`、`generated_by` 不能是 `rule_v1`。规则 fallback 草稿只用于人工复核，不直接导出。
 
 所以仍能追溯回模型原稿和原始数据。
 
@@ -328,4 +341,16 @@ SELECT NULL, id, NULL, 2, '智能体',
 FROM ai_journal
 WHERE source_url = 'https://openai.com/index/introducing-workspace-agents-in-chatgpt'
 LIMIT 1;
+```
+
+导出后必须运行：
+
+```bash
+python3 scripts/validate_company_sql.py outputs/sql/previews/planning_intel_2026-05-05_company_sql_preview.sql
+```
+
+该脚本以 2026-05-05 预览为字段基准，校验 4 表顺序、列名、每个字段值、日期、URL 串联、五段正文 JSON 和禁用写法。需要统一标题时先运行：
+
+```bash
+python3 scripts/validate_company_sql.py --fix-headers
 ```

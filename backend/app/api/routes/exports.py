@@ -8,6 +8,7 @@ from app.api.routes.auth import get_current_user, require_super_admin
 from app.auth.service import write_audit
 from app.core.database import get_db_session
 from app.exports.company_sql import (
+    DailyReportGenerationNotReadyError,
     DailyReportNotFoundError,
     DailyReportNotPublishedError,
     generate_company_sql_for_daily_report,
@@ -37,6 +38,8 @@ def create_company_sql_export(
     except DailyReportNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except DailyReportNotPublishedError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except DailyReportGenerationNotReadyError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
     write_audit(

@@ -16,7 +16,8 @@
 - 数据源字段契约：`config/contracts/source_fields.json`
 - 采集与去重契约：`config/contracts/adapter_pipeline.json`
 - 新闻到 SQL 映射：`config/contracts/news_sql_mapping.json`
-- 一级标签：`config/taxonomy/news_categories.json`
+- 新闻一级标签：`config/taxonomy/news_categories.json`
+- 数据源方向标签：`config/taxonomy/source_tags.json`
 - 登录设计：`docs/auth-unified-login.md`
 - 旧系统规格：`docs/legacy-system-spec.md`
 
@@ -52,6 +53,7 @@ Adapter 不负责：
 | `page_monitor` | `PageListingAdapter` | 列表页抓链接，再抓详情页 |
 | `page_manual` | `ManualPageAdapter` | 手工 seed URL |
 | `crawler` | `CustomCrawlerAdapter` | 自定义爬虫 |
+| `csv` | `CsvFileAdapter` | 本地/桌面 CSV 源，后续按 CSV schema 映射为 raw items |
 | `paper_api` | `PaperApiAdapter` | arXiv API、Semantic Scholar、OpenAlex、Crossref |
 | `paper_page` | `PaperPageAdapter` | Hugging Face Papers 等页面 |
 | `manual` | `ManualNewsAdapter` | 人工补录 |
@@ -152,7 +154,7 @@ model_name
 prompt_version
 ```
 
-生成 `generated_news.category` 时必须读取当前工作台的 `workspaces.config_json.label_policy.allowed_primary_categories`；生成二级标签时读取 `secondary_labels_by_primary` 中当前一级标签下的候选项。生成结构化正文时读取同一策略下的 `news_format_code` 和 `required_content_fields`。第一阶段规划部默认使用 `config/taxonomy/news_categories.json` 的 10 个旧系统兼容一级标签和 `company_sql_v1` 内容结构；AI 工具桌面默认使用独立工具标签体系。单个数据源不配置标签；同一个信息源可能覆盖多个关注方向，最终标签由新闻内容和工作台统一策略共同决定。
+生成 `generated_news.category` 时必须读取当前工作台的 `workspaces.config_json.label_policy.allowed_primary_categories`；生成二级标签时读取 `secondary_labels_by_primary` 中当前一级标签下的候选项。生成结构化正文时读取同一策略下的 `news_format_code` 和 `required_content_fields`。第一阶段规划部默认使用 `config/taxonomy/news_categories.json` 的 AI 十分类和 `company_sql_v1` 内容结构，`export_category_mode=news_primary` 时公司 SQL category 直接写 `generated_news.category`。`config/taxonomy/source_tags.json` 只用于数据源侧方向标签，不参与成品新闻 category 定稿。AI 工具桌面默认使用独立工具标签体系。
 
 ## 6. 去重在哪一步做
 
@@ -186,12 +188,12 @@ workspace ingestion run
 第一版已实现：
 
 - `POST /api/ingestion/runs` 创建同步执行的工作台级 run。
-- scheduler 可按环境变量定时把每日完整流水线入队，worker 从 Redis/RQ 执行。
-- 默认处理当前工作台已启用、且源本身启用的 `rss/paper_rss`。
+- scheduler 可按环境变量定时把每日完整流水线入队，worker 从 Redis/RQ 执行。工作台级抓取支持并发池和单源超时，默认 `INGESTION_CONCURRENCY=8`、`INGESTION_SOURCE_TIMEOUT_SECONDS=25`。
+- 默认处理当前工作台已启用、且源本身启用的 `rss/paper_rss/page_manual/page_monitor/wiseflow`。
 - `ingestion_runs` 保存 run 参数、状态、处理源数量、成功/失败、拉取数、raw 新增数和 raw 更新数。
 - `summary_json.sources` 保存每个源的结果摘要。
 
-尚未实现：失败源重试队列。已实现 scheduler 默认触发 `ingestion -> normalize/dedupe -> recommendation -> daily_report_draft`；如需只抓取，可设置 `SCHEDULER_JOB_MODE=ingestion_only`。
+尚未实现：失败源重试队列。已实现并发抓取和 scheduler 默认触发 `ingestion -> normalize/dedupe -> recommendation -> daily_report_draft`；如需只抓取，可设置 `SCHEDULER_JOB_MODE=ingestion_only`。
 
 ## 6.2 标准化与硬去重 API
 
@@ -224,7 +226,7 @@ workspace ingestion run
 
 ## 6.4 覆盖率、失败源和历史补采
 
-不要把“配置了多少源”和“某天有多少候选”混为一谈。某个工作台启用了 70+ 个 RSS/论文源，只说明这些源会被纳入抓取计划；它不保证每个源在目标日期都贡献候选。
+不要把“配置了多少源”和“某天有多少候选”混为一谈。规划部工作台 v1 默认全量启用 294 个共享源，只说明这些源会被纳入抓取计划；它不保证每个源在目标日期都贡献候选。
 
 候选数量取决于：
 
@@ -254,11 +256,24 @@ per_source_breakdown
 
 历史补采不能只靠普通 RSS。很多 RSS 只暴露最近 N 条，今天拉取不一定能还原 5 天前或 1 个月前的完整内容。需要为关键源逐步补：
 
-- 官方归档页分页抓取。
-- 官方 API 或搜索 API。
-- paper API，例如 arXiv、OpenAlex、Semantic Scholar。
-- 页面详情 crawler。
-- 手工补录或 CSV/SQL 导入。
+- 论文/API：arXiv、OpenAlex、Semantic Scholar、OpenReview、Hugging Face Papers 等可按日期回查的接口，优先用于恢复历史论文候选。
+- 官方归档页：厂商技术博客、标准组织、云厂商、硬件厂商的 archive、sitemap、分页列表和详情页 crawler。
+- 页面监控增强：对已知页面源补 `since/until`、URL 发现和详情抽取，不能只依赖当前首页。
+- 失败源重试：对 timeout/403/connect error 按低并发、长超时、退避策略重试，并把失败原因写入 run summary。
+- 手工补录或 CSV/SQL 导入：作为最后兜底，必须仍然写入 `raw_items.raw_payload_json`，保留追溯。
+
+历史补采 run 可以先复用 `ingestion_runs`，但参数必须明确：
+
+```text
+run_type = historical_backfill
+target_day_start
+target_day_end
+backfill_mode = paper_api | archive_page | sitemap | retry_failed | manual_import
+source_scope = all | selected_source_ids | source_type
+retry_policy
+```
+
+补采验收口径不是“抓了多少源”，而是目标日期新增了多少 `raw_items`、标准化出多少 `news_items`、去重后新增/替换多少 active winner，以及这些新增候选有多少进入推荐/日报。
 
 没有覆盖率和补采之前，日报候选少时应先查 `ingestion_runs`、`raw_items` 和 `news_items` 的日期分布，再判断推荐策略是否需要调整。
 

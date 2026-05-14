@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "description": "Source-side strategic tags. These tags describe what a source may cover and are only hints for source management, filtering, scoring and coverage analysis. They are not generated_news.category and must not be exported as company SQL category.",
+  "tags": [
+    "AI前沿洞察",
+    "AI工程能力",
+    "AI基础设施",
+    "AI工具桌面",
+    "核心网/通信系统",
+    "软件性能/内存/成本",
+    "通信系统成本",
+    "硬件/芯片/数据中心",
+    "标准/产业联盟",
+    "市场/竞争格局"
+  ],
+  "secondary_tags_by_primary": {
+    "AI前沿洞察": [
+      "模型",
+      "算法",
+      "测评技术",
+      "多模态",
+      "AI安全",
+      "大厂动态"
+    ],
+    "AI工程能力": [
+      "推理加速",
+      "训练技术",
+      "智能体",
+      "RAG",
+      "Agent工程",
+      "MCP/A2A",
+      "工程实践"
+    ],
+    "AI基础设施": [
+      "AI Infra",
+      "GPU集群",
+      "CXL",
+      "HBM",
+      "液冷",
+      "数据中心"
+    ],
+    "AI工具桌面": [
+      "工具新功能",
+      "工具新案例",
+      "工具新技术",
+      "cursor",
+      "claude code",
+      "opencode",
+      "codex"
+    ],
+    "核心网/通信系统": [
+      "5GC",
+      "UPF",
+      "NWDAF",
+      "网络切片",
+      "云原生核心网",
+      "3GPP Rel-19/20",
+      "AI for Core Network"
+    ],
+    "软件性能/内存/成本": [
+      "Linux kernel",
+      "eBPF",
+      "DPDK",
+      "io_uring",
+      "RDMA",
+      "GC/JIT/AOT",
+      "NUMA/CXL memory",
+      "低延迟/高吞吐"
+    ],
+    "通信系统成本": [
+      "TCO",
+      "CapEx/OpEx",
+      "能耗",
+      "UPF offload",
+      "DPU/SmartNIC",
+      "弹性伸缩",
+      "容量规划"
+    ],
+    "硬件/芯片/数据中心": [
+      "GPU",
+      "AI芯片",
+      "HBM",
+      "CXL",
+      "互联",
+      "液冷",
+      "AI Factory"
+    ],
+    "标准/产业联盟": [
+      "3GPP",
+      "O-RAN",
+      "GSMA",
+      "TM Forum",
+      "IETF",
+      "OCP",
+      "MLCommons",
+      "CXL/UALink"
+    ],
+    "市场/竞争格局": [
+      "路线图",
+      "重大合作",
+      "竞争态势",
+      "生态策略",
+      "商业落地",
+      "政策监管"
+    ]
+  },
+  "rules": [
+    "source_tags are advisory metadata on data sources or workspace_source_links.",
+    "source_tags can help source filtering, coverage analysis and score priors.",
+    "source_tags must not constrain or replace generated_news.category.",
+    "planning_intel generated_news.category must still use config/taxonomy/news_categories.json."
+  ]
+}

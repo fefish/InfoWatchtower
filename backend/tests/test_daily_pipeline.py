@@ -95,9 +95,12 @@ def test_daily_pipeline_job_can_process_existing_raw_without_ingestion(monkeypat
             session,
             source,
             "rss:1",
-            "Scheduled recommendation item",
+            "Scheduled recommendation item adds inference serving architecture",
             "https://example.com/scheduled",
-            "Scheduled recommendation body.",
+            (
+                "The update describes model serving architecture, inference latency, "
+                "throughput, deployment tradeoffs and benchmark evidence."
+            ),
         )
         session.commit()
 
@@ -134,6 +137,8 @@ def test_scheduler_defaults_to_daily_pipeline_job():
             "ingestion_scheduler_workspace_code": "planning_intel",
             "ingestion_source_type_list": ["rss"],
             "ingestion_scheduler_limit": 10,
+            "ingestion_concurrency": 8,
+            "ingestion_source_timeout_seconds": 25,
             "daily_pipeline_recommendation_limit": 15,
             "daily_pipeline_source_daily_limit": 2,
             "daily_pipeline_create_daily_draft": True,
@@ -146,5 +151,5 @@ def test_scheduler_defaults_to_daily_pipeline_job():
     assert job.id == "job-1"
     function, args, kwargs = queue.calls[0]
     assert function is run_daily_pipeline_job
-    assert args == ("planning_intel", ["rss"], 10, 15, 2, True, True)
+    assert args == ("planning_intel", ["rss"], 10, 8, 25, 15, 2, True, True)
     assert kwargs["job_timeout"] == 60 * 60 * 3

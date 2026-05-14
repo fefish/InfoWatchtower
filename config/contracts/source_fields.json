@@ -7,7 +7,8 @@
     "legacy_page": "config/seeds/legacy/page_sources.json",
     "legacy_all_index": "config/seeds/legacy/all_sources.index.json",
     "legacy_human_registry": "config/seeds/legacy/source_registry.md",
-    "legacy_folo_catalog": "config/seeds/legacy/source_catalog/folo-rss-link-classification-unified-folo-cli-supplemented.csv"
+    "legacy_folo_catalog": "config/seeds/legacy/source_catalog/folo-rss-link-classification-unified-folo-cli-supplemented.csv",
+    "supplemental_source_registry_20260511": "config/seeds/legacy/source_catalog/information_source_registry_20260511.csv"
   },
   "source_types": [
     "wiseflow",
@@ -15,6 +16,7 @@
     "page_monitor",
     "page_manual",
     "crawler",
+    "csv",
     "paper_rss",
     "paper_api",
     "paper_page",
@@ -25,7 +27,7 @@
     {"name": "id", "type": "uuid", "required": true, "notes": "Internal primary key."},
     {"name": "workspace_code", "type": "string", "required": false, "default": "shared", "notes": "Source definition owner/origin only. Workspace enablement must use workspace_source_links."},
     {"name": "domain_code", "type": "string", "required": true, "default": "ai", "notes": "Default strategic intelligence board. Per-workspace domain can be overridden by workspace_source_links."},
-    {"name": "source_type", "type": "enum", "required": true, "notes": "wiseflow/rss/page_monitor/page_manual/crawler/paper_rss/paper_api/paper_page/manual/internal."},
+    {"name": "source_type", "type": "enum", "required": true, "notes": "wiseflow/rss/page_monitor/page_manual/crawler/csv/paper_rss/paper_api/paper_page/manual/internal."},
     {"name": "name", "type": "string", "required": true, "legacy_rss": "name", "legacy_page": "name"},
     {"name": "url", "type": "string", "required": false, "legacy_rss": "feed_url", "legacy_page": "page_url or articles[].url", "legacy_wiseflow": "SOURCE_READ_INFO_URL or derived from SOURCE_API_BASE"},
     {"name": "enabled", "type": "boolean", "required": true, "legacy_rss": "enabled", "legacy_page": "true"},
@@ -40,8 +42,10 @@
     {"name": "primary_category", "type": "string", "required": false, "legacy_rss": "folo_metadata.primary_category"},
     {"name": "secondary_category", "type": "string", "required": false, "legacy_rss": "folo_metadata.secondary_category"},
     {"name": "info_category", "type": "string", "required": false, "legacy_rss": "folo_metadata.info_category"},
+    {"name": "source_tags", "type": "string[]", "required": false, "notes": "Source-side strategic tags from config/taxonomy/source_tags.json. They are hints for source management and scoring, not generated_news.category."},
+    {"name": "source_secondary_tags", "type": "string[]", "required": false, "notes": "Optional second-level source tags under source_tags."},
     {"name": "topic_flags", "type": "object", "required": false, "notes": "Model/inference/agent/application/telco/cloud/hardware/core-competency flags."},
-    {"name": "fetch_config", "type": "json", "required": false, "notes": "Wiseflow read_info config, RSS URL, page listing rules, selectors, crawler adapter name, API params."},
+    {"name": "fetch_config", "type": "json", "required": false, "notes": "Wiseflow read_info config, RSS URL, page listing rules, selectors, crawler adapter name, CSV path/schema, API params."},
     {"name": "paper_config", "type": "json", "required": false, "notes": "arxiv categories, DOI/API settings, venue filters, citation providers."},
     {"name": "metadata", "type": "json", "required": false, "legacy_rss": "folo_metadata plus origin", "legacy_page": "full page source object"},
     {"name": "created_at", "type": "datetime", "required": true},
@@ -84,6 +88,8 @@
     "primary_category": "folo_metadata.primary_category",
     "secondary_category": "folo_metadata.secondary_category",
     "info_category": "folo_metadata.info_category",
+    "source_tags": "derived from folo_metadata topic flags and config/taxonomy/source_tags.json",
+    "source_secondary_tags": "derived from folo_metadata topic flags and config/taxonomy/source_tags.json",
     "topic_flags.is_model_related": "folo_metadata.is_model_related",
     "topic_flags.is_inference_related": "folo_metadata.is_inference_related",
     "topic_flags.is_agent_related": "folo_metadata.is_agent_related",
@@ -115,6 +121,28 @@
     "visibility_scope": "public",
     "sync_policy": "public_to_intranet"
   },
+  "supplemental_registry_mapping": {
+    "notes": "The supplemental CSV is a data-source registry only. It may add sources, source-side tags and source scores; it must not define generated_news.category or company SQL category.",
+    "domain_code": "ai",
+    "source_type": "paper_rss when source/category/name looks like paper/arxiv/research paper, else rss",
+    "name": "RSS显示名称 or CLI标题 or Folo标题 or 信息源名称",
+    "url": "RSS订阅URL or CLI RSS or Folo RSS",
+    "enabled": "true for all imported shared sources in planning_intel v1; CSV status/recommendation remain in metadata for source scoring and operations, not for initial disablement",
+    "default_focus_id": 1,
+    "backfill_days": 30,
+    "fetch_config.feed_url": "RSS URL",
+    "fetch_config.registry_source": "CSV filename",
+    "fetch_config.registry_source_id": "信息源编号",
+    "fetch_config.original_page_url": "原始页面URL",
+    "fetch_config.access_method": "配置接入方式",
+    "metadata.source_tags": "derived from board/relevance columns and config/taxonomy/source_tags.json",
+    "metadata.source_secondary_tags": "derived from board/relevance columns and config/taxonomy/source_tags.json",
+    "metadata.source_tier": "源层级",
+    "metadata.source_score": "综合质量评分 or 源质量分",
+    "metadata.recommendation": "纳入建议",
+    "metadata.raw_registry_row": "full CSV row",
+    "source_score": "综合质量评分 or 源质量分 or 0"
+  },
   "seed_counts": {
     "wiseflow_sources": 1,
     "rss_sources": 108,
@@ -124,6 +152,18 @@
     "all_index_sources": 113,
     "all_index_enabled": 79,
     "paper_rss_sources": 17,
-    "paper_rss_enabled": 14
+    "paper_rss_enabled": 14,
+    "supplemental_registry_rows": 351,
+    "supplemental_registry_importable_rss_rows": 248,
+    "merged_import_records": 361,
+    "merged_unique_data_sources": 294,
+    "merged_enabled_data_sources": 294,
+    "merged_source_type_counts": {
+      "wiseflow": 1,
+      "rss": 268,
+      "paper_rss": 21,
+      "page_manual": 2,
+      "page_monitor": 2
+    }
   }
 }

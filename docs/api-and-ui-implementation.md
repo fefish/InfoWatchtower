@@ -40,6 +40,8 @@ POST /api/ingestion/runs
 GET  /api/ingestion/runs
 GET  /api/ingestion/runs/{id}
 
+`POST /api/ingestion/runs` 支持 `concurrency` 和 `source_timeout_seconds`，用于几百个源的并发抓取和慢源隔离；默认值来自 `INGESTION_CONCURRENCY=8`、`INGESTION_SOURCE_TIMEOUT_SECONDS=25`。
+
 GET  /api/raw-items
 GET  /api/raw-items/{id}
 
@@ -139,6 +141,21 @@ workspace_sections     当前工作台启用的页面
 - `/sources` 的右侧标签策略是工作台级配置，不是单源配置；一级标签尽量完整露出，不依赖难发现的内部滚动条。窄屏时标签策略可移动到列表上方。
 - 按钮和状态文案保持业务直觉：单源开关用“启用/停用”，不要写成“当前工作台启用”这种重复文案。
 
+### 3.1 前端高保真基线
+
+当前前端视觉基线来自用户确认过的高保真方案，后续不要在没有明确设计变更的情况下覆盖：
+
+- 整体：`#f8fafc` 背景、白色侧边栏、白色主内容、slate 中性色、indigo 主色。
+- 侧边栏：`IW` 方形 logo、工作台选择器、`Menu/System` 分组导航、active 项使用 indigo 浅底。
+- 顶栏：紧凑白色顶栏，包含工作台名称、说明、搜索入口、通知按钮和当前用户。
+- 数据源页：上方为 compact stats/action bar；主体是左侧信息流式数据源列表 + 右侧 `380px` 标签策略面板。
+- 数据源列表：每个源是一行信息流卡片，显示图标、名称、URL、类型、domain、最近成功/错误；操作按钮只做配置、抓取等源级动作。
+- 标签策略：右侧 panel 使用 `一级标签 / 二级标签 / 新闻结构` tab；一级/二级新闻标签属于工作台策略。`planning_intel` 的成品新闻一级标签默认来自 `config/taxonomy/news_categories.json` 的 AI 十分类；`config/taxonomy/source_tags.json` 是数据源侧方向标签，只在数据源列表和后续覆盖分析/评分先验中使用。
+- 颜色：业务主按钮使用 indigo；启用状态可以使用绿色，但页面主调不能变成绿色、青色或深色。
+- CSS 维护：同一页面布局只允许在一个位置定义最终样式；改 `/sources` 时要清理旧的重复选择器，避免后写规则覆盖高保真。
+
+如果后续要重做视觉风格，必须同时更新本节、`AGENTS.md`、`frontend/src/layouts/AppShell.vue`、`frontend/src/pages/SourcesPage.vue` 和 `frontend/src/styles/base.css`，不要只改 CSS。
+
 ## 4. 页面职责
 
 `/dashboard`：
@@ -150,7 +167,7 @@ workspace_sections     当前工作台启用的页面
 - 数据源列表展示共享源池，以及当前工作台是否启用该源。
 - `GET /api/sources?workspace_code=...` 返回共享源池，并附带当前工作台的 `workspace_link_enabled`、`workspace_source_weight`、`workspace_daily_limit` 和抓取状态；标签策略从 `GET /api/workspaces/{workspace_code}/label-policy` 读取。
 - `POST /api/sources/{source_id}/fetch` 第一版只做单源手动抓取，调用对应 adapter，把结果幂等写入 `raw_items`，并更新 `data_sources.last_fetch_at/last_success_at/last_error`。
-- 数据源配置页支持工作台统一一级/二级标签策略的增删改，并支持单源启停、权重和每日上限；不要在单源配置里维护标签。`ai_tools` 工作台必须展示独立的 `ai_tools_categories`，不能复用规划部的 `ai_sql_categories`。
+- 数据源配置页支持工作台统一新闻一级/二级标签策略的增删改，并支持单源启停、权重和每日上限；单源可以展示源侧方向标签，但不能把源侧方向标签当成成品新闻 category。`ai_tools` 工作台必须展示独立的 `ai_tools_categories`，不能复用规划部的 `ai_sql_categories`。
 - 数据源真实定义只保存一份；多个工作台复用时通过 `workspace_source_links` 配置差异。
 
 `/sources/:id`：
@@ -162,19 +179,21 @@ workspace_sections     当前工作台启用的页面
 - 展示工作台级抓取 run 历史、状态、处理源数量、成功/失败源、raw 新增/更新数量。
 - 当前后端已提供 `POST /api/ingestion/runs`、`GET /api/ingestion/runs`、`GET /api/ingestion/runs/{id}`；scheduler/worker 已接入每日完整流水线，默认关闭自动任务，开启后执行抓取、标准化/去重、按日期推荐和日报草稿。
 - 页面上线前可以通过 `limit=0` 验收 API 与权限链路，不触发真实外网抓取。
-- 下一阶段要把它升级成抓取覆盖率页面：按日期展示启用源数、尝试抓取源数、成功源数、失败源数、每源贡献 raw 数、候选数、active winner 数和失败原因。这个页面用于解释“为什么 70+ 启用源当天只有少量候选”，避免把抓取覆盖问题误判为推荐器漏选。
+- 当前前端已提供 `/ingestion-runs` 抓取覆盖率页面，接入 run 历史和安全运行入口；下一阶段要补每源覆盖详情：按日期展示启用源数、尝试抓取源数、成功源数、失败源数、每源贡献 raw 数、候选数、active winner 数和失败原因。这个页面用于解释“为什么 294 个源全启用但当天只有少量候选”，避免把抓取覆盖问题误判为推荐器漏选。
 
 `/news`：
 
 - 统一候选池，展示 `dedupe_groups` 的 winner，不直接展示未去重 raw 流。
 - 支持按 workspace、domain、source_type、标签、推荐状态、采信状态、日期、关键词筛选。
 - 候选项必须能展开同组来源、重复项、标签、推荐分、热度分和追溯链路。
-- 当前后端已提供阶段 4 API：`POST /api/news-items/normalize`、`GET /api/news-items`、`GET /api/dedupe-groups`。前端候选池页面尚未替换占位页，阶段 5 后续增强应把 winner/loser 查询结果接入页面。
+- 候选池第一屏必须按编辑阅读顺序呈现：标题、brief 摘要、代表来源、发布时间、重复来源数量和候选判断；`dedupe_key`、group id、rank score 等工程信息收进展开区，避免把候选池做成中间表调试页。
+- 当前后端已提供阶段 4 API：`POST /api/news-items/normalize`、`GET /api/news-items`、`GET /api/dedupe-groups`。前端 `/news` 已替换占位页，第一版已能以新闻卡片展示 winner、摘要、代表来源、重复来源和来源排序；后续增强应把推荐分、标签、日报采信状态和追溯链路继续并入页面。
 
 `/recommendations`：
 
 - 推荐 run、分数、推荐原因、去重组、是否进入日报。
 - `POST /api/pipeline/daily-runs` 是面向 UI 和运维的完整流水线入口；`POST /api/recommendation/runs` 保留为只重跑推荐层的入口。
+- 当前前端 `/recommendations` 已接入推荐 run 历史、创建推荐 run、详情分数拆解和是否进入日报；默认不勾选“同时生成日报草稿”，避免误触发报告层写入。
 
 `/daily-reports/:id`：
 
@@ -196,7 +215,8 @@ workspace_sections     当前工作台启用的页面
 `/exports`：
 
 - 公司 SQL 生成、导出历史、导出追溯。第一版 API 直接返回 SQL 文本；后续如果文件很大，再补下载文件。
-- 页面必须能清楚显示：导出范围是已发布日报且 `adoption_status = 2` 的条目；每条新闻生成 4 类 SQL；`content_json` 只包含 `background/effects/eventSummary/technologyAndInnovation/valueAndImpact` 五段旧字段；从任意 SQL 条目能追溯回 daily item、generated news、news item、raw item 和 data source。
+- 页面必须能清楚显示：导出范围是已发布日报且 `adoption_status = 2` 的条目；每条新闻生成 4 类 SQL；标准模式下 SQL category 使用 `generated_news.category` 的 AI 十分类；`content_json` 只包含 `background/effects/eventSummary/technologyAndInnovation/valueAndImpact` 五段旧字段；从任意 SQL 条目能追溯回 daily item、generated news、news item、raw item 和 data source。
+- 当前前端 `/exports` 已接入已发布日报选择、导出历史、SQL 生成、预览和下载；后续补复制、字段校验和逐条追溯 UI。
 
 `/sync`：
 

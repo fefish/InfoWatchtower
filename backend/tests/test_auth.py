@@ -73,6 +73,7 @@ def test_auth_seed_creates_default_workspaces(monkeypatch, tmp_path):
                 }
             else:
                 assert label_policy["label_set_code"] == "ai_sql_categories"
+                assert label_policy["export_category_mode"] == "news_primary"
                 assert label_policy["allowed_primary_categories"] == [
                     "AI Infra",
                     "AI 应用",
@@ -137,6 +138,7 @@ def test_authenticated_user_can_load_workspace_sections(monkeypatch, tmp_path):
     label_policy = client.get("/api/workspaces/planning_intel/label-policy")
     assert label_policy.status_code == 200
     assert label_policy.json()["news_format_code"] == "company_sql_v1"
+    assert label_policy.json()["export_category_mode"] == "news_primary"
     assert label_policy.json()["required_content_fields"] == [
         "background",
         "effects",
@@ -162,6 +164,7 @@ def test_authenticated_user_can_load_workspace_sections(monkeypatch, tmp_path):
         json={
             "label_set_code": "ai_sql_categories",
             "news_format_code": "company_sql_v1",
+            "export_category_mode": "news_primary",
             "required_content_fields": [
                 "background",
                 "effects",
@@ -169,16 +172,16 @@ def test_authenticated_user_can_load_workspace_sections(monkeypatch, tmp_path):
                 "technologyAndInnovation",
                 "valueAndImpact",
             ],
-            "allowed_primary_categories": ["模型", "智能体", "AI 应用", "具身智能"],
+            "allowed_primary_categories": ["AI 应用", "智能体", "基础竞争力", "具身智能"],
             "default_category": "AI 应用",
             "fallback_category": "具身智能",
         },
     )
     assert updated_policy.status_code == 200
     assert updated_policy.json()["allowed_primary_categories"] == [
-        "模型",
-        "智能体",
         "AI 应用",
+        "智能体",
+        "基础竞争力",
         "具身智能",
     ]
     assert updated_policy.json()["secondary_labels_by_primary"] == {}
@@ -189,8 +192,9 @@ def test_authenticated_user_can_load_workspace_sections(monkeypatch, tmp_path):
         json={
             "label_set_code": "ai_sql_categories",
             "news_format_code": "company_sql_v1",
+            "export_category_mode": "news_primary",
             "required_content_fields": ["background", "eventSummary"],
-            "allowed_primary_categories": ["模型", "AI 应用"],
+            "allowed_primary_categories": ["AI 应用", "智能体"],
             "default_category": "AI 应用",
             "fallback_category": "AI 应用",
         },
@@ -219,8 +223,14 @@ def test_auth_seed_creates_default_label_set(monkeypatch, tmp_path):
     with Session() as session:
         label_set = session.scalar(select(LabelSet).where(LabelSet.code == "ai_sql_categories"))
         assert label_set is not None
-        assert label_set.workspace_code == "shared"
+        assert label_set.workspace_code == "planning_intel"
         assert session.scalar(select(Label).where(Label.name == "基础竞争力")) is not None
+        source_tag_label_set = session.scalar(
+            select(LabelSet).where(LabelSet.code == "planning_source_tags"),
+        )
+        assert source_tag_label_set is not None
+        assert source_tag_label_set.workspace_code == "planning_intel"
+        assert session.scalar(select(Label).where(Label.code == "AI工程能力:智能体")) is not None
         tool_label_set = session.scalar(
             select(LabelSet).where(LabelSet.code == "ai_tools_categories"),
         )

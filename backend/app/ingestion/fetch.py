@@ -39,17 +39,40 @@ async def fetch_source_to_raw_items(
         raise SourceNotFoundError(f"Data source not found: {data_source_id}")
 
     fetched_at = fetched_at or utc_now()
-    registry = registry or create_default_registry()
-    adapter = registry.get(data_source.source_type)
     data_source.last_fetch_at = fetched_at
 
     try:
-        raw_inputs = await adapter.fetch(data_source)
+        raw_inputs = await fetch_source_raw_inputs(data_source, registry)
     except Exception as exc:
         data_source.last_error = _error_message(exc)
         session.flush()
         raise SourceFetchError(data_source.last_error) from exc
 
+    created, updated = upsert_raw_inputs(session, data_source, raw_inputs, fetched_at)
+    return SourceFetchResult(
+        data_source_id=data_source.id,
+        source_type=data_source.source_type,
+        fetched=len(raw_inputs),
+        created=created,
+        updated=updated,
+    )
+
+
+async def fetch_source_raw_inputs(
+    data_source: DataSource,
+    registry: AdapterRegistry | None = None,
+) -> list[RawItemInput]:
+    registry = registry or create_default_registry()
+    adapter = registry.get(data_source.source_type)
+    return await adapter.fetch(data_source)
+
+
+def upsert_raw_inputs(
+    session: Session,
+    data_source: DataSource,
+    raw_inputs: list[RawItemInput],
+    fetched_at: datetime,
+) -> tuple[int, int]:
     created = 0
     updated = 0
     for raw_input in raw_inputs:
@@ -61,13 +84,7 @@ async def fetch_source_to_raw_items(
     data_source.last_success_at = fetched_at
     data_source.last_error = ""
     session.flush()
-    return SourceFetchResult(
-        data_source_id=data_source.id,
-        source_type=data_source.source_type,
-        fetched=len(raw_inputs),
-        created=created,
-        updated=updated,
-    )
+    return created, updated
 
 
 def _upsert_raw_item(

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "description": "Expandable strategic intelligence domains. This is broader than the legacy AI SQL category list.",
-  "rule": "Domains are configurable business scopes for planning work. The legacy AI category list remains only the first export taxonomy for current company SQL.",
+  "description": "Expandable strategic intelligence domains. Domains are broader technical and business scopes; planning_intel news categories remain the AI 10 taxonomy unless a future domain explicitly defines its own final news taxonomy.",
+  "rule": "Domains are configurable business scopes for planning work. For planning_intel, company SQL category follows config/taxonomy/news_categories.json. Source-side board tags are only source metadata/hints.",
   "domains": [
     {
       "code": "ai",
@@ -56,5 +56,5 @@
       "config/domain_packs/{domain_code}/export_mapping.json"
     ]
   },
-  "legacy_export_note": "config/taxonomy/news_categories.json remains the current AI-oriented first-level category list for legacy company SQL export. Broader domains should map into their own export taxonomies when the company platform supports them."
+  "legacy_export_note": "config/taxonomy/news_categories.json is the default first-level category source for planning_intel generated news and company SQL. config/taxonomy/source_tags.json is source-side metadata only."
 }

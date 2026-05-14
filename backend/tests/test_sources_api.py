@@ -40,13 +40,13 @@ def test_super_admin_imports_and_lists_legacy_sources(monkeypatch, tmp_path):
 
     imported = client.post("/api/sources/import-legacy-seeds")
     assert imported.status_code == 200
-    assert imported.json() == {"created": 113, "updated": 0, "total": 113}
+    assert imported.json() == {"created": 294, "updated": 67, "total": 361}
 
     sources = client.get("/api/sources", params={"workspace_code": "planning_intel"})
     assert sources.status_code == 200
     payload = sources.json()
-    assert len(payload) == 113
-    assert sum(1 for item in payload if item["workspace_link_enabled"]) == 79
+    assert len(payload) == 294
+    assert sum(1 for item in payload if item["workspace_link_enabled"]) == 294
     assert "workspace_label_set_codes" not in payload[0]
     assert "workspace_default_label_paths" not in payload[0]
     assert {item["source_type"] for item in payload} == {
@@ -60,8 +60,8 @@ def test_super_admin_imports_and_lists_legacy_sources(monkeypatch, tmp_path):
     ai_tool_sources = client.get("/api/sources", params={"workspace_code": "ai_tools"})
     assert ai_tool_sources.status_code == 200
     ai_tool_payload = ai_tool_sources.json()
-    assert len(ai_tool_payload) == 113
-    assert sum(1 for item in ai_tool_payload if item["workspace_link_enabled"]) == 79
+    assert len(ai_tool_payload) == 294
+    assert sum(1 for item in ai_tool_payload if item["workspace_link_enabled"]) == 294
 
     updated = client.patch(
         f"/api/sources/{payload[0]['id']}/workspace-link",
@@ -81,7 +81,7 @@ def test_super_admin_imports_and_lists_legacy_sources(monkeypatch, tmp_path):
 
     repeated = client.post("/api/sources/import-legacy-seeds")
     assert repeated.status_code == 200
-    assert repeated.json() == {"created": 0, "updated": 113, "total": 113}
+    assert repeated.json() == {"created": 0, "updated": 361, "total": 361}
 
 
 def test_super_admin_can_create_zero_limit_ingestion_run(monkeypatch, tmp_path):

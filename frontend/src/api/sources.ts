@@ -14,6 +14,8 @@ export interface DataSourceRecord {
   last_error: string;
   primary_category: string;
   info_category: string;
+  source_tags: string[];
+  source_secondary_tags: string[];
   workspace_link_enabled: boolean | null;
   workspace_source_weight: number | null;
   workspace_daily_limit: number | null;

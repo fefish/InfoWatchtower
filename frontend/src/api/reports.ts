@@ -142,6 +142,10 @@ export async function fetchDailyReports(workspaceCode: string): Promise<DailyRep
   return requestJson<DailyReportRecord[]>(`/api/daily-reports?${params.toString()}`);
 }
 
+export async function fetchDailyReport(reportId: string): Promise<DailyReportRecord> {
+  return requestJson<DailyReportRecord>(`/api/daily-reports/${reportId}`);
+}
+
 export async function publishDailyReport(reportId: string): Promise<DailyReportRecord> {
   return requestJson<DailyReportRecord>(`/api/daily-reports/${reportId}/publish`, {
     method: "POST"

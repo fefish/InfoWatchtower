@@ -67,10 +67,15 @@ class Settings(BaseSettings):
         alias="INGESTION_SCHEDULER_WORKSPACE_CODE",
     )
     ingestion_scheduler_source_types: str = Field(
-        default="rss,paper_rss",
+        default="rss,paper_rss,page_manual,page_monitor,wiseflow",
         alias="INGESTION_SCHEDULER_SOURCE_TYPES",
     )
     ingestion_scheduler_limit: int | None = Field(default=None, alias="INGESTION_SCHEDULER_LIMIT")
+    ingestion_concurrency: int = Field(default=8, alias="INGESTION_CONCURRENCY")
+    ingestion_source_timeout_seconds: float = Field(
+        default=25.0,
+        alias="INGESTION_SOURCE_TIMEOUT_SECONDS",
+    )
     scheduler_job_mode: str = Field(default="daily_pipeline", alias="SCHEDULER_JOB_MODE")
     daily_pipeline_run_ingestion: bool = Field(default=True, alias="DAILY_PIPELINE_RUN_INGESTION")
     daily_pipeline_create_daily_draft: bool = Field(

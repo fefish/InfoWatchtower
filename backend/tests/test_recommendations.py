@@ -158,6 +158,7 @@ def test_technical_recommendation_prefers_research_over_commercial_ai_news():
     assert selected_item is not None
     assert selected_item.news_item.source_type == "paper_rss"
     assert "benchmark" in selected_item.news_item.source_title.lower()
+    assert "admission=" in selected_item.recommendation_reason
 
 
 def test_rule_generated_key_points_use_content_keywords_not_source_metadata():
@@ -213,6 +214,116 @@ def test_source_daily_limit_selects_at_most_configured_items_per_source():
         select(func.count(RecommendationItem.id)).where(RecommendationItem.selected.is_(True)),
     ) == 1
     assert session.scalar(select(func.count(DailyReportItem.id))) == 1
+
+
+def test_admission_prefers_hardware_vendor_tech_over_finance_news():
+    session = make_session()
+    workspace = seed_workspace(session)
+    hardware_source = seed_source(session, workspace, name="NVIDIA Technical Blog")
+    finance_source = seed_source(session, workspace, name="VentureBeat")
+    add_raw_item(
+        session,
+        hardware_source,
+        "rss:hardware",
+        "NVIDIA introduces NVLink architecture for AI factory inference clusters",
+        "https://developer.nvidia.com/blog/nvlink-ai-factory",
+        (
+            "The technical post explains GPU cluster architecture, NVLink, inference serving, "
+            "throughput, latency, HBM bandwidth, rack-scale deployment, and data center cost."
+        ),
+    )
+    add_raw_item(
+        session,
+        finance_source,
+        "rss:finance",
+        "AI chip startup raises funding as valuation and revenue grow",
+        "https://example.com/funding",
+        (
+            "The article focuses on a funding round, valuation, revenue growth, investors, "
+            "sales expansion, and market momentum without architecture or benchmark details."
+        ),
+    )
+    normalize_workspace_raw_items(
+        session,
+        NewsNormalizationRequest(workspace_code="planning_intel", source_types=[], limit=None),
+    )
+
+    result = run_daily_recommendation(
+        session,
+        RecommendationRunRequest(
+            workspace_code="planning_intel",
+            day_key="2026-05-05",
+            limit=1,
+            source_daily_limit=2,
+            create_daily_draft=True,
+        ),
+        now=datetime(2026, 5, 5, 10, tzinfo=UTC),
+    )
+    session.commit()
+
+    selected_item = session.scalar(
+        select(RecommendationItem).where(RecommendationItem.selected.is_(True)),
+    )
+    assert result.selected_total == 1
+    assert selected_item is not None
+    assert selected_item.news_item.source_name == "NVIDIA Technical Blog"
+    assert "pool=vendor_hardware" in selected_item.recommendation_reason
+    finance_item = session.scalar(
+        select(RecommendationItem).where(RecommendationItem.news_item.has(source_name="VentureBeat")),
+    )
+    assert finance_item is not None
+    assert "commercial_finance" in finance_item.recommendation_reason
+
+
+def test_selection_caps_pure_paper_concentration_when_vendor_items_exist():
+    session = make_session()
+    workspace = seed_workspace(session)
+    paper_source = seed_source(session, workspace, source_type="paper_rss", name="Nature RSS")
+    vendor_source = seed_source(session, workspace, name="Huawei Technical Blog")
+    for index in range(4):
+        add_raw_item(
+            session,
+            paper_source,
+            f"paper:{index}",
+            f"Research paper on LLM benchmark and agent memory {index}",
+            f"https://example.com/paper-{index}",
+            "Research paper with LLM benchmark, agent memory, evaluation and model architecture.",
+        )
+    for index in range(2):
+        add_raw_item(
+            session,
+            vendor_source,
+            f"vendor:{index}",
+            f"Huawei releases AI inference cluster architecture update {index}",
+            f"https://example.com/vendor-{index}",
+            "Technical architecture for AI infrastructure, GPUs, inference serving, latency and data center deployment.",
+        )
+    normalize_workspace_raw_items(
+        session,
+        NewsNormalizationRequest(workspace_code="planning_intel", source_types=[], limit=None),
+    )
+
+    result = run_daily_recommendation(
+        session,
+        RecommendationRunRequest(
+            workspace_code="planning_intel",
+            day_key="2026-05-05",
+            limit=3,
+            source_daily_limit=4,
+            create_daily_draft=True,
+        ),
+        now=datetime(2026, 5, 5, 10, tzinfo=UTC),
+    )
+    session.commit()
+
+    selected_items = session.scalars(
+        select(RecommendationItem).where(RecommendationItem.selected.is_(True)),
+    ).all()
+    selected_papers = [item for item in selected_items if item.news_item.source_type == "paper_rss"]
+    selected_vendor = [item for item in selected_items if item.news_item.source_name == "Huawei Technical Blog"]
+    assert result.selected_total == 3
+    assert len(selected_papers) <= 1
+    assert len(selected_vendor) == 2
 
 
 def test_recommendation_can_rerun_same_day_with_same_scoring_time():
@@ -413,12 +524,15 @@ def make_client(monkeypatch, tmp_path):
                 source_type="rss",
                 source_name=source.name,
                 entry_key="entry:1",
-                source_title="API recommendation item",
+                source_title="API recommendation item introduces inference serving architecture",
                 source_url="https://example.com/api-rec",
-                raw_content="API recommendation body.",
+                raw_content=(
+                    "The update explains model serving architecture, inference latency, "
+                    "throughput, benchmark results, and deployment tradeoffs."
+                ),
                 fetched_at=datetime(2026, 5, 5, 9, tzinfo=UTC),
                 published_at=datetime(2026, 5, 5, 8, tzinfo=UTC),
-                raw_payload_json={"title": "API recommendation item"},
+                raw_payload_json={"title": "API recommendation item introduces inference serving architecture"},
             ),
         )
         normalize_workspace_raw_items(

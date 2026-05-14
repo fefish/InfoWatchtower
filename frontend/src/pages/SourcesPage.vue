@@ -1,5 +1,19 @@
 <script setup lang="ts">
-import { Bot, DownloadCloud, FileText, Globe2, Monitor, Plus, RefreshCw, Rss, Settings, Tag, Trash2, X } from "lucide-vue-next";
+import {
+  Bot,
+  CheckCircle2,
+  DownloadCloud,
+  FileText,
+  Globe2,
+  Monitor,
+  Plus,
+  RefreshCw,
+  Rss,
+  Settings,
+  Tag,
+  Trash2,
+  X
+} from "lucide-vue-next";
 import { computed, reactive, ref, watch } from "vue";
 
 import {
@@ -28,7 +42,7 @@ const lastImportMessage = ref("");
 const selectedSource = ref<DataSourceRecord | null>(null);
 const activePolicyTab = ref<"level1" | "level2" | "format">("level1");
 
-const legacyPrimaryCategories = [
+const aiSqlPrimaryCategories = [
   "AI Infra",
   "AI 应用",
   "测评技术",
@@ -61,15 +75,17 @@ const workspacePolicyPresets = {
   planning_intel: {
     labelSetCode: "ai_sql_categories",
     newsFormatCode: "company_sql_v1",
+    exportCategoryMode: "news_primary",
     requiredContentFields: [...companySqlContentFields],
-    primaryCategories: legacyPrimaryCategories,
-    secondaryLabelsByPrimary: {} as Record<string, string[]>,
+    primaryCategories: aiSqlPrimaryCategories,
+    secondaryLabelsByPrimary: {},
     defaultCategory: "AI 应用",
     fallbackCategory: "AI 应用"
   },
   ai_tools: {
     labelSetCode: "ai_tools_categories",
     newsFormatCode: "tool_intel_v1",
+    exportCategoryMode: "news_primary",
     requiredContentFields: [...companySqlContentFields],
     primaryCategories: aiToolPrimaryCategories,
     secondaryLabelsByPrimary: Object.fromEntries(
@@ -83,8 +99,9 @@ const workspacePolicyPresets = {
 const policyForm = reactive({
   labelSetCode: "ai_sql_categories",
   newsFormatCode: "company_sql_v1",
+  exportCategoryMode: "news_primary",
   requiredContentFields: [...companySqlContentFields],
-  allowedPrimaryCategories: [...legacyPrimaryCategories],
+  allowedPrimaryCategories: [...aiSqlPrimaryCategories],
   secondaryLabelsByPrimary: {} as Record<string, string[]>,
   defaultCategory: "AI 应用",
   fallbackCategory: "AI 应用"
@@ -115,11 +132,11 @@ const enabledInWorkspaceCount = computed(
 );
 
 const activePrimaryCategories = computed(() =>
-  policyForm.allowedPrimaryCategories.length > 0 ? policyForm.allowedPrimaryCategories : legacyPrimaryCategories
+  policyForm.allowedPrimaryCategories.length > 0 ? policyForm.allowedPrimaryCategories : aiSqlPrimaryCategories
 );
 const secondaryLabelTotal = computed(() =>
   activePrimaryCategories.value.reduce(
-    (total, category) => total + secondaryLabelsFor(category).length,
+    (total: number, category: string) => total + secondaryLabelsFor(category).length,
     0
   )
 );
@@ -146,6 +163,7 @@ async function loadWorkspacePolicy() {
 function fillPolicyForm(policy: WorkspaceLabelPolicy) {
   policyForm.labelSetCode = policy.label_set_code;
   policyForm.newsFormatCode = policy.news_format_code;
+  policyForm.exportCategoryMode = policy.export_category_mode || "news_primary";
   policyForm.requiredContentFields = normalizeContentFields(policy.required_content_fields);
   policyForm.allowedPrimaryCategories = [...policy.allowed_primary_categories];
   policyForm.secondaryLabelsByPrimary = normalizeSecondaryLabels(
@@ -206,7 +224,8 @@ function sourceTypeLabel(type: string) {
     paper_rss: "论文 RSS",
     wiseflow: "Wiseflow",
     page_manual: "页面手工",
-    page_monitor: "页面监控"
+    page_monitor: "页面监控",
+    csv: "CSV"
   };
   return labels[type] ?? type;
 }
@@ -217,9 +236,17 @@ function sourceIcon(type: string) {
     paper_rss: FileText,
     wiseflow: Bot,
     page_manual: Globe2,
-    page_monitor: Monitor
+    page_monitor: Monitor,
+    csv: FileText
   };
   return icons[type as keyof typeof icons] ?? Globe2;
+}
+
+function tagInputWidth(value: string) {
+  const width = Array.from(value || "").reduce((total, character) => {
+    return total + (/[\u4e00-\u9fff]/.test(character) ? 14 : 8);
+  }, 18);
+  return `${Math.max(54, Math.min(128, width))}px`;
 }
 
 function formatDateTime(value: string | null) {
@@ -331,6 +358,7 @@ function resetPolicyCategories() {
   const preset = currentPolicyPreset.value;
   policyForm.labelSetCode = preset.labelSetCode;
   policyForm.newsFormatCode = preset.newsFormatCode;
+  policyForm.exportCategoryMode = preset.exportCategoryMode;
   policyForm.requiredContentFields = [...preset.requiredContentFields];
   policyForm.allowedPrimaryCategories = [...preset.primaryCategories];
   policyForm.secondaryLabelsByPrimary = normalizeSecondaryLabels(
@@ -430,6 +458,7 @@ async function saveWorkspacePolicy() {
     const updated = await updateWorkspaceLabelPolicy(workspace.currentCode, {
       label_set_code: policyForm.labelSetCode,
       news_format_code: policyForm.newsFormatCode,
+      export_category_mode: policyForm.exportCategoryMode,
       required_content_fields: policyForm.requiredContentFields,
       allowed_primary_categories: categories,
       secondary_labels_by_primary: policyForm.secondaryLabelsByPrimary,
@@ -509,37 +538,47 @@ watch(
 </script>
 
 <template>
-  <section class="source-command">
-    <div class="source-title">
-      <p class="eyebrow">来源运营</p>
-      <h2>数据源管理</h2>
-    </div>
-    <div class="source-metrics" aria-label="数据源概览">
-      <span><b>{{ sources.length }}</b> 共享源</span>
-      <span><b>{{ enabledInWorkspaceCount }}</b> 已启用</span>
-      <span v-for="[type, count] in counts" :key="type"><b>{{ count }}</b> {{ sourceTypeLabel(type) }}</span>
-    </div>
-    <div class="toolbar-actions">
-      <button type="button" class="icon-button secondary" :disabled="loading" @click="loadSources" title="刷新">
-        <RefreshCw :size="18" />
-        <span>刷新</span>
-      </button>
-      <button type="button" class="icon-button" :disabled="importing" @click="importSeeds" title="导入旧种子源">
-        <DownloadCloud :size="18" />
-        <span>{{ importing ? "导入中" : "导入旧源" }}</span>
-      </button>
-    </div>
-  </section>
+  <section class="source-workbench">
+    <section class="source-stats-card" aria-label="数据源概览">
+      <div class="source-total-stat">
+        <strong>{{ sources.length }}</strong>
+        <span>共享源总数</span>
+      </div>
 
-  <p v-if="error" class="form-error">{{ error }}</p>
-  <p v-if="lastImportMessage" class="form-success">{{ lastImportMessage }}</p>
+      <div class="source-stat-divider" aria-hidden="true"></div>
 
-  <section class="source-page-grid">
-    <div class="source-list">
+      <div class="source-type-pills">
+        <span class="metric-pill enabled">
+          <CheckCircle2 :size="14" />
+          {{ enabledInWorkspaceCount }} 已启用
+        </span>
+        <span v-for="[type, count] in counts" :key="type" class="metric-pill" :data-source-type="type">
+          {{ count }} {{ sourceTypeLabel(type) }}
+        </span>
+      </div>
+
+      <div class="source-stats-actions">
+        <button type="button" class="icon-button secondary" :disabled="loading" @click="loadSources" title="刷新">
+          <RefreshCw :size="16" />
+          <span>刷新</span>
+        </button>
+        <button type="button" class="icon-button" :disabled="importing" @click="importSeeds" title="导入旧种子源">
+          <DownloadCloud :size="16" />
+          <span>{{ importing ? "导入中" : "导入数据" }}</span>
+        </button>
+      </div>
+    </section>
+
+    <p v-if="error" class="form-error">{{ error }}</p>
+    <p v-if="lastImportMessage" class="form-success">{{ lastImportMessage }}</p>
+
+    <section class="source-page-grid">
+      <div class="source-list">
       <header class="source-list-title">
         <div>
           <p class="eyebrow">数据源池</p>
           <h3>活跃数据源</h3>
+          <p>管理和配置正在抓取的情报来源。</p>
         </div>
         <span>{{ enabledInWorkspaceCount }} / {{ sources.length }} 已启用</span>
       </header>
@@ -577,6 +616,9 @@ watch(
               <span v-if="source.info_category || source.primary_category" class="meta-chip">
                 {{ source.info_category || source.primary_category }}
               </span>
+              <span v-for="tag in source.source_tags.slice(0, 2)" :key="`${source.id}-${tag}`" class="meta-chip source-tag-chip">
+                {{ tag }}
+              </span>
               <span class="source-freshness">
                 {{ source.last_success_at ? `最近成功 ${formatDateTime(source.last_success_at)}` : "暂无成功抓取" }}
               </span>
@@ -605,14 +647,18 @@ watch(
       </div>
 
       <p v-if="!loading && sources.length === 0" class="empty-state">暂无数据源，可先导入旧种子源。</p>
-    </div>
+      </div>
 
-    <aside class="control-rail">
-      <section class="policy-panel">
+      <aside class="control-rail">
+        <section class="policy-panel">
         <header class="policy-header">
           <div>
-            <p class="eyebrow">标签策略</p>
+            <p class="policy-kicker">
+              <Tag :size="16" />
+              <span>标签策略设置</span>
+            </p>
             <h3>{{ policyForm.labelSetCode }}</h3>
+            <p>配置用于模型分类与去重后定稿的工作台标签。</p>
           </div>
           <div class="policy-stats">
             <span>{{ activePrimaryCategories.length }} 一级</span>
@@ -658,6 +704,7 @@ watch(
               >
                 <input
                   :value="category"
+                  :style="{ width: tagInputWidth(category) }"
                   @input="renamePolicyCategory(index, ($event.target as HTMLInputElement).value)"
                   aria-label="一级标签名称"
                 />
@@ -746,6 +793,12 @@ watch(
               <span>格式代码</span>
               <input v-model="policyForm.newsFormatCode" placeholder="company_sql_v1" />
             </label>
+            <label class="format-code-field">
+              <span>SQL category 模式</span>
+              <select v-model="policyForm.exportCategoryMode">
+                <option value="news_primary">跟随新闻一级标签（AI 十分类）</option>
+              </select>
+            </label>
             <div class="format-field-list">
               <label
                 v-for="(field, index) in policyForm.requiredContentFields"
@@ -804,9 +857,9 @@ watch(
             </button>
           </div>
         </footer>
-      </section>
-
-    </aside>
+        </section>
+      </aside>
+    </section>
   </section>
 
   <div v-if="selectedSource" class="config-backdrop" @click="closeConfig"></div>

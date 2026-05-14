@@ -8,7 +8,12 @@ from sqlalchemy.orm import Session
 
 from app.adapters import AdapterRegistry
 from app.core.database import get_session_factory
-from app.ingestion.runs import WorkspaceIngestionRequest, run_workspace_ingestion
+from app.ingestion.runs import (
+    DEFAULT_INGESTION_CONCURRENCY,
+    DEFAULT_SOURCE_TIMEOUT_SECONDS,
+    WorkspaceIngestionRequest,
+    run_workspace_ingestion,
+)
 from app.models.content import IngestionRun
 from app.normalization.news import (
     NewsNormalizationRequest,
@@ -28,6 +33,8 @@ class DailyPipelineRequest:
     day_key: str | None = None
     source_types: list[str] | None = None
     ingestion_limit: int | None = None
+    ingestion_concurrency: int = DEFAULT_INGESTION_CONCURRENCY
+    ingestion_source_timeout_seconds: float = DEFAULT_SOURCE_TIMEOUT_SECONDS
     recommendation_limit: int = 15
     source_daily_limit: int = 2
     create_daily_draft: bool = True
@@ -55,6 +62,8 @@ async def run_daily_pipeline(
                 workspace_code=request.workspace_code,
                 source_types=source_types,
                 limit=request.ingestion_limit,
+                concurrency=request.ingestion_concurrency,
+                source_timeout_seconds=request.ingestion_source_timeout_seconds,
             ),
             registry=registry,
         )
@@ -88,6 +97,8 @@ def run_daily_pipeline_job(
     workspace_code: str = "planning_intel",
     source_types: list[str] | None = None,
     ingestion_limit: int | None = None,
+    ingestion_concurrency: int = DEFAULT_INGESTION_CONCURRENCY,
+    ingestion_source_timeout_seconds: float = DEFAULT_SOURCE_TIMEOUT_SECONDS,
     recommendation_limit: int = 15,
     source_daily_limit: int = 2,
     create_daily_draft: bool = True,
@@ -99,6 +110,8 @@ def run_daily_pipeline_job(
             workspace_code=workspace_code,
             source_types=source_types or [],
             ingestion_limit=ingestion_limit,
+            ingestion_concurrency=ingestion_concurrency,
+            ingestion_source_timeout_seconds=ingestion_source_timeout_seconds,
             recommendation_limit=recommendation_limit,
             source_daily_limit=source_daily_limit,
             create_daily_draft=create_daily_draft,
@@ -112,6 +125,8 @@ async def _run_daily_pipeline_job(
     workspace_code: str,
     source_types: list[str],
     ingestion_limit: int | None,
+    ingestion_concurrency: int,
+    ingestion_source_timeout_seconds: float,
     recommendation_limit: int,
     source_daily_limit: int,
     create_daily_draft: bool,
@@ -130,6 +145,8 @@ async def _run_daily_pipeline_job(
                 day_key=day_key,
                 source_types=source_types,
                 ingestion_limit=ingestion_limit,
+                ingestion_concurrency=ingestion_concurrency,
+                ingestion_source_timeout_seconds=ingestion_source_timeout_seconds,
                 recommendation_limit=recommendation_limit,
                 source_daily_limit=source_daily_limit,
                 create_daily_draft=create_daily_draft,

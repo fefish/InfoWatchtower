@@ -11,7 +11,7 @@ class NewsKeywordSource(Protocol):
     content: str
 
 
-KEYWORD_SPLIT_RE = re.compile(r"[，,；;、。.!?\n]+")
+KEYWORD_SPLIT_RE = re.compile(r"[，,；;、。!?\n]+")
 ENGLISH_TERM_RE = re.compile(r"\b[A-Z][A-Za-z0-9][A-Za-z0-9+._:-]{1,}\b")
 NOISE_KEYWORDS = {
     "canonical_url",
