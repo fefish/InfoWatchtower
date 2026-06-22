@@ -1276,6 +1276,26 @@ button {
   background: #ffffff;
 }
 
+.text-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--color-primary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.text-link:disabled {
+  color: #94a3b8;
+  cursor: not-allowed;
+}
+
 .weekly-layout,
 .ingestion-layout {
   grid-template-columns: 300px minmax(0, 1fr);
@@ -1673,6 +1693,67 @@ button {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 12px;
   line-height: 1.6;
+}
+
+.trace-list {
+  display: grid;
+  gap: 10px;
+}
+
+.trace-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 12px;
+  background: #ffffff;
+}
+
+.trace-row div:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.trace-row strong,
+.trace-row span,
+.trace-row small {
+  overflow-wrap: anywhere;
+}
+
+.trace-row strong {
+  color: var(--color-text);
+  font-size: 14px;
+}
+
+.trace-row span {
+  color: #334155;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.trace-row small {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.trace-id-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(74px, 1fr));
+  gap: 6px;
+}
+
+.trace-id-grid span {
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 800;
 }
 
 .module-checklist,
@@ -3541,6 +3622,7 @@ button {
   .weekly-brief-card,
   .source-coverage-row,
   .duplicate-row,
+  .trace-row,
   .history-list.expanded .history-row {
     grid-template-columns: 1fr;
   }

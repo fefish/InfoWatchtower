@@ -100,9 +100,13 @@ PATCH /api/topic-tasks/{id}
 POST /api/exports/company-sql/daily-reports/{daily_report_id}
 GET  /api/exports
 GET  /api/exports/{id}
+GET  /api/exports/{id}/trace
 
 GET  /api/sync-runs
 POST /api/sync-runs
+POST /api/sync/packages/export
+GET  /api/sync/packages/{package_id}/download
+POST /api/sync/packages/import
 
 GET  /api/users
 POST /api/users
@@ -118,7 +122,11 @@ GET  /api/audit-logs
 
 `GET /api/ingestion/coverage` 按 `workspace_code + day_key + 可选 run_id` 返回目标日覆盖漏斗：启用源、本次运行源、成功/失败源、目标日 raw、news、dedupe winner、recommendation candidate/selected、generated ready 和日报采信项；每源明细同时返回 fetched、created/updated、in/out target、missing published_at、news、winner、推荐和采信计数。
 
-完整同步包接口、同步冲突接口仍按 `docs/multi-environment-sync.md` 规划，当前实现只提供 `sync-runs` 运行记录。
+同步包 v1 已实现导出、zip 下载和导入幂等骨架：`POST /api/sync/packages/export` 读取
+`sync_outbox` 并写入 `sync_runs` 审计，`GET /api/sync/packages/{package_id}/download` 返回
+包含 `manifest.json` 和 `records.jsonl` 的 zip，`POST /api/sync/packages/import` 写入
+`sync_inbox` 做重复导入跳过和导入审计。当前导入侧不直接 upsert 业务对象，后续再补
+`object_type` apply handler 和 `sync_conflicts` 处理。
 
 ## 3. 页面地图
 

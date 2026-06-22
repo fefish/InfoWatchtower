@@ -286,6 +286,39 @@ docker image prune -f
 
 这不是严格零停机蓝绿发布，但对第一版足够简单可靠。后端重启通常只有短暂停顿，前端静态文件基本无感。
 
+### 8.4 生产配置检查
+
+仓库提供生产 env 模板和部署检查脚本：
+
+```text
+deploy/env.production.example
+scripts/check_prod_deploy.py
+```
+
+上线前先复制模板并替换真实密钥：
+
+```text
+cp deploy/env.production.example /srv/infowatchtower/.env.production
+```
+
+检查命令：
+
+```text
+python3 scripts/check_prod_deploy.py --env-file deploy/env.production.example
+python3 scripts/check_prod_deploy.py --env-file /srv/infowatchtower/.env.production
+```
+
+检查内容包括：
+
+- 生产 compose 必须包含 PostgreSQL、Redis、backend、worker、scheduler 和 reverse proxy。
+- PostgreSQL 和 Redis 不直接暴露主机端口。
+- Caddy 必须把 `/api/*` 转发到 backend，并保留 Vue history fallback。
+- `APP_ENV=production`，`ENABLE_DOCS=false`。
+- 生产密钥不能使用 `change_me`、`password`、`secret` 等开发默认值。
+- 规划部日报定时任务时区必须是 `Asia/Shanghai`。
+
+CI 也会运行该检查，避免生产部署文件和文档口径漂移。
+
 ## 9. 真正滚动或蓝绿发布
 
 如果后续要求尽量零停机，可以升级：

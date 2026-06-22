@@ -102,6 +102,35 @@ class SyncRunCreate(BaseModel):
     source_instance_id: str = "public"
     target_instance_id: str = "intranet"
     direction: str = "export"
+    limit: int = Field(default=200, ge=0, le=1000)
+
+
+class SyncPackageExportCreate(BaseModel):
+    source_instance_id: str = "public"
+    target_instance_id: str = "intranet"
+    direction: str = "public_to_intranet"
+    limit: int = Field(default=200, ge=0, le=1000)
+
+
+class SyncPackageExportRead(BaseModel):
+    sync_run: SyncRunRead
+    package_manifest: dict[str, Any]
+    records: list[dict[str, Any]]
+
+
+class SyncPackageImportCreate(BaseModel):
+    package_manifest: dict[str, Any]
+    records: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class SyncPackageImportRead(BaseModel):
+    package_id: str
+    status: str
+    received: int
+    applied: int
+    skipped: int
+    failed: int
+    errors: list[str] = Field(default_factory=list)
 
 
 class AuditLogRead(BaseModel):

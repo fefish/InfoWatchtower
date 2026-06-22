@@ -24,6 +24,32 @@ export interface ExportJobRecord {
   completed_at: string | null;
 }
 
+export interface CompanySqlTraceItemRecord {
+  sql_sequence: number;
+  sql_table: string;
+  status: string;
+  daily_report_item_id: string;
+  generated_news_id: string;
+  news_item_id: string;
+  raw_item_id: string | null;
+  data_source_id: string | null;
+  data_source_name: string | null;
+  source_type: string | null;
+  source_url: string | null;
+  source_title: string;
+  generated_title: string;
+  category: string;
+  adoption_status: number;
+  sql_excerpt: string;
+}
+
+export interface CompanySqlTraceRecord {
+  export_job_id: string;
+  item_count: number;
+  statement_count: number;
+  trace_items: CompanySqlTraceItemRecord[];
+}
+
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     credentials: "same-origin",
@@ -47,6 +73,10 @@ export async function fetchExportJobs(): Promise<ExportJobRecord[]> {
 
 export async function fetchExportJob(exportJobId: string): Promise<ExportJobRecord> {
   return requestJson<ExportJobRecord>(`/api/exports/${exportJobId}`);
+}
+
+export async function fetchCompanySqlTrace(exportJobId: string): Promise<CompanySqlTraceRecord> {
+  return requestJson<CompanySqlTraceRecord>(`/api/exports/${exportJobId}/trace`);
 }
 
 export async function createCompanySqlExport(dailyReportId: string): Promise<CompanySqlExportRecord> {

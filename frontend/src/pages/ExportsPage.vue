@@ -4,7 +4,9 @@ import { computed, onMounted, ref, watch } from "vue";
 
 import {
   createCompanySqlExport,
+  fetchCompanySqlTrace,
   fetchExportJobs,
+  type CompanySqlTraceRecord,
   type CompanySqlExportRecord,
   type ExportJobRecord
 } from "../api/exports";
@@ -16,6 +18,8 @@ const reports = ref<DailyReportRecord[]>([]);
 const jobs = ref<ExportJobRecord[]>([]);
 const selectedReportId = ref("");
 const exportResult = ref<CompanySqlExportRecord | null>(null);
+const traceResult = ref<CompanySqlTraceRecord | null>(null);
+const loadingTraceJobId = ref("");
 const loading = ref(false);
 const exporting = ref(false);
 const error = ref("");
@@ -62,12 +66,26 @@ async function runExport() {
   message.value = "";
   try {
     exportResult.value = await createCompanySqlExport(selectedReport.value.id);
+    traceResult.value = await fetchCompanySqlTrace(exportResult.value.export_job_id);
     message.value = `SQL 已生成：${exportResult.value.item_count} 条新闻，${exportResult.value.statement_count} 条语句`;
     await loadExportsPage();
   } catch (exc) {
     error.value = exc instanceof Error ? exc.message : "生成 SQL 失败";
   } finally {
     exporting.value = false;
+  }
+}
+
+async function loadTrace(job: ExportJobRecord) {
+  loadingTraceJobId.value = job.id;
+  error.value = "";
+  try {
+    traceResult.value = await fetchCompanySqlTrace(job.id);
+    message.value = `已加载导出追溯：${traceResult.value.statement_count} 条 SQL 语句`;
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "加载导出追溯失败";
+  } finally {
+    loadingTraceJobId.value = "";
   }
 }
 
@@ -106,6 +124,7 @@ watch(
   () => {
     selectedReportId.value = "";
     exportResult.value = null;
+    traceResult.value = null;
     void loadExportsPage();
   }
 );
@@ -197,6 +216,9 @@ onMounted(loadExportsPage);
             <strong>{{ job.export_type }}</strong>
             <span>{{ job.status }} · {{ formatDateTime(job.completed_at || job.created_at) }}</span>
             <small>{{ job.id }}</small>
+            <button type="button" class="text-link" :disabled="loadingTraceJobId === job.id" @click="loadTrace(job)">
+              {{ loadingTraceJobId === job.id ? "加载中" : "查看追溯" }}
+            </button>
           </article>
           <p v-if="!loading && jobs.length === 0" class="empty-state">暂无导出历史。</p>
         </div>
@@ -215,6 +237,31 @@ onMounted(loadExportsPage);
         </button>
       </div>
       <textarea class="sql-preview" readonly :value="exportResult.sql_text"></textarea>
+    </section>
+
+    <section v-if="traceResult" class="module-card">
+      <div class="card-title-row">
+        <div>
+          <p class="eyebrow">Lineage</p>
+          <h3>SQL 条目追溯</h3>
+        </div>
+        <span class="metric-pill">{{ traceResult.statement_count }} statements</span>
+      </div>
+      <div class="trace-list">
+        <article v-for="item in traceResult.trace_items" :key="`${item.sql_sequence}-${item.sql_table}`" class="trace-row">
+          <div>
+            <strong>#{{ item.sql_sequence }} {{ item.sql_table }}</strong>
+            <span>{{ item.generated_title }}</span>
+            <small>{{ item.category }} · adoption {{ item.adoption_status }} · {{ item.data_source_name || "未知来源" }}</small>
+          </div>
+          <div class="trace-id-grid">
+            <span>daily {{ item.daily_report_item_id.slice(0, 8) }}</span>
+            <span>generated {{ item.generated_news_id.slice(0, 8) }}</span>
+            <span>news {{ item.news_item_id.slice(0, 8) }}</span>
+            <span>raw {{ item.raw_item_id ? item.raw_item_id.slice(0, 8) : "-" }}</span>
+          </div>
+        </article>
+      </div>
     </section>
   </section>
 </template>

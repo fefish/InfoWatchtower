@@ -271,30 +271,24 @@ export_jobs
 ```text
 infowatchtower_sync_{source}_{target}_{timestamp}.zip
   manifest.json
-  data_sources.jsonl
-  raw_items.jsonl
-  news_items.jsonl
-  dedupe_groups.jsonl
-  dedupe_group_items.jsonl
-  recommendation_runs.jsonl
-  recommendation_items.jsonl
-  generated_news.jsonl
+  records.jsonl
 ```
+
+第一版实现把不同对象统一放入 `records.jsonl` envelope；后续如果单包过大，再拆成
+`data_sources.jsonl/raw_items.jsonl/news_items.jsonl` 等分表文件。
 
 `manifest.json`：
 
 ```json
 {
-  "schema_version": 1,
+  "format_version": "sync_package_v1",
   "package_id": "sync_20260504_120000_public_to_intranet",
   "source_instance_id": "public-prod",
-  "target_environment": "intranet",
+  "target_instance_id": "intranet-prod",
   "direction": "public_to_intranet",
   "created_at": "2026-05-04T12:00:00+08:00",
-  "object_counts": {
-    "raw_items": 100
-  },
-  "checksum": "sha256:..."
+  "record_count": 100,
+  "records_sha256": "..."
 }
 ```
 
@@ -335,6 +329,14 @@ infowatchtower_sync_{source}_{target}_{timestamp}.zip
 
 后续再做定时任务。
 
+当前实现：
+
+- `POST /api/sync/packages/export` 从 `sync_outbox` 读取 pending 事件，过滤 `restricted` 和不可同步策略。
+- 导出后把对应 outbox 状态标记为 `exported`。
+- `sync_runs.counts_json` 保存 `package_manifest` 和 `package_records`，用于审计和下载。
+- `GET /api/sync/packages/{package_id}/download` 返回 zip，包含 `manifest.json` 和 `records.jsonl`。
+- 旧 `/api/sync-runs` 仍保留，内部复用同步包导出逻辑。
+
 ### 5.5 导入任务
 
 内网导入同步包时：
@@ -353,6 +355,13 @@ infowatchtower_sync_{source}_{target}_{timestamp}.zip
 - `raw_items`：相同 `global_id + content_hash` 跳过；不同 hash 保留新 revision。
 - `news_items`：incoming revision 更高则更新。
 - `data_sources`：如果两边都改过同一字段，进入 `sync_conflicts`，人工处理。
+
+当前实现：
+
+- `POST /api/sync/packages/import` 接收 manifest 和 records，先校验 `records_sha256`。
+- 用 `event_id` 写入 `sync_inbox`，重复导入会跳过，不重复写。
+- 导入动作写 `sync_runs` 和审计日志。
+- 当前导入侧只做 inbox 幂等和审计，不直接 upsert 业务表；后续按 `object_type` 增加 apply handler 和冲突处理。
 
 ### 5.6 API 形态
 
@@ -375,10 +384,10 @@ POST /api/sync/conflicts/{id}/resolve
 
 - 公网生成一个同步包。
 - 同步包不包含密钥、token、cookie、`.env`。
-- 内网导入后可以看到对应 `raw_items/news_items/recommendation_items/generated_news`。
+- 内网导入后可以看到 `sync_inbox` 幂等记录和导入运行审计。
 - 内网用户、评论、采信、需求、任务不会被同步到公网。
 - 重复导入同一同步包不会重复写数据。
-- 冲突能进入 `sync_conflicts`，不会静默覆盖。
+- 后续业务 apply handler 完成后，冲突能进入 `sync_conflicts`，不会静默覆盖。
 
 ## 6. 数据源如何同步
 

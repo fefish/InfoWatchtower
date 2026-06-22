@@ -112,6 +112,7 @@
     "company_sql": {
       "export_scope": "Only published/adopted daily report items with generation_status=ready and non-rule_v1 generated content are exported by default. Candidate-only items, non-adopted retained items, and fallback_needs_review generated drafts stay inside InfoWatchtower unless an admin explicitly creates a special export job.",
       "implemented_endpoint": "POST /api/exports/company-sql/daily-reports/{daily_report_id}",
+      "implemented_trace_endpoint": "GET /api/exports/{export_job_id}/trace",
       "implemented_service": "backend/app/exports/company_sql.py",
       "tables_in_order": [
         "ai_journal",

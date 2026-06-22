@@ -105,6 +105,59 @@ def test_company_sql_export_matches_legacy_table_order_and_content_shape():
     assert session.scalar(select(func.count(ExportJobItem.id))) == 4
 
 
+def test_company_sql_export_trace_preserves_source_lineage(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+    login = client.post("/api/auth/login", json={"username": "admin", "password": "password"})
+    assert login.status_code == 200
+
+    created = client.post(
+        "/api/recommendation/runs",
+        json={
+            "workspace_code": "planning_intel",
+            "day_key": "2026-05-05",
+            "limit": 15,
+            "source_daily_limit": 2,
+            "create_daily_draft": True,
+        },
+    )
+    assert created.status_code == 200
+    report_id = created.json()["daily_report_id"]
+    published = client.post(f"/api/daily-reports/{report_id}/publish")
+    assert published.status_code == 200
+
+    # The API path intentionally keeps the SQL contract unchanged: trace data is
+    # exposed through export_job_items instead of being serialized into SQL.
+    from app.core.database import get_session_factory
+    from app.models.content import GeneratedNews
+
+    Session = get_session_factory()
+    with Session() as session:
+        generated_items = session.scalars(select(GeneratedNews)).all()
+        for generated in generated_items:
+            generated.generated_by = "minimax:test"
+            generated.generation_status = "ready"
+        session.commit()
+
+    exported = client.post(f"/api/exports/company-sql/daily-reports/{report_id}")
+    assert exported.status_code == 200
+    export_job_id = exported.json()["export_job_id"]
+
+    trace = client.get(f"/api/exports/{export_job_id}/trace")
+    assert trace.status_code == 200
+    payload = trace.json()
+    assert payload["statement_count"] == exported.json()["statement_count"]
+    assert len(payload["trace_items"]) == exported.json()["statement_count"]
+    first = payload["trace_items"][0]
+    assert first["daily_report_item_id"]
+    assert first["generated_news_id"]
+    assert first["news_item_id"]
+    assert first["raw_item_id"]
+    assert first["data_source_id"]
+    assert first["data_source_name"]
+    assert first["source_url"].startswith("https://example.com/")
+    assert first["sql_table"] == "ai_journal"
+
+
 def test_company_sql_export_rejects_unpublished_reports():
     session, report = _published_report_session()
     report.status = "draft"

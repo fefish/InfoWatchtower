@@ -12,6 +12,12 @@ dist/
 build/
 .cache/
 coverage/
+.coverage
+htmlcov/
+coverage.xml
+backend/.coverage
+backend/htmlcov/
+backend/coverage.xml
 *.sqlite
 *.sqlite3
 *.tsbuildinfo

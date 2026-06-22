@@ -1,3 +1,6 @@
+import io
+import json
+import zipfile
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import sessionmaker
@@ -9,6 +12,7 @@ from app.models import (
     HistoricalJobRun,
     HistoricalReport,
     RawItem,
+    SyncOutbox,
     TrackedEntity,
 )
 from tests.test_auth import make_client
@@ -58,7 +62,97 @@ def test_operations_pages_have_real_crud_and_lists(monkeypatch, tmp_path):
     actions = {item["action"] for item in audit_logs.json()}
     assert "requirement.create" in actions
     assert "topic_task.create" in actions
-    assert "sync_run.create" in actions
+    assert "sync_package.export" in actions
+
+
+def test_sync_package_export_download_and_import_are_auditable(monkeypatch, tmp_path):
+    client, engine = make_client(monkeypatch, tmp_path, AUTH_MODE="public_password")
+    assert client.post("/api/auth/login", json={"username": "admin", "password": "password"}).status_code == 200
+
+    Session = sessionmaker(bind=engine)
+    with Session() as session:
+        session.add(
+            SyncOutbox(
+                workspace_code="planning_intel",
+                domain_code="ai",
+                visibility_scope="public",
+                sync_policy="public_to_intranet",
+                event_id="evt-sync-001",
+                object_type="news_items",
+                object_id="news-001",
+                operation="upsert",
+                payload_json={"global_id": "global-news-001", "revision": 2, "title": "同步新闻"},
+                payload_hash="",
+                status="pending",
+            ),
+        )
+        session.commit()
+
+    exported = client.post(
+        "/api/sync/packages/export",
+        json={"source_instance_id": "public", "target_instance_id": "intranet", "limit": 10},
+    )
+    assert exported.status_code == 200
+    export_payload = exported.json()
+    package_id = export_payload["package_manifest"]["package_id"]
+    assert export_payload["package_manifest"]["record_count"] == 1
+    assert export_payload["records"][0]["event_id"] == "evt-sync-001"
+    assert export_payload["records"][0]["object_global_id"] == "global-news-001"
+    assert export_payload["sync_run"]["counts_json"]["exported"] == 1
+
+    downloaded = client.get(f"/api/sync/packages/{package_id}/download")
+    assert downloaded.status_code == 200
+    assert downloaded.headers["content-type"].startswith("application/zip")
+    with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
+        manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+        records = [
+            json.loads(line)
+            for line in archive.read("records.jsonl").decode("utf-8").splitlines()
+            if line.strip()
+        ]
+    assert manifest["package_id"] == package_id
+    assert records[0]["event_id"] == "evt-sync-001"
+
+    imported = client.post(
+        "/api/sync/packages/import",
+        json={
+            "package_manifest": {
+                **manifest,
+                "package_id": "external-package-001",
+                "source_instance_id": "public-other",
+                "records_sha256": "",
+            },
+            "records": [
+                {
+                    **records[0],
+                    "event_id": "evt-sync-import-001",
+                    "object_global_id": "global-news-import-001",
+                },
+            ],
+        },
+    )
+    assert imported.status_code == 200
+    assert imported.json()["applied"] == 1
+    repeated = client.post(
+        "/api/sync/packages/import",
+        json={
+            "package_manifest": {
+                **manifest,
+                "package_id": "external-package-001",
+                "source_instance_id": "public-other",
+                "records_sha256": "",
+            },
+            "records": [
+                {
+                    **records[0],
+                    "event_id": "evt-sync-import-001",
+                    "object_global_id": "global-news-import-001",
+                },
+            ],
+        },
+    )
+    assert repeated.status_code == 200
+    assert repeated.json()["skipped"] == 1
 
 
 def test_historical_reports_are_listed_and_read_only(monkeypatch, tmp_path):

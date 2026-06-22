@@ -239,6 +239,10 @@ background / effects / eventSummary / technologyAndInnovation / valueAndImpact
 
 `generated_news.content_json.source`、`news_item_id`、`raw_item_id`、`data_source_id`、`recommendationReason` 等新系统追溯或推荐字段不写入公司 SQL 的 `content_json`。这些追溯关系保留在 InfoWatchtower 自己的关系表中，通过 `export_job_items -> daily_report_items -> generated_news -> news_items -> raw_items` 查询。
 
+导出后可通过 `GET /api/exports/{export_job_id}/trace` 查看每条 SQL 语句对应的
+`daily_report_item_id`、`generated_news_id`、`news_item_id`、`raw_item_id` 和 `data_source_id`。
+该 trace API 只服务白盒审计、排错和来源复核，不改变公司 SQL 文件字段。
+
 标准公司 SQL 还要求采信项指向 `generated_news.generation_status = ready` 且 `generated_by` 不是 `rule_v1`。MiniMax 未启用或调用失败时生成的 `rule_v1:fallback` 只能作为页面复核草稿，不允许直接进入标准 SQL，避免英文浅摘要或低质量兜底内容污染内网。
 
 `raw_items.raw_payload_json` 和 `raw_items.raw_content` 在 InfoWatchtower 内部保留原始抓取内容；导出到公司 SQL 的 `ai_journal.source_title` 和 `ai_journal.content` 必须先做 HTML 标签清洗，保持与旧 `generate_ai_sql.py` 输出的纯文本 SQL 形态一致。
@@ -261,4 +265,5 @@ background / effects / eventSummary / technologyAndInnovation / valueAndImpact
 
 - 后端服务：`backend/app/exports/company_sql.py`
 - API：`POST /api/exports/company-sql/daily-reports/{daily_report_id}`
+- Trace API：`GET /api/exports/{export_job_id}/trace`
 - 导出任务：`export_jobs` 保存整体结果，`export_job_items` 保存每条 SQL 及其日报条目、生成稿、新闻、原始数据链路。

@@ -82,6 +82,12 @@ export interface SyncRunRecord {
   created_at: string;
 }
 
+export interface SyncPackageExportRecord {
+  sync_run: SyncRunRecord;
+  package_manifest: Record<string, unknown>;
+  records: Record<string, unknown>[];
+}
+
 export interface AuditLogRecord {
   id: string;
   user_id: string | null;
@@ -418,10 +424,23 @@ export async function fetchSyncRuns(): Promise<SyncRunRecord[]> {
 }
 
 export async function createSyncRun(): Promise<SyncRunRecord> {
-  return requestJson<SyncRunRecord>("/api/sync-runs", {
+  const result = await requestJson<SyncPackageExportRecord>("/api/sync/packages/export", {
     method: "POST",
-    body: JSON.stringify({ source_instance_id: "public", target_instance_id: "intranet", direction: "export" })
+    body: JSON.stringify({ source_instance_id: "public", target_instance_id: "intranet", direction: "public_to_intranet" })
   });
+  return result.sync_run;
+}
+
+export async function fetchSyncPackageDownload(packageId: string): Promise<Blob> {
+  const response = await fetch(`/api/sync/packages/${encodeURIComponent(packageId)}/download`, {
+    credentials: "same-origin"
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    const detail = typeof body.detail === "string" ? body.detail : `HTTP ${response.status}`;
+    throw new Error(detail);
+  }
+  return response.blob();
 }
 
 export async function fetchAuditLogs(): Promise<AuditLogRecord[]> {

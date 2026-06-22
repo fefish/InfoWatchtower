@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import hashlib
+import io
+import json
+import zipfile
 from datetime import date, datetime, time, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -24,7 +29,7 @@ from app.models.feedback import AuditLog
 from app.models.identity import User
 from app.models.legacy import EntityMilestone, HistoricalFeedbackItem, HistoricalJobRun, HistoricalReport, TrackedEntity
 from app.models.strategy import Requirement, TopicTask
-from app.models.sync import SyncOutbox, SyncRun
+from app.models.sync import SyncInbox, SyncOutbox, SyncRun
 from app.schemas.operations import (
     AuditLogRead,
     EntityMilestoneDetailRead,
@@ -41,6 +46,10 @@ from app.schemas.operations import (
     RequirementCreate,
     RequirementRead,
     RequirementUpdate,
+    SyncPackageExportCreate,
+    SyncPackageExportRead,
+    SyncPackageImportCreate,
+    SyncPackageImportRead,
     SyncRunCreate,
     SyncRunRead,
     TopicTaskCreate,
@@ -53,6 +62,7 @@ router = APIRouter(prefix="/api", tags=["operations"])
 SUPER_ADMIN = Depends(require_super_admin)
 CURRENT_USER = Depends(get_current_user)
 DB_SESSION = Depends(get_db_session)
+EXPORTABLE_SYNC_POLICIES = {"public_to_intranet", "manual_only", "two_way_config"}
 
 
 @router.get("/requirements", response_model=list[RequirementRead])
@@ -229,17 +239,112 @@ def create_sync_run(
     current_user: User = SUPER_ADMIN,
     session: Session = DB_SESSION,
 ) -> SyncRunRead:
-    pending_count = session.scalar(
-        select(func.count()).select_from(SyncOutbox).where(SyncOutbox.status == "pending"),
-    ) or 0
+    export = _create_sync_export_package(
+        session,
+        payload=SyncPackageExportCreate(
+            source_instance_id=payload.source_instance_id,
+            target_instance_id=payload.target_instance_id,
+            direction=payload.direction,
+            limit=payload.limit,
+        ),
+        current_user=current_user,
+    )
+    run = session.get(SyncRun, export.sync_run.id) or _load_sync_run_by_package(
+        session,
+        export.sync_run.package_id,
+    )
+    return _sync_run_to_read(run)
+
+
+@router.post("/sync/packages/export", response_model=SyncPackageExportRead)
+def export_sync_package(
+    payload: SyncPackageExportCreate,
+    current_user: User = SUPER_ADMIN,
+    session: Session = DB_SESSION,
+) -> SyncPackageExportRead:
+    return _create_sync_export_package(session, payload=payload, current_user=current_user)
+
+
+@router.get("/sync/packages/{package_id}/download")
+def download_sync_package(
+    package_id: str,
+    _: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> StreamingResponse:
+    run = _load_sync_run_by_package(session, package_id)
+    package_manifest = (run.counts_json or {}).get("package_manifest")
+    records = (run.counts_json or {}).get("package_records")
+    if not isinstance(package_manifest, dict) or not isinstance(records, list):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sync package payload not found")
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("manifest.json", json.dumps(package_manifest, ensure_ascii=False, indent=2))
+        archive.writestr(
+            "records.jsonl",
+            "\n".join(json.dumps(record, ensure_ascii=False, sort_keys=True) for record in records) + "\n",
+        )
+    buffer.seek(0)
+    headers = {"Content-Disposition": f'attachment; filename="{package_id}.zip"'}
+    return StreamingResponse(buffer, media_type="application/zip", headers=headers)
+
+
+@router.post("/sync/packages/import", response_model=SyncPackageImportRead)
+def import_sync_package(
+    payload: SyncPackageImportCreate,
+    current_user: User = SUPER_ADMIN,
+    session: Session = DB_SESSION,
+) -> SyncPackageImportRead:
+    package_id = str(payload.package_manifest.get("package_id") or "")
+    if not package_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="package_manifest.package_id is required")
+    expected_hash = str(payload.package_manifest.get("records_sha256") or "")
+    if expected_hash and expected_hash != _hash_json(payload.records):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="records_sha256 does not match records")
+
+    applied = 0
+    skipped = 0
+    failed = 0
+    errors: list[str] = []
+    for record in payload.records:
+        event_id = str(record.get("event_id") or "")
+        if not event_id:
+            failed += 1
+            errors.append("record without event_id")
+            continue
+        existing = session.scalar(select(SyncOutbox).where(SyncOutbox.event_id == event_id))
+        inbox_existing = session.scalar(select(SyncInbox).where(SyncInbox.event_id == event_id))
+        if inbox_existing is not None or existing is not None:
+            skipped += 1
+            continue
+
+        session.add(
+            SyncInbox(
+                event_id=event_id,
+                source_instance_id=str(payload.package_manifest.get("source_instance_id") or ""),
+                object_type=str(record.get("object_type") or ""),
+                object_id=str(record.get("object_global_id") or record.get("object_id") or ""),
+                payload_hash=str(record.get("content_hash") or ""),
+                status="applied",
+            ),
+        )
+        applied += 1
+
     now = utc_now()
     run = SyncRun(
-        package_id=f"sync_{now.strftime('%Y%m%d%H%M%S%f')}",
-        source_instance_id=payload.source_instance_id,
-        target_instance_id=payload.target_instance_id,
-        direction=payload.direction,
-        status="completed",
-        counts_json={"pending_outbox": int(pending_count), "exported": int(pending_count), "conflicts": 0},
+        package_id=f"{package_id}_import_{now.strftime('%Y%m%d%H%M%S%f')}",
+        source_instance_id=str(payload.package_manifest.get("source_instance_id") or ""),
+        target_instance_id=str(payload.package_manifest.get("target_instance_id") or ""),
+        direction="import",
+        status="completed" if failed == 0 else "completed_with_errors",
+        counts_json={
+            "source_package_id": package_id,
+            "received": len(payload.records),
+            "applied": applied,
+            "skipped": skipped,
+            "failed": failed,
+            "errors": errors,
+        },
         started_at=now,
         completed_at=now,
     )
@@ -248,13 +353,21 @@ def create_sync_run(
     write_audit(
         session,
         current_user,
-        "sync_run.create",
+        "sync_package.import",
         "sync_run",
         run.id,
-        {"package_id": run.package_id, "direction": run.direction},
+        {"source_package_id": package_id, "applied": applied, "skipped": skipped, "failed": failed},
     )
     session.commit()
-    return _sync_run_to_read(session.get(SyncRun, run.id) or run)
+    return SyncPackageImportRead(
+        package_id=package_id,
+        status=run.status,
+        received=len(payload.records),
+        applied=applied,
+        skipped=skipped,
+        failed=failed,
+        errors=errors,
+    )
 
 
 @router.get("/audit-logs", response_model=list[AuditLogRead])
@@ -659,6 +772,110 @@ def get_entity_milestone(
     if milestone is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entity milestone not found")
     return _entity_milestone_to_detail(milestone)
+
+
+def _create_sync_export_package(
+    session: Session,
+    *,
+    payload: SyncPackageExportCreate,
+    current_user: User,
+) -> SyncPackageExportRead:
+    now = utc_now()
+    statement = (
+        select(SyncOutbox)
+        .where(
+            SyncOutbox.status == "pending",
+            SyncOutbox.visibility_scope != "restricted",
+            SyncOutbox.sync_policy.in_(EXPORTABLE_SYNC_POLICIES),
+        )
+        .order_by(SyncOutbox.created_at, SyncOutbox.id)
+        .limit(payload.limit)
+    )
+    outbox_items = list(session.scalars(statement).all())
+    records = [_sync_outbox_to_record(item) for item in outbox_items]
+    package_manifest = {
+        "format_version": "sync_package_v1",
+        "package_id": f"sync_{now.strftime('%Y%m%d%H%M%S%f')}",
+        "source_instance_id": payload.source_instance_id,
+        "target_instance_id": payload.target_instance_id,
+        "direction": payload.direction,
+        "created_at": now.isoformat(),
+        "record_count": len(records),
+        "records_sha256": _hash_json(records),
+        "safety": {
+            "excluded_visibility_scope": "restricted",
+            "allowed_sync_policies": sorted(EXPORTABLE_SYNC_POLICIES),
+            "secrets_policy": "payloads must reference credential_ref and must not include tokens",
+        },
+    }
+    pending_total = session.scalar(select(func.count()).select_from(SyncOutbox).where(SyncOutbox.status == "pending")) or 0
+    counts_json = {
+        "pending_outbox": int(pending_total),
+        "exported": len(records),
+        "conflicts": 0,
+        "package_manifest": package_manifest,
+        "package_records": records,
+    }
+    run = SyncRun(
+        package_id=package_manifest["package_id"],
+        source_instance_id=payload.source_instance_id,
+        target_instance_id=payload.target_instance_id,
+        direction=payload.direction,
+        status="completed",
+        counts_json=counts_json,
+        started_at=now,
+        completed_at=now,
+    )
+    session.add(run)
+    for item in outbox_items:
+        item.status = "exported"
+    session.flush()
+    write_audit(
+        session,
+        current_user,
+        "sync_package.export",
+        "sync_run",
+        run.id,
+        {"package_id": run.package_id, "direction": run.direction, "exported": len(records)},
+    )
+    session.commit()
+    session.refresh(run)
+    return SyncPackageExportRead(
+        sync_run=_sync_run_to_read(run),
+        package_manifest=package_manifest,
+        records=records,
+    )
+
+
+def _sync_outbox_to_record(item: SyncOutbox) -> dict[str, object]:
+    payload = item.payload_json or {}
+    content_hash = item.payload_hash or _hash_json(payload)
+    return {
+        "event_id": item.event_id,
+        "object_type": item.object_type,
+        "object_id": item.object_id,
+        "object_global_id": str(payload.get("global_id") or item.object_id),
+        "operation": item.operation,
+        "revision": int(payload.get("revision") or 1),
+        "content_hash": content_hash,
+        "visibility_scope": item.visibility_scope,
+        "sync_policy": item.sync_policy,
+        "workspace_code": item.workspace_code,
+        "domain_code": item.domain_code,
+        "payload": payload,
+    }
+
+
+def _hash_json(value: object) -> str:
+    data = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(data).hexdigest()
+
+
+def _load_sync_run_by_package(session: Session, package_id: str) -> SyncRun:
+    run = session.scalar(select(SyncRun).where(SyncRun.package_id == package_id))
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sync package not found")
+    return run
 
 
 def _load_requirement(session: Session, requirement_id: str) -> Requirement:

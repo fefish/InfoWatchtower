@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { GitCompareArrows, PackageCheck, RefreshCw } from "lucide-vue-next";
+import { DownloadCloud, GitCompareArrows, PackageCheck, RefreshCw } from "lucide-vue-next";
 import { onMounted, ref } from "vue";
 
-import { createSyncRun, fetchSyncRuns, type SyncRunRecord } from "../api/operations";
+import { createSyncRun, fetchSyncPackageDownload, fetchSyncRuns, type SyncRunRecord } from "../api/operations";
 
 const runs = ref<SyncRunRecord[]>([]);
 const loading = ref(false);
 const creating = ref(false);
+const downloadingPackageId = ref("");
 const error = ref("");
 const message = ref("");
 
@@ -29,17 +30,44 @@ async function createPackage() {
   try {
     const run = await createSyncRun();
     runs.value.unshift(run);
-    message.value = `同步包记录已创建：${run.package_id}`;
+    message.value = `同步包已导出：${run.package_id}`;
   } catch (exc) {
-    error.value = exc instanceof Error ? exc.message : "创建同步运行失败";
+    error.value = exc instanceof Error ? exc.message : "导出同步包失败";
   } finally {
     creating.value = false;
+  }
+}
+
+async function downloadPackage(run: SyncRunRecord) {
+  downloadingPackageId.value = run.package_id;
+  error.value = "";
+  try {
+    const blob = await fetchSyncPackageDownload(run.package_id);
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${run.package_id}.zip`;
+    link.click();
+    URL.revokeObjectURL(url);
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "下载同步包失败";
+  } finally {
+    downloadingPackageId.value = "";
   }
 }
 
 function countValue(run: SyncRunRecord, key: string) {
   const value = run.counts_json[key];
   return typeof value === "number" ? value : 0;
+}
+
+function manifestValue(run: SyncRunRecord, key: string) {
+  const manifest = run.counts_json.package_manifest;
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
+    return "";
+  }
+  const value = (manifest as Record<string, unknown>)[key];
+  return typeof value === "string" || typeof value === "number" ? String(value) : "";
 }
 
 onMounted(loadRuns);
@@ -60,7 +88,7 @@ onMounted(loadRuns);
         </button>
         <button type="button" class="icon-button" :disabled="creating" @click="createPackage">
           <PackageCheck :size="17" />
-          <span>{{ creating ? "创建中" : "创建同步记录" }}</span>
+          <span>{{ creating ? "导出中" : "导出同步包" }}</span>
         </button>
       </div>
     </header>
@@ -82,7 +110,18 @@ onMounted(loadRuns);
             <span>outbox {{ countValue(run, "pending_outbox") }}</span>
             <span>exported {{ countValue(run, "exported") }}</span>
             <span>conflicts {{ countValue(run, "conflicts") }}</span>
+            <span v-if="manifestValue(run, 'records_sha256')">sha256 {{ manifestValue(run, "records_sha256").slice(0, 12) }}</span>
           </div>
+          <button
+            v-if="run.counts_json.package_manifest"
+            type="button"
+            class="text-link"
+            :disabled="downloadingPackageId === run.package_id"
+            @click="downloadPackage(run)"
+          >
+            <DownloadCloud :size="15" />
+            <span>{{ downloadingPackageId === run.package_id ? "下载中" : "下载同步包" }}</span>
+          </button>
         </div>
       </article>
       <p v-if="!loading && runs.length === 0" class="empty-state">暂无同步运行。</p>

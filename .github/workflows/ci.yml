@@ -16,6 +16,8 @@ jobs:
       - name: Install backend
         working-directory: backend
         run: pip install ".[dev]"
+      - name: Check production deployment config
+        run: python scripts/check_prod_deploy.py --env-file deploy/env.production.example
       - name: Test backend
         working-directory: backend
         env:
@@ -23,6 +25,15 @@ jobs:
         run: |
           coverage run -m pytest
           coverage report
+          coverage xml -o coverage.xml
+          coverage html -d htmlcov
+      - name: Upload backend coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage-report
+          path: |
+            backend/coverage.xml
+            backend/htmlcov
 
   frontend:
     runs-on: ubuntu-latest

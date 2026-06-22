@@ -158,12 +158,29 @@ scripts/   SQL 校验、历史导入、数据回填等工具
 关键文件：
 
 - `backend/app/exports/company_sql.py`
+- `GET /api/exports/{export_job_id}/trace`
 - `config/contracts/news_sql_mapping.json`
 - `docs/data-format-mapping.md`
+
+导出追溯：
+
+- `export_jobs` 保存导出批次和 SQL 预览结果。
+- `export_job_items` 按 SQL 语句保存 `daily_report_item_id`、`generated_news_id`、`news_item_id`。
+- trace API 通过 `news_items -> raw_items -> data_sources` 补齐原始来源链路。
+- 追溯字段只留在 InfoWatchtower 自己的关系表和 API 中，不写入公司 SQL 的 `content_json`。
 
 ### 5.6 登录、权限和同步
 
 系统支持公网账号密码登录，并预留 Google OIDC 和公司 IDaaS code flow。内网同步遵循单向同步优先原则：公网公开信号向内网同步，内网用户反馈默认不回流公网。
+
+第一版同步包能力已经提供可审计骨架：
+
+- `POST /api/sync/packages/export` 从 `sync_outbox` 生成同步包 manifest 和 records。
+- `GET /api/sync/packages/{package_id}/download` 下载 zip，包含 `manifest.json` 和 `records.jsonl`。
+- `POST /api/sync/packages/import` 写入 `sync_inbox` 做幂等验收和审计。
+- `/sync` 页面可导出和下载同步包。
+
+当前导入侧只做 inbox 幂等和审计，不直接改业务表；后续再按 `object_type` 增加 apply handler 和冲突处理。
 
 关键文件：
 
@@ -248,11 +265,13 @@ sequenceDiagram
 - 日报流水线。
 - 周报草稿和条目编辑。
 - 公司 SQL 导出。
+- SQL 导出 trace API。
+- 同步包导出、下载和导入幂等骨架。
 - Tech Insight Loop 源治理和历史归档导入。
 
 当前本地验证结果：
 
-- 后端测试：`81 passed`。
+- 后端测试：`83 passed`。
 - 后端 `backend/app` 整体源码覆盖率：`83%`。
 - 白盒提交口径：新增代码测试覆盖率 `80%`。
 
@@ -261,13 +280,15 @@ CI 后续要求：
 - 后端测试必须通过。
 - 前端构建必须通过。
 - 覆盖率门禁不低于 `80%`。
+- CI 生成 `coverage.xml` 和 `htmlcov`，并上传 `backend-coverage-report` artifact。
+- CI 运行 `scripts/check_prod_deploy.py --env-file deploy/env.production.example` 检查生产部署配置。
 
 ## 10. 待补充设计项
 
 | 项目 | 说明 |
 | --- | --- |
-| 生产部署定稿 | 需要补生产 Compose、反向代理和备份恢复演练 |
-| 同步包实质能力 | 需要实现公网到内网的导出、导入、幂等和审计 |
-| SQL 条目级追溯 | 需要从 SQL 行追到 daily item、generated news、news item、raw item 和 source |
 | 深度历史补采 | 需要超出 RSS 当前窗口的归档页、sitemap、论文 provider 和手工 CSV |
 | 周报正文生成 | 当前只管理采信项，自动长文生成仍是后续任务 |
+| 同步包业务 apply handler | 当前导入侧先写 `sync_inbox` 做幂等和审计，后续补按对象类型 upsert 和冲突处理 |
+| 生产备份恢复演练 | 当前有生产 compose、env 模板和部署检查脚本，仍需在真实服务器跑恢复演练 |
+| 领域包样例 | 需要补硬件或半导体 domain pack 样例证明跨板块复用 |

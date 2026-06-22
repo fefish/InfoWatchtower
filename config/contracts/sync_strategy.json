@@ -113,15 +113,14 @@
       ],
       "sync_runs": [
         "id",
+        "package_id",
         "direction",
-        "mode",
         "status",
         "source_instance_id",
         "target_instance_id",
-        "manifest_json",
+        "counts_json",
         "started_at",
-        "finished_at",
-        "created_by"
+        "completed_at"
       ],
       "sync_conflicts": [
         "id",
@@ -141,7 +140,18 @@
     "package_format": {
       "archive": "zip",
       "manifest": "manifest.json",
+      "records": "records.jsonl",
       "record_format": "jsonl envelope",
+      "manifest_required_fields": [
+        "format_version",
+        "package_id",
+        "source_instance_id",
+        "target_instance_id",
+        "direction",
+        "created_at",
+        "record_count",
+        "records_sha256"
+      ],
       "required_envelope_fields": [
         "event_id",
         "object_type",
