@@ -283,7 +283,7 @@ CI 后续要求：
 - CI 生成 `coverage.xml` 和 `htmlcov`，并上传 `backend-coverage-report` artifact。
 - CI 运行 `scripts/check_prod_deploy.py --env-file deploy/env.production.example` 检查生产部署配置。
 
-## 10. 待补充设计项
+## 10. 后续演进项
 
 | 项目 | 说明 |
 | --- | --- |
