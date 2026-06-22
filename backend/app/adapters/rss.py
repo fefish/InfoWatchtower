@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+from calendar import timegm
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
+from time import struct_time
 from typing import Any
 
 import feedparser
@@ -28,7 +30,14 @@ class RssFeedAdapter:
     def _entry_to_raw_item(self, entry: Any) -> RawItemInput:
         source_url = entry.get("link")
         title = entry.get("title", "")
-        published_at = _parse_feed_datetime(entry.get("published") or entry.get("updated"))
+        published_at = _first_feed_datetime(
+            entry.get("published"),
+            entry.get("updated"),
+            entry.get("created"),
+            entry.get("published_parsed"),
+            entry.get("updated_parsed"),
+            entry.get("created_parsed"),
+        )
         entry_key = entry.get("id") or entry.get("guid") or source_url or title
         summary = entry.get("summary", "")
         content = ""
@@ -48,16 +57,46 @@ class PaperRssFeedAdapter(RssFeedAdapter):
     source_type = "paper_rss"
 
 
-def _parse_feed_datetime(value: str | None) -> datetime | None:
+def _first_feed_datetime(*values: Any) -> datetime | None:
+    for value in values:
+        parsed = _parse_feed_datetime(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _parse_feed_datetime(value: Any) -> datetime | None:
     if not value:
         return None
+    if isinstance(value, datetime):
+        parsed = value
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=UTC)
+        return parsed
+    tuple_like_feed_time = (
+        isinstance(value, tuple)
+        and len(value) >= 9
+        and all(isinstance(part, int) for part in value[:6])
+    )
+    if isinstance(value, struct_time) or tuple_like_feed_time:
+        try:
+            return datetime.fromtimestamp(timegm(value[:9]), tz=UTC)
+        except (OverflowError, TypeError, ValueError):
+            return None
+
+    text = str(value).strip()
     try:
-        parsed = parsedate_to_datetime(value)
+        parsed = parsedate_to_datetime(text)
     except (TypeError, ValueError):
-        return None
+        parsed = None
+    if parsed is None:
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=UTC)
-    return parsed
+    return parsed.astimezone(UTC)
 
 
 def _json_safe(value: Any) -> dict[str, Any]:

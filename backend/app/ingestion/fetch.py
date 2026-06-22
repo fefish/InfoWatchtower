@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from hashlib import sha1
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -26,6 +27,10 @@ class SourceNotFoundError(ValueError):
 
 class SourceFetchError(RuntimeError):
     pass
+
+
+MAX_RAW_ENTRY_KEY_LENGTH = 255
+RAW_ENTRY_KEY_HASH_LENGTH = 16
 
 
 async def fetch_source_to_raw_items(
@@ -93,10 +98,11 @@ def _upsert_raw_item(
     raw_input: RawItemInput,
     fetched_at: datetime,
 ) -> bool:
+    entry_key = normalize_raw_entry_key(raw_input.entry_key)
     raw_item = session.scalar(
         select(RawItem).where(
             RawItem.data_source_id == data_source.id,
-            RawItem.entry_key == raw_input.entry_key,
+            RawItem.entry_key == entry_key,
         ),
     )
     created = raw_item is None
@@ -109,7 +115,7 @@ def _upsert_raw_item(
             sync_policy=data_source.sync_policy,
             source_type=data_source.source_type,
             source_name=data_source.name,
-            entry_key=raw_input.entry_key,
+            entry_key=entry_key,
             fetched_at=fetched_at,
         )
         session.add(raw_item)
@@ -123,6 +129,15 @@ def _upsert_raw_item(
     raw_item.published_at = raw_input.published_at
     raw_item.fetched_at = fetched_at
     return created
+
+
+def normalize_raw_entry_key(entry_key: str) -> str:
+    value = str(entry_key or "").strip()
+    if len(value) <= MAX_RAW_ENTRY_KEY_LENGTH:
+        return value
+    digest = sha1(value.encode("utf-8")).hexdigest()[:RAW_ENTRY_KEY_HASH_LENGTH]
+    prefix_length = MAX_RAW_ENTRY_KEY_LENGTH - RAW_ENTRY_KEY_HASH_LENGTH - 1
+    return f"{value[:prefix_length]}#{digest}"
 
 
 def _error_message(exc: Exception) -> str:

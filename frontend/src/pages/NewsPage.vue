@@ -31,6 +31,10 @@ const filteredGroups = computed(() => {
       group.winner_title,
       group.dedupe_key,
       group.status,
+      group.recommendation?.day_key,
+      group.recommendation?.recommendation_reason,
+      group.daily_report?.day_key,
+      group.daily_report?.category,
       ...group.items.flatMap((item) => [item.title, item.source_name, item.duplicate_reason])
     ]
       .filter(Boolean)
@@ -167,6 +171,51 @@ function scoreText(score: number) {
   return score.toFixed(2);
 }
 
+function recommendationLabel(group: DedupeGroupRecord) {
+  if (!group.recommendation) {
+    return "未推荐";
+  }
+  return group.recommendation.selected ? "已选入推荐" : "推荐候选";
+}
+
+function dailyLabel(group: DedupeGroupRecord) {
+  const daily = group.daily_report;
+  if (!daily) {
+    return "未入日报";
+  }
+  if (daily.adoption_status === 2) {
+    return `日报采信 · ${daily.day_key}`;
+  }
+  if (daily.adoption_status === -1) {
+    return `日报剔除 · ${daily.day_key}`;
+  }
+  return `日报候选 · ${daily.day_key}`;
+}
+
+function groupScore(group: DedupeGroupRecord) {
+  return group.recommendation?.final_score ?? winnerOf(group)?.rank_score ?? 0;
+}
+
+function scoreParts(group: DedupeGroupRecord): [string, number][] {
+  const recommendation = group.recommendation;
+  if (!recommendation) {
+    return [["来源排序", winnerOf(group)?.rank_score ?? 0]];
+  }
+  return [
+    ["质量", recommendation.quality_score],
+    ["主题", recommendation.topic_score],
+    ["时效", recommendation.freshness_score],
+    ["反馈", recommendation.feedback_score],
+    ["多样性", recommendation.diversity_score],
+    ["来源", recommendation.source_score],
+    ["热度", recommendation.heat_score]
+  ];
+}
+
+function compactList(items: string[], limit = 2) {
+  return items.slice(0, limit).join(" / ");
+}
+
 watch(
   () => workspace.currentCode,
   () => {
@@ -256,14 +305,16 @@ onMounted(loadCandidatePool);
                   <span>{{ group.item_count }} 个来源</span>
                   <span>{{ displaySourceType(winnerNews(group)?.source_type) }}</span>
                   <span>{{ formatDate(winnerNews(group)?.published_at) }}</span>
+                  <span class="state-chip">{{ recommendationLabel(group) }}</span>
+                  <span class="category-chip">{{ dailyLabel(group) }}</span>
                 </div>
                 <h3>{{ displayCandidateTitle(group) }}</h3>
                 <p class="candidate-summary">{{ displayCandidateSummary(group) }}</p>
               </div>
               <aside class="candidate-judge">
-                <span class="score-badge">winner</span>
-                <strong>{{ scoreText(winnerOf(group)?.rank_score ?? 0) }}</strong>
-                <small>来源排序分</small>
+                <span class="score-badge">{{ group.recommendation ? "recommend" : "winner" }}</span>
+                <strong>{{ scoreText(groupScore(group)) }}</strong>
+                <small>{{ group.recommendation ? "最终推荐分" : "来源排序分" }}</small>
               </aside>
             </div>
 
@@ -274,6 +325,8 @@ onMounted(loadCandidatePool);
                 <ExternalLink :size="13" />
                 原文
               </a>
+              <span v-if="group.recommendation">推荐排序 #{{ group.recommendation.rank }}</span>
+              <span v-if="group.daily_report">{{ group.daily_report.category }} · {{ group.daily_report.generation_status }}</span>
             </div>
 
             <div v-if="duplicateSourceNames(group).length > 0" class="duplicate-source-cloud">
@@ -292,6 +345,33 @@ onMounted(loadCandidatePool);
                 <code>{{ group.dedupe_key }}</code>
                 <span>dedupe_group_id</span>
                 <code>{{ group.id }}</code>
+                <span>recommendation_item_id</span>
+                <code>{{ group.recommendation?.recommendation_item_id || "未进入推荐" }}</code>
+                <span>daily_report_item_id</span>
+                <code>{{ group.daily_report?.daily_report_item_id || "未进入日报" }}</code>
+              </div>
+              <div v-if="group.recommendation" class="score-grid trace-score-grid">
+                <div v-for="[label, score] in scoreParts(group)" :key="label" class="score-cell">
+                  <span>{{ label }}</span>
+                  <div><i :style="{ width: `${Math.min(100, Math.max(0, score * 100))}%` }"></i></div>
+                  <strong>{{ scoreText(score) }}</strong>
+                </div>
+              </div>
+              <p v-if="group.recommendation?.recommendation_reason" class="muted-line">
+                推荐理由：{{ group.recommendation.recommendation_reason }}
+              </p>
+              <div v-if="group.recommendation" class="admission-line">
+                <span>
+                  准入：{{ group.recommendation.admission_level || "未评分" }}
+                  · {{ group.recommendation.admission_pool || "unknown" }}
+                  · {{ group.recommendation.admission_score.toFixed(2) }}
+                </span>
+                <span v-if="group.recommendation.noise_types.length">
+                  噪声：{{ compactList(group.recommendation.noise_types, 3) }}
+                </span>
+                <span v-if="group.recommendation.expert_routes.length">
+                  专家：{{ compactList(group.recommendation.expert_routes, 2) }}
+                </span>
               </div>
               <div class="duplicate-list">
                 <div v-for="item in group.items" :key="item.id" class="duplicate-row">

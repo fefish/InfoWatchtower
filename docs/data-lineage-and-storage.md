@@ -95,6 +95,28 @@ raw_items.data_source_id -> data_sources.id
 - 被编辑后，可以查回模型原稿、编辑版本和原始 payload。
 - 导出 SQL 后，可以查回是哪条日报条目触发导出。
 
+Tech Insight Loop 历史报告有一条单独的只读归档链路：
+
+```text
+historical_reports
+-> source_refs_json.resolved[].raw_entry_key
+-> raw_items(entry_key)
+-> data_sources(source_type = legacy_tech_insight_loop)
+```
+
+这条链路只用于历史检索和追溯。它不进入当前推荐、日报采信和标准公司 SQL 导出；如需展示旧日报/周报，应从 `historical_reports` 做只读视图或投影。
+
+Tech Insight Loop 实体大事记还有一条实体时间线归档链路：
+
+```text
+tracked_entities
+-> entity_milestones
+-> raw_items(optional, when legacy article has been imported)
+-> historical_reports(optional, when legacy report has been imported)
+```
+
+`entity_milestones.metadata_json.legacy_refs` 必须保留旧 `entity_id/article_id/report_id` 和解析状态。实体事件可用于后续“公司/组织/项目时间线”页面，但不修改 `raw_items/news_items/historical_reports`，也不进入当前推荐、日报采信或标准公司 SQL 导出。
+
 ## 4. 编辑不覆盖原始数据
 
 编辑层只做覆盖，不改原始数据。

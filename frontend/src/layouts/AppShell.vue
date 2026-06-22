@@ -1,16 +1,21 @@
 <script setup lang="ts">
 import {
   Activity,
+  Archive,
   Bell,
   CalendarDays,
+  ClipboardCheck,
   Database,
   FileText,
+  GitBranch,
   Layers,
   LogOut,
   Radio,
   Search,
   ShieldCheck,
   SquareStack,
+  GitCompareArrows,
+  ListChecks,
   Users
 } from "lucide-vue-next";
 import { computed, onMounted } from "vue";
@@ -29,6 +34,12 @@ const sectionIcons = {
   candidate_pool: Layers,
   daily_reports: FileText,
   weekly_reports: CalendarDays,
+  historical_reports: Archive,
+  entity_milestones: GitBranch,
+  quality_archive: ClipboardCheck,
+  requirements: ListChecks,
+  topic_tasks: SquareStack,
+  sync: GitCompareArrows,
   exports: Database,
   users: Users,
   audit_logs: ShieldCheck
@@ -43,7 +54,18 @@ const navItems = computed(() =>
   }))
 );
 
-const primaryNavKeys = new Set(["dashboard", "source_management", "candidate_pool", "daily_reports", "weekly_reports"]);
+const primaryNavKeys = new Set([
+  "dashboard",
+  "source_management",
+  "candidate_pool",
+  "daily_reports",
+  "weekly_reports",
+  "historical_reports",
+  "entity_milestones",
+  "quality_archive",
+  "requirements",
+  "topic_tasks"
+]);
 
 const primaryNavItems = computed(() => navItems.value.filter((item) => primaryNavKeys.has(item.key)));
 const systemNavItems = computed(() => navItems.value.filter((item) => !primaryNavKeys.has(item.key)));

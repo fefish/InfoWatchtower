@@ -12,6 +12,7 @@ class RecommendationRunCreate(BaseModel):
     limit: int = Field(default=15, ge=0, le=100)
     source_daily_limit: int = Field(default=2, ge=1, le=20)
     create_daily_draft: bool = True
+    generation_timeout_seconds: float = Field(default=45.0, ge=5, le=180)
 
 
 class RecommendationItemRead(BaseModel):
@@ -29,6 +30,13 @@ class RecommendationItemRead(BaseModel):
     final_score: float
     selected: bool
     recommendation_reason: str
+    admission_level: str
+    admission_score: float
+    admission_pool: str
+    noise_types: list[str] = Field(default_factory=list)
+    reject_reasons: list[str] = Field(default_factory=list)
+    scorer_breakdown: dict[str, Any] = Field(default_factory=dict)
+    expert_routes: list[str] = Field(default_factory=list)
     source_title: str
     source_name: str
     source_url: str | None

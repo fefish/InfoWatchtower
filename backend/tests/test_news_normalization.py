@@ -7,8 +7,10 @@ from app.core.database import Base
 from app.models.content import DataSource, DedupeGroup, NewsItem, RawItem
 from app.models.workspace import Workspace, WorkspaceSourceLink
 from app.normalization.news import (
+    MAX_DEDUPE_KEY_LENGTH,
     NewsNormalizationRequest,
     canonicalize_url,
+    normalize_dedupe_key,
     normalize_title,
     normalize_workspace_raw_items,
 )
@@ -187,6 +189,17 @@ def test_title_date_fallback_only_when_url_is_missing():
     assert group is not None
     assert group.dedupe_key == "title:no url topic|date:2026-05-05"
     assert group.item_count == 2
+
+
+def test_dedupe_key_is_deterministically_shortened_for_long_urls():
+    long_key = "url:https://example.com/redirect?" + ("very_long_param=value&" * 80)
+
+    shortened = normalize_dedupe_key(long_key)
+
+    assert len(shortened) == MAX_DEDUPE_KEY_LENGTH
+    assert shortened == normalize_dedupe_key(long_key)
+    assert shortened.startswith("url:https://example.com/redirect?")
+    assert "#" in shortened[-17:]
 
 
 def test_existing_news_is_removed_from_candidate_pool_when_raw_becomes_invalid():

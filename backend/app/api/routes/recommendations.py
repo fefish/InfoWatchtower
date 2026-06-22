@@ -42,6 +42,7 @@ def create_recommendation_run(
                 limit=payload.limit,
                 source_daily_limit=payload.source_daily_limit,
                 create_daily_draft=payload.create_daily_draft,
+                generation_timeout_seconds=payload.generation_timeout_seconds,
             ),
         )
     except WorkspaceNotFoundError as exc:
@@ -129,6 +130,13 @@ def _run_to_read(run: RecommendationRun, include_items: bool = True) -> Recommen
                 final_score=item.final_score,
                 selected=item.selected,
                 recommendation_reason=item.recommendation_reason,
+                admission_level=item.admission_level,
+                admission_score=item.admission_score,
+                admission_pool=item.admission_pool,
+                noise_types=_string_list(item.noise_types_json),
+                reject_reasons=_string_list(item.reject_reasons_json),
+                scorer_breakdown=dict(item.scorer_breakdown_json or {}),
+                expert_routes=_string_list(item.expert_routes_json),
                 source_title=item.news_item.source_title,
                 source_name=item.news_item.source_name,
                 source_url=item.news_item.source_url,
@@ -136,3 +144,9 @@ def _run_to_read(run: RecommendationRun, include_items: bool = True) -> Recommen
             for item in items
         ],
     )
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if str(item).strip()]

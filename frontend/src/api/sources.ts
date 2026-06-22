@@ -16,6 +16,14 @@ export interface DataSourceRecord {
   info_category: string;
   source_tags: string[];
   source_secondary_tags: string[];
+  source_tier: string;
+  source_channel_type: string;
+  expert_routes: string[];
+  inclusion_recommendation: string;
+  metadata_only: boolean;
+  needs_entry: boolean;
+  fetch_entry_status: string;
+  source_quality_notes: string;
   workspace_link_enabled: boolean | null;
   workspace_source_weight: number | null;
   workspace_daily_limit: number | null;
@@ -26,6 +34,14 @@ export interface LegacySeedImportResult {
   created: number;
   updated: number;
   total: number;
+}
+
+export interface TechInsightLoopImportResult {
+  created: number;
+  updated: number;
+  total: number;
+  fetchable: number;
+  metadata_only: number;
 }
 
 export interface SourceWorkspaceConfigUpdate {
@@ -67,6 +83,12 @@ export async function fetchSources(workspaceCode?: string): Promise<DataSourceRe
 
 export async function importLegacySources(): Promise<LegacySeedImportResult> {
   return requestJson<LegacySeedImportResult>("/api/sources/import-legacy-seeds", {
+    method: "POST"
+  });
+}
+
+export async function importTechInsightLoopSources(): Promise<TechInsightLoopImportResult> {
+  return requestJson<TechInsightLoopImportResult>("/api/sources/import-tech-insight-loop", {
     method: "POST"
   });
 }

@@ -66,6 +66,34 @@ RSS adapter 从 feed 里拿到的单条 entry 通常类似这样：
 
 这里不删原始字段。将来如果要排查、重跑、改 adapter，都能看 `raw_payload_json`。
 
+实现约束：`entry_key` 入库列长为 255。若 RSS/页面源把超长跳转 URL 当作 entry id，系统会将入库 `entry_key` 确定性缩短为“前缀 + hash 后缀”，但 `raw_payload_json.entry_key` 继续保留源侧原值。
+
+Tech Insight Loop 历史素材导入也遵循同一条规则，但它是归档源，不是当前抓取源：
+
+```json
+{
+  "source_type": "legacy_tech_insight_loop",
+  "source_name": "Tech Insight Loop Legacy Archive",
+  "entry_key": "legacy_tech_insight_loop:article:123",
+  "workspace_code": "legacy_tech_insight_loop",
+  "raw_payload_json": {
+    "legacy_tech_insight_loop": {
+      "id": 123,
+      "title": "旧系统文章标题",
+      "url": "https://example.com/article",
+      "published_at": "2026-05-20T09:00:00+08:00"
+    },
+    "legacy_import": {
+      "company_sql_eligible": false,
+      "recommendation_eligible": false,
+      "source_system": "tech_insight_loop"
+    }
+  }
+}
+```
+
+旧素材进入禁用的 `legacy_tech_insight_loop` 档案源，默认不参与当前推荐、日报生成和标准公司 SQL 导出。
+
 ## 3. 标准化成 news_items
 
 `news_items` 是统一标准化新闻。不同源都会变成这个结构后再去重，去重 winner 进入候选池，再进入推荐和日报/周报采信。
@@ -100,6 +128,163 @@ RSS adapter 从 feed 里拿到的单条 entry 通常类似这样：
 ```text
 title:introducing workspace agents in chatgpt|date:2026-04-22
 ```
+
+实现约束：`dedupe_key` 入库列长为 512。超长 `url:` 或 `title/date` key 会确定性缩短为“前缀 + hash 后缀”；完整 `canonical_url`、`source_url` 和原始 payload 不会被截断。
+
+## 3.1 历史报告归档 historical_reports
+
+Tech Insight Loop 旧 `reports` 不直接写入当前 `daily_reports/weekly_reports`。旧库存在同一天/同周多份报告，直接写入当前唯一键会丢信息，因此先无损进入 `historical_reports`：
+
+```json
+{
+  "legacy_system": "tech_insight_loop",
+  "legacy_table": "reports",
+  "legacy_id": 45,
+  "workspace_code": "legacy_tech_insight_loop",
+  "report_type": "daily",
+  "status": "published_imported",
+  "period_start_at": "2026-05-20T00:00:00+08:00",
+  "period_end_at": "2026-05-20T23:59:59+08:00",
+  "title": "技术洞察日报 2026-05-20",
+  "source_refs_json": {
+    "legacy_source_article_ids": [123, 456, 999],
+    "resolved": [
+      {"legacy_article_id": 123, "raw_entry_key": "legacy_tech_insight_loop:article:123"},
+      {"legacy_article_id": 456, "raw_entry_key": "legacy_tech_insight_loop:article:456"}
+    ],
+    "unresolved": [999]
+  },
+  "metadata_json": {
+    "legacy_import": {
+      "company_sql_eligible": false,
+      "recommendation_eligible": false,
+      "target": "historical_reports"
+    }
+  }
+}
+```
+
+后续如果要按日报/周报方式阅读旧内容，应从 `historical_reports` 做只读查询或投影视图，不把它混成当前日报事实源。
+
+## 3.2 实体大事记归档 tracked_entities / entity_milestones
+
+Tech Insight Loop 旧 `ai_entities/entity_milestones` 进入实体时间线归档，不写 `news_items`，不改当前日报/周报，也不进入标准公司 SQL：
+
+```json
+{
+  "tracked_entity": {
+    "legacy_system": "tech_insight_loop",
+    "legacy_table": "ai_entities",
+    "legacy_id": "1",
+    "workspace_code": "legacy_tech_insight_loop",
+    "name": "OpenAI",
+    "entity_type": "AI模型厂商",
+    "rank": "A",
+    "aliases_json": ["GPT", "ChatGPT"],
+    "influence_score": 95,
+    "metadata_json": {
+      "legacy_import": {
+        "company_sql_eligible": false,
+        "recommendation_eligible": false,
+        "target": "tracked_entities"
+      }
+    }
+  },
+  "entity_milestone": {
+    "legacy_system": "tech_insight_loop",
+    "legacy_table": "entity_milestones",
+    "legacy_id": "1999",
+    "legacy_entity_id": "3",
+    "legacy_article_id": "16167",
+    "legacy_report_id": null,
+    "event_time": "2026-05-17T12:00:00+00:00",
+    "event_type": "产品/模型发布",
+    "title": "Google 发布 Gemini Omni 模型，强化多模态能力",
+    "source_url": "https://example.com/source",
+    "board": "AI模型",
+    "importance_score": 92,
+    "importance_level": "major",
+    "metadata_json": {
+      "legacy_refs": {
+        "raw_item_id": "resolved raw item id when articles have been imported",
+        "historical_report_id": null,
+        "article_ref_resolved": true,
+        "report_ref_resolved": null
+      },
+      "legacy_import": {
+        "company_sql_eligible": false,
+        "recommendation_eligible": false,
+        "target": "entity_milestones"
+      }
+    }
+  }
+}
+```
+
+如果历史素材/报告还没有先导入，实体事件仍可保留旧 `article_id/report_id`，并在 `metadata_json.legacy_refs` 记录未解析状态；后续重跑实体导入可幂等补齐新库引用。
+
+## 3.3 历史反馈和旧任务归档
+
+Tech Insight Loop 旧 `feedback/article_quality_feedback/jobs` 只作为历史质量参考，不写当前 `comments/ratings/ingestion_runs`：
+
+```json
+{
+  "historical_feedback_item": {
+    "legacy_system": "tech_insight_loop",
+    "legacy_table": "article_quality_feedback",
+    "legacy_id": "601",
+    "workspace_code": "legacy_tech_insight_loop",
+    "legacy_article_id": "16167",
+    "raw_item_id": "resolved raw item id when articles have been imported",
+    "feedback_kind": "quality_feedback",
+    "user_name": "试点用户",
+    "feedback_type": "无价值",
+    "reason": "和我们无关",
+    "comment": "泛商业",
+    "feedback_at": "2026-05-30T09:00:00+08:00",
+    "metadata_json": {
+      "legacy_refs": {
+        "article_id": "16167",
+        "article_identity": "legacy article_id when available",
+        "raw_item_id": "resolved raw item id when articles have been imported",
+        "article_ref_resolved": true
+      },
+      "legacy_import": {
+        "company_sql_eligible": false,
+        "recommendation_eligible": false,
+        "mutates_current_feedback": false,
+        "target": "historical_feedback_items"
+      }
+    }
+  },
+  "historical_job_run": {
+    "legacy_system": "tech_insight_loop",
+    "legacy_table": "jobs",
+    "legacy_id": "701",
+    "workspace_code": "legacy_tech_insight_loop",
+    "job_type": "rss_ingest",
+    "status": "finished_with_errors",
+    "message": "inserted=24, failed=1",
+    "total_sources": 25,
+    "processed_sources": 25,
+    "inserted_count": 24,
+    "failed_count": 1,
+    "details_json": {
+      "failed_source": "Example",
+      "error": "timeout"
+    },
+    "metadata_json": {
+      "legacy_import": {
+        "statistics_only": true,
+        "migrates_old_task_state_machine": false,
+        "target": "historical_job_runs"
+      }
+    }
+  }
+}
+```
+
+旧反馈如果无法解析到历史素材，仍保留归档记录，并在 `metadata_json.legacy_refs.article_ref_resolved=false` 中暴露缺口；导入验收面板会展示这类未解析反馈素材引用。
 
 ## 4. 去重结果
 
@@ -167,6 +352,20 @@ GET  /api/dedupe-groups?workspace_code=planning_intel
   "final_score": 82.1,
   "recommended": true,
   "recommendation_reason": "official_source; agent_topic; trusted_domain=openai.com",
+  "admission_level": "P1",
+  "admission_score": 78.4,
+  "admission_pool": "core_ai_infra",
+  "noise_types_json": ["marketing"],
+  "reject_reasons_json": [],
+  "scorer_breakdown_json": {
+    "mode": "content_scorer_v2",
+    "config_version": "v3-enhanced-no-new-boards",
+    "source_tier_score": 8,
+    "source_channel_score": 6,
+    "topic_score": 36,
+    "noise_penalty": -4
+  },
+  "expert_routes_json": ["AI Infra", "推理加速"],
   "rank": 3
 }
 ```
@@ -174,6 +373,8 @@ GET  /api/dedupe-groups?workspace_code=planning_intel
 早期没有用户反馈时，`feedback_score` 和 `heat_score` 可以为 0。上线后会由点赞、评论、评分、采信行为反哺。
 
 `planning_intel` 当前默认使用技术情报优先策略：`paper_rss`、研究机构、AI 软件、AI 基础设施、模型工程、推理/训练、RAG、多智能体、Agent 记忆和工程实践会加分；融资、财报、股价、市值、消费硬件、泛商业合作等新闻默认降权。商业信号仍可保留在候选池，但不应挤占每日 10 条左右的技术日报名额。
+
+Tech Insight Loop 第一轮融合后，`ContentScorer` 会读取 `config/scoring/content_scorer_v2.json`，结合源侧 `metadata_json` 中的源等级、渠道类型、专家路由、板块相关度和评分拆解，输出结构化准入字段。`recommendation_reason` 仍保留给人工阅读，结构化字段用于前端筛选、运行解释和后续质量治理；这些字段不进入公司 SQL，也不改变 `generated_news.content_json` 五段结构。
 
 ## 6. 模型生成稿 generated_news
 

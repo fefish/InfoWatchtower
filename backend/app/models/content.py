@@ -162,6 +162,13 @@ class RecommendationItem(IdMixin, ScopeMixin, SyncMixin, TimestampMixin, Base):
     final_score: Mapped[float] = mapped_column(Float, default=0.0)
     selected: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     recommendation_reason: Mapped[str] = mapped_column(Text, default="")
+    admission_level: Mapped[str] = mapped_column(String(16), default="", index=True)
+    admission_score: Mapped[float] = mapped_column(Float, default=0.0)
+    admission_pool: Mapped[str] = mapped_column(String(64), default="", index=True)
+    noise_types_json: Mapped[list[str]] = mapped_column(JsonColumn, default=list)
+    reject_reasons_json: Mapped[list[str]] = mapped_column(JsonColumn, default=list)
+    scorer_breakdown_json: Mapped[JsonDict] = mapped_column(JsonColumn, default=dict)
+    expert_routes_json: Mapped[list[str]] = mapped_column(JsonColumn, default=list)
 
     run: Mapped[RecommendationRun] = relationship(back_populates="items")
     dedupe_group: Mapped[DedupeGroup] = relationship(back_populates="recommendation_items")

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "description": "Workspace, section and domain model for supporting multiple work scopes without forking the intelligence pipeline.",
-  "core_rule": "Every workspace keeps the core intelligence modules: source management, candidate pool, daily reports, weekly reports, SQL exports, users and audit. Optional modules are database-registered and disabled by default.",
+  "core_rule": "Every workspace keeps the core intelligence modules: source management, candidate pool, daily reports, weekly reports, historical archive, entity timeline archive, quality archive, SQL exports, users and audit. Optional modules are database-registered and disabled by default.",
   "concepts": {
     "workspace": {
       "purpose": "A user-facing work scope that still uses the same intelligence pipeline.",
@@ -26,6 +26,9 @@
         "candidate_pool",
         "daily_reports",
         "weekly_reports",
+        "historical_reports",
+        "entity_milestones",
+        "quality_archive",
         "exports"
       ]
     },
@@ -47,6 +50,9 @@
     "candidate_pool",
     "daily_reports",
     "weekly_reports",
+    "historical_reports",
+    "entity_milestones",
+    "quality_archive",
     "exports",
     "users",
     "audit_logs"

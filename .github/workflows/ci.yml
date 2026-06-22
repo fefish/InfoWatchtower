@@ -20,7 +20,9 @@ jobs:
         working-directory: backend
         env:
           DATABASE_URL: ""
-        run: pytest
+        run: |
+          coverage run -m pytest
+          coverage report
 
   frontend:
     runs-on: ubuntu-latest

@@ -70,6 +70,16 @@ def test_recommendation_run_creates_scores_generated_news_and_daily_draft():
     assert result.selected_total == 2
     assert result.generated_total == 2
     assert session.scalar(select(func.count(RecommendationItem.id))) == 2
+    recommendation_item = session.scalar(select(RecommendationItem).order_by(RecommendationItem.rank))
+    assert recommendation_item is not None
+    assert recommendation_item.admission_level in {"P0", "P1", "P2", "P3", "R"}
+    assert recommendation_item.admission_score >= 0
+    assert recommendation_item.admission_pool
+    assert isinstance(recommendation_item.noise_types_json, list)
+    assert isinstance(recommendation_item.reject_reasons_json, list)
+    assert isinstance(recommendation_item.scorer_breakdown_json, dict)
+    assert "config_loaded" in recommendation_item.scorer_breakdown_json
+    assert isinstance(recommendation_item.expert_routes_json, list)
     assert session.scalar(select(func.count(GeneratedNews.id))) == 2
     assert session.scalar(select(func.count(DailyReportItem.id))) == 2
     generated = session.scalars(select(GeneratedNews)).all()
@@ -159,6 +169,8 @@ def test_technical_recommendation_prefers_research_over_commercial_ai_news():
     assert selected_item.news_item.source_type == "paper_rss"
     assert "benchmark" in selected_item.news_item.source_title.lower()
     assert "admission=" in selected_item.recommendation_reason
+    assert selected_item.admission_level in {"P0", "P1", "P2"}
+    assert selected_item.scorer_breakdown_json["config_loaded"] is True
 
 
 def test_rule_generated_key_points_use_content_keywords_not_source_metadata():
@@ -594,3 +606,13 @@ def test_recommendation_api_creates_daily_report_and_accepts_feedback(monkeypatc
     published = client.post(f"/api/daily-reports/{report_id}/publish")
     assert published.status_code == 200
     assert published.json()["status"] == "published"
+
+    groups = client.get("/api/dedupe-groups", params={"workspace_code": "planning_intel"})
+    assert groups.status_code == 200
+    group_payload = groups.json()[0]
+    assert group_payload["recommendation"]["selected"] is True
+    assert group_payload["recommendation"]["day_key"] == "2026-05-05"
+    assert group_payload["recommendation"]["admission_level"]
+    assert isinstance(group_payload["recommendation"]["noise_types"], list)
+    assert group_payload["daily_report"]["daily_report_id"] == report_id
+    assert group_payload["daily_report"]["adoption_status"] == 2

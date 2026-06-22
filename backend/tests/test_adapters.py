@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from app.adapters import create_default_registry
 from app.adapters.page import _extract_links, _parse_html, _parse_iso_datetime
 from app.adapters.rss import RssFeedAdapter
@@ -35,6 +37,36 @@ def test_rss_adapter_payload_is_json_safe():
     )
 
     assert raw_item.raw_payload_json["nested"]["value"].startswith("<object object at")
+
+
+def test_rss_adapter_parses_iso_published_datetime():
+    adapter = RssFeedAdapter()
+    raw_item = adapter._entry_to_raw_item(
+        {
+            "id": "yt:1",
+            "title": "YouTube style timestamp",
+            "link": "https://example.com/yt",
+            "published": "2025-12-14T16:22:15+00:00",
+            "summary": "Body",
+        },
+    )
+
+    assert raw_item.published_at == datetime(2025, 12, 14, 16, 22, 15, tzinfo=UTC)
+
+
+def test_rss_adapter_parses_feedparser_struct_time_when_string_is_missing():
+    adapter = RssFeedAdapter()
+    raw_item = adapter._entry_to_raw_item(
+        {
+            "id": "parsed:1",
+            "title": "Parsed timestamp",
+            "link": "https://example.com/parsed",
+            "published_parsed": (2026, 5, 10, 8, 30, 0, 6, 130, 0),
+            "summary": "Body",
+        },
+    )
+
+    assert raw_item.published_at == datetime(2026, 5, 10, 8, 30, tzinfo=UTC)
 
 
 def test_page_link_extractor_filters_and_absolutizes_listing_links():

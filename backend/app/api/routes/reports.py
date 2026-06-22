@@ -11,10 +11,25 @@ from app.models.common import utc_now
 from app.models.content import GeneratedNews
 from app.models.feedback import Comment, EditorialAction, Rating, Reaction
 from app.models.identity import User
-from app.models.reports import DailyReport, DailyReportItem
+from app.models.reports import DailyReport, DailyReportItem, WeeklyReport, WeeklyReportItem
+from app.reports.weekly import (
+    InvalidWeekKeyError,
+    PublishedWeeklyReportError,
+    WeeklyReportDraftRequest,
+    WorkspaceNotFoundError,
+    create_weekly_report_draft,
+)
+from app.recommendations.service import (
+    DailyReportGenerationRerunRequest,
+    DailyReportNotFoundError,
+    PublishedDailyReportError as GenerationPublishedDailyReportError,
+    regenerate_daily_report_generated_news,
+)
 from app.schemas.reports import (
     CommentCreate,
     CommentRead,
+    DailyReportGenerationRerunCreate,
+    DailyReportGenerationRerunRead,
     DailyReportItemRead,
     DailyReportItemUpdate,
     DailyReportRead,
@@ -22,6 +37,10 @@ from app.schemas.reports import (
     RatingCreate,
     RatingRead,
     ReactionCreate,
+    WeeklyReportCreate,
+    WeeklyReportItemRead,
+    WeeklyReportItemUpdate,
+    WeeklyReportRead,
 )
 
 router = APIRouter(prefix="/api", tags=["reports"])
@@ -75,6 +94,171 @@ def publish_daily_report(
     )
     session.commit()
     return _daily_report_to_read(_load_daily_report(session, report_id))
+
+
+@router.post(
+    "/daily-reports/{report_id}/regenerate-generated-news",
+    response_model=DailyReportGenerationRerunRead,
+)
+def regenerate_daily_report_news(
+    report_id: str,
+    payload: DailyReportGenerationRerunCreate,
+    current_user: User = SUPER_ADMIN,
+    session: Session = DB_SESSION,
+) -> DailyReportGenerationRerunRead:
+    try:
+        result = regenerate_daily_report_generated_news(
+            session,
+            DailyReportGenerationRerunRequest(
+                report_id=report_id,
+                item_ids=payload.item_ids,
+                limit=payload.limit,
+                replace_ready=payload.replace_ready,
+                generation_timeout_seconds=payload.generation_timeout_seconds,
+            ),
+        )
+    except DailyReportNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except GenerationPublishedDailyReportError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    write_audit(
+        session,
+        current_user,
+        "daily_report.regenerate_generated_news",
+        "daily_report",
+        report_id,
+        {
+            "attempted_total": result.attempted_total,
+            "ready_total": result.ready_total,
+            "fallback_total": result.fallback_total,
+            "skipped_total": result.skipped_total,
+        },
+    )
+    session.commit()
+    return DailyReportGenerationRerunRead(
+        report=_daily_report_to_read(_load_daily_report(session, report_id)),
+        attempted_total=result.attempted_total,
+        ready_total=result.ready_total,
+        fallback_total=result.fallback_total,
+        skipped_total=result.skipped_total,
+    )
+
+
+@router.get("/weekly-reports", response_model=list[WeeklyReportRead])
+def list_weekly_reports(
+    workspace_code: str = Query(default="planning_intel"),
+    limit: int = Query(default=20, ge=1, le=100),
+    _: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> list[WeeklyReportRead]:
+    reports = session.scalars(
+        select(WeeklyReport)
+        .options(*_weekly_report_options())
+        .where(WeeklyReport.workspace_code == workspace_code)
+        .order_by(WeeklyReport.week_key.desc(), WeeklyReport.created_at.desc())
+        .limit(limit),
+    ).all()
+    return [_weekly_report_to_read(report) for report in reports]
+
+
+@router.post("/weekly-reports", response_model=WeeklyReportRead)
+def create_weekly_report(
+    payload: WeeklyReportCreate,
+    current_user: User = SUPER_ADMIN,
+    session: Session = DB_SESSION,
+) -> WeeklyReportRead:
+    try:
+        report = create_weekly_report_draft(
+            session,
+            WeeklyReportDraftRequest(
+                workspace_code=payload.workspace_code,
+                week_key=payload.week_key,
+                limit=payload.limit,
+                include_unpublished_daily=payload.include_unpublished_daily,
+            ),
+        )
+    except WorkspaceNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except InvalidWeekKeyError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except PublishedWeeklyReportError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    write_audit(
+        session,
+        current_user,
+        "weekly_report.create_draft",
+        "weekly_report",
+        report.id,
+        {"week_key": report.week_key, "workspace_code": report.workspace_code},
+    )
+    session.commit()
+    return _weekly_report_to_read(_load_weekly_report(session, report.id))
+
+
+@router.get("/weekly-reports/{report_id}", response_model=WeeklyReportRead)
+def get_weekly_report(
+    report_id: str,
+    _: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> WeeklyReportRead:
+    return _weekly_report_to_read(_load_weekly_report(session, report_id))
+
+
+@router.post("/weekly-reports/{report_id}/publish", response_model=WeeklyReportRead)
+def publish_weekly_report(
+    report_id: str,
+    current_user: User = SUPER_ADMIN,
+    session: Session = DB_SESSION,
+) -> WeeklyReportRead:
+    report = _load_weekly_report(session, report_id)
+    report.status = "published"
+    report.published_at = utc_now()
+    write_audit(
+        session,
+        current_user,
+        "weekly_report.publish",
+        "weekly_report",
+        report.id,
+        {"week_key": report.week_key, "workspace_code": report.workspace_code},
+    )
+    session.commit()
+    return _weekly_report_to_read(_load_weekly_report(session, report_id))
+
+
+@router.patch("/weekly-report-items/{item_id}", response_model=WeeklyReportItemRead)
+def update_weekly_report_item(
+    item_id: str,
+    payload: WeeklyReportItemUpdate,
+    current_user: User = SUPER_ADMIN,
+    session: Session = DB_SESSION,
+) -> WeeklyReportItemRead:
+    item = _load_weekly_report_item(session, item_id)
+    before = _weekly_item_editor_snapshot(item)
+    if payload.adoption_status is not None:
+        item.adoption_status = payload.adoption_status
+    if payload.sort_order is not None:
+        item.sort_order = payload.sort_order
+    if payload.editor_title is not None:
+        item.editor_title = payload.editor_title
+    if payload.editor_summary is not None:
+        item.editor_summary = payload.editor_summary
+    if payload.editor_content_json is not None:
+        item.editor_content_json = payload.editor_content_json
+
+    session.add(
+        EditorialAction(
+            user=current_user,
+            object_type="weekly_report_item",
+            object_id=item.id,
+            action_type="edit",
+            before_json=before,
+            after_json=_weekly_item_editor_snapshot(item),
+        ),
+    )
+    session.commit()
+    return _weekly_report_item_to_read(_load_weekly_report_item(session, item.id))
 
 
 @router.patch("/daily-report-items/{item_id}", response_model=DailyReportItemRead)
@@ -235,6 +419,17 @@ def _daily_report_options():
     )
 
 
+def _weekly_report_options():
+    return (
+        selectinload(WeeklyReport.items)
+        .selectinload(WeeklyReportItem.generated_news)
+        .selectinload(GeneratedNews.recommendation_item),
+        selectinload(WeeklyReport.items)
+        .selectinload(WeeklyReportItem.daily_report_item)
+        .selectinload(DailyReportItem.daily_report),
+    )
+
+
 def _load_daily_report(session: Session, report_id: str) -> DailyReport:
     report = session.scalar(
         select(DailyReport)
@@ -243,6 +438,17 @@ def _load_daily_report(session: Session, report_id: str) -> DailyReport:
     )
     if report is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Daily report not found")
+    return report
+
+
+def _load_weekly_report(session: Session, report_id: str) -> WeeklyReport:
+    report = session.scalar(
+        select(WeeklyReport)
+        .options(*_weekly_report_options())
+        .where(WeeklyReport.id == report_id),
+    )
+    if report is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Weekly report not found")
     return report
 
 
@@ -260,6 +466,27 @@ def _load_daily_report_item(session: Session, item_id: str) -> DailyReportItem:
     return item
 
 
+def _load_weekly_report_item(session: Session, item_id: str) -> WeeklyReportItem:
+    item = session.scalar(
+        select(WeeklyReportItem)
+        .options(
+            selectinload(WeeklyReportItem.generated_news).selectinload(
+                GeneratedNews.recommendation_item,
+            ),
+            selectinload(WeeklyReportItem.daily_report_item).selectinload(
+                DailyReportItem.daily_report,
+            ),
+        )
+        .where(WeeklyReportItem.id == item_id),
+    )
+    if item is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Weekly report item not found",
+        )
+    return item
+
+
 def _daily_report_to_read(report: DailyReport) -> DailyReportRead:
     return DailyReportRead(
         id=report.id,
@@ -272,6 +499,26 @@ def _daily_report_to_read(report: DailyReport) -> DailyReportRead:
         published_at=report.published_at,
         items=[
             _daily_report_item_to_read(item)
+            for item in sorted(
+                report.items,
+                key=lambda item: (item.sort_order, item.created_at, item.id),
+            )
+        ],
+    )
+
+
+def _weekly_report_to_read(report: WeeklyReport) -> WeeklyReportRead:
+    return WeeklyReportRead(
+        id=report.id,
+        workspace_code=report.workspace_code,
+        domain_code=report.domain_code,
+        week_key=report.week_key,
+        title=report.title,
+        summary=report.summary,
+        status=report.status,
+        published_at=report.published_at,
+        items=[
+            _weekly_report_item_to_read(item)
             for item in sorted(
                 report.items,
                 key=lambda item: (item.sort_order, item.created_at, item.id),
@@ -297,6 +544,27 @@ def _daily_report_item_to_read(item: DailyReportItem) -> DailyReportItemRead:
         rating_count=len(ratings),
         rating_avg=round(rating_avg, 2),
         comment_count=sum(1 for comment in item.comments if comment.status == "visible"),
+    )
+
+
+def _weekly_report_item_to_read(item: WeeklyReportItem) -> WeeklyReportItemRead:
+    daily_report_item = item.daily_report_item
+    return WeeklyReportItemRead(
+        id=item.id,
+        daily_report_item_id=item.daily_report_item_id,
+        daily_day_key=(
+            daily_report_item.daily_report.day_key
+            if daily_report_item and daily_report_item.daily_report
+            else None
+        ),
+        generated_news=(
+            _generated_news_to_read(item.generated_news) if item.generated_news else None
+        ),
+        adoption_status=item.adoption_status,
+        sort_order=item.sort_order,
+        editor_title=item.editor_title,
+        editor_summary=item.editor_summary,
+        editor_content_json=item.editor_content_json,
     )
 
 
@@ -336,4 +604,14 @@ def _item_editor_snapshot(item: DailyReportItem) -> dict:
         "editor_key_points": item.editor_key_points,
         "editor_content_json": item.editor_content_json,
         "editor_notes": item.editor_notes,
+    }
+
+
+def _weekly_item_editor_snapshot(item: WeeklyReportItem) -> dict:
+    return {
+        "adoption_status": item.adoption_status,
+        "sort_order": item.sort_order,
+        "editor_title": item.editor_title,
+        "editor_summary": item.editor_summary,
+        "editor_content_json": item.editor_content_json,
     }

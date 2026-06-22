@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, time
 from html import unescape
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -22,6 +23,7 @@ COMPANY_SQL_CONTENT_FIELDS = (
     "technologyAndInnovation",
     "valueAndImpact",
 )
+BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 
 
 class DailyReportNotFoundError(ValueError):
@@ -174,7 +176,7 @@ def _sql_header(
         f"-- 生成时间: {generated_at.astimezone(UTC).strftime('%Y-%m-%d %H:%M:%S')}\n"
         "-- 导出规则: 已发布日报；仅 adoption_status = 2；generated_news.generation_status = ready；非 rule_v1 fallback。\n"
         "-- 表顺序: ai_journal -> ai_journal_focus -> ai_journal_analysis -> t_news_data_info\n"
-        "-- 日期规则: created_at 使用 'YYYY-MM-DD HH:MM:SS'；缺失发布时间兜底为日报 day_key 09:00:00；禁止 NULL/STR_TO_DATE。\n"
+        "-- 日期规则: created_at 使用北京时间 'YYYY-MM-DD HH:MM:SS'；缺失发布时间兜底为日报 day_key 09:00:00；禁止 NULL/STR_TO_DATE。\n"
         "-- 校验基准: outputs/sql/previews/planning_intel_2026-05-05_company_sql_preview.sql\n"
         f"-- 汇总: {item_count} 条新闻，{statement_count} 条 SQL 语句。\n\n"
     )
@@ -360,7 +362,7 @@ def _mysql_datetime(value: datetime | None) -> str:
         return "NULL"
     if value.tzinfo is None:
         value = value.replace(tzinfo=UTC)
-    return f"'{value.astimezone(UTC).strftime('%Y-%m-%d %H:%M:%S')}'"
+    return f"'{value.astimezone(BEIJING_TZ).strftime('%Y-%m-%d %H:%M:%S')}'"
 
 
 def _report_day_fallback_datetime(day_key: str) -> datetime | None:
@@ -368,7 +370,7 @@ def _report_day_fallback_datetime(day_key: str) -> datetime | None:
         report_day = datetime.strptime(day_key, "%Y-%m-%d").date()
     except ValueError:
         return None
-    return datetime.combine(report_day, time(hour=9), tzinfo=UTC)
+    return datetime.combine(report_day, time(hour=9), tzinfo=BEIJING_TZ)
 
 
 def escape_sql_string(text: Any) -> str:

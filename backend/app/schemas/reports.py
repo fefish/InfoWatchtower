@@ -57,6 +57,60 @@ class DailyReportItemUpdate(BaseModel):
     editor_notes: str | None = None
 
 
+class DailyReportGenerationRerunCreate(BaseModel):
+    item_ids: list[str] | None = None
+    limit: int | None = Field(default=None, ge=0, le=100)
+    replace_ready: bool = False
+    generation_timeout_seconds: float = Field(default=45.0, ge=5, le=180)
+
+
+class DailyReportGenerationRerunRead(BaseModel):
+    report: DailyReportRead
+    attempted_total: int
+    ready_total: int
+    fallback_total: int
+    skipped_total: int
+
+
+class WeeklyReportItemRead(BaseModel):
+    id: str
+    daily_report_item_id: str | None
+    daily_day_key: str | None
+    generated_news: GeneratedNewsRead | None
+    adoption_status: int
+    sort_order: int
+    editor_title: str | None
+    editor_summary: str | None
+    editor_content_json: dict[str, Any] | None
+
+
+class WeeklyReportRead(BaseModel):
+    id: str
+    workspace_code: str
+    domain_code: str
+    week_key: str
+    title: str
+    summary: str
+    status: str
+    published_at: datetime | None
+    items: list[WeeklyReportItemRead] = Field(default_factory=list)
+
+
+class WeeklyReportCreate(BaseModel):
+    workspace_code: str = "planning_intel"
+    week_key: str
+    limit: int = Field(default=50, ge=1, le=200)
+    include_unpublished_daily: bool = False
+
+
+class WeeklyReportItemUpdate(BaseModel):
+    adoption_status: int | None = Field(default=None, ge=0, le=2)
+    sort_order: int | None = Field(default=None, ge=0)
+    editor_title: str | None = None
+    editor_summary: str | None = None
+    editor_content_json: dict[str, Any] | None = None
+
+
 class ReactionCreate(BaseModel):
     reaction_type: str = "like"
     active: bool = True

@@ -31,7 +31,7 @@ Adapter 负责：
 
 - 读取 `data_sources.fetch_config`。
 - 抓取或接收源数据。
-- 生成稳定的 `entry_key`。
+- 生成稳定的 `entry_key`。如果源返回的 id/跳转 URL 超过 `raw_items.entry_key` 的 255 长度上限，入库前必须做“前缀 + hash 后缀”的确定性缩短；原始完整值仍保留在 `raw_payload_json`。
 - 提取基础字段：标题、URL、摘要、正文候选、发布时间。
 - 保存完整原始 payload 到 `raw_payload_json`。
 - 输出统一的 `raw_items`。
@@ -188,12 +188,12 @@ workspace ingestion run
 第一版已实现：
 
 - `POST /api/ingestion/runs` 创建同步执行的工作台级 run。
-- scheduler 可按环境变量定时把每日完整流水线入队，worker 从 Redis/RQ 执行。工作台级抓取支持并发池和单源超时，默认 `INGESTION_CONCURRENCY=8`、`INGESTION_SOURCE_TIMEOUT_SECONDS=25`。
+- scheduler 可按环境变量把每日完整流水线入队，worker 从 Redis/RQ 执行。生产推荐使用固定墙上时间：`INGESTION_SCHEDULER_DAILY_TIME=09:00`、`INGESTION_SCHEDULER_TIMEZONE=Asia/Shanghai`，并用 `DAILY_PIPELINE_DAY_OFFSET_DAYS=-1` 生成昨天的日报；未设置固定时间时才使用 `INGESTION_SCHEDULER_INTERVAL_SECONDS` 的旧 interval 模式。工作台级抓取支持并发池和单源超时，默认 `INGESTION_CONCURRENCY=8`、`INGESTION_SOURCE_TIMEOUT_SECONDS=25`。
 - 默认处理当前工作台已启用、且源本身启用的 `rss/paper_rss/page_manual/page_monitor/wiseflow`。
 - `ingestion_runs` 保存 run 参数、状态、处理源数量、成功/失败、拉取数、raw 新增数和 raw 更新数。
 - `summary_json.sources` 保存每个源的结果摘要。
 
-尚未实现：失败源重试队列。已实现并发抓取和 scheduler 默认触发 `ingestion -> normalize/dedupe -> recommendation -> daily_report_draft`；如需只抓取，可设置 `SCHEDULER_JOB_MODE=ingestion_only`。
+尚未实现：失败源重试队列。已实现并发抓取和 scheduler 触发 `ingestion -> normalize/dedupe -> recommendation -> daily_report_draft`；如需只抓取，可设置 `SCHEDULER_JOB_MODE=ingestion_only`。
 
 ## 6.2 标准化与硬去重 API
 
@@ -237,7 +237,7 @@ workspace ingestion run
 - raw 是否满足标准化进入 `news_items` 的最低条件。
 - 去重后是否是 active winner。
 
-第一版当前已经记录 `ingestion_runs.summary_json.sources`，但还缺少面向运营的覆盖率视图。下一阶段必须把这些信息产品化：
+当前已经记录 `ingestion_runs.summary_json.sources`，并在前端 `/ingestion-runs` 展示运行历史、每源成功/失败、fetched、raw created/updated，以及历史补采的 in-range、out-of-range、missing published_at 和错误原因。下一阶段继续把这些信息和 raw/news/winner 联动统计产品化：
 
 ```text
 day_key
@@ -262,18 +262,27 @@ per_source_breakdown
 - 失败源重试：对 timeout/403/connect error 按低并发、长超时、退避策略重试，并把失败原因写入 run summary。
 - 手工补录或 CSV/SQL 导入：作为最后兜底，必须仍然写入 `raw_items.raw_payload_json`，保留追溯。
 
-历史补采 run 可以先复用 `ingestion_runs`，但参数必须明确：
+历史补采已经复用 `ingestion_runs`，入口是 `POST /api/ingestion/backfill-runs`，也可以从任务层调用 `run_historical_backfill_job`。当前支持 `rss_window/paper_api/archive_page/sitemap/manual_import`：`rss_window` 不是完整历史恢复承诺，只在目标日期仍出现在当前 feed 窗口时低成本补采；`paper_api` 依赖已注册 adapter；`archive_page` 和 `sitemap` 是轻量 URL 发现入口；`manual_import` 用于人工补录 raw 条目。超出这些能力的完整历史恢复仍要继续建设更强的论文 provider、厂商/标准组织分页归档 crawler 和失败源重试。
+
+补采 run 参数必须明确：
 
 ```text
 run_type = historical_backfill
 target_day_start
 target_day_end
-backfill_mode = paper_api | archive_page | sitemap | retry_failed | manual_import
+backfill_mode = rss_window | paper_api | archive_page | sitemap | manual_import
 source_scope = all | selected_source_ids | source_type
 retry_policy
+include_undated
 ```
 
-补采验收口径不是“抓了多少源”，而是目标日期新增了多少 `raw_items`、标准化出多少 `news_items`、去重后新增/替换多少 active winner，以及这些新增候选有多少进入推荐/日报。
+补采验收口径不是“抓了多少源”，而是目标日期新增了多少 `raw_items`、标准化出多少 `news_items`、去重后新增/替换多少 active winner，以及这些新增候选有多少进入推荐/日报。当前 `summary_json` 至少要能回答：
+
+- 每源抓取总数 `fetched`。
+- 目标日期内数量 `in_target_range`。
+- 目标日期外数量 `out_of_target_range`。
+- 缺少 `published_at` 数量 `missing_published_at`。
+- 最终 raw `created/updated`。
 
 没有覆盖率和补采之前，日报候选少时应先查 `ingestion_runs`、`raw_items` 和 `news_items` 的日期分布，再判断推荐策略是否需要调整。
 
@@ -288,6 +297,8 @@ retry_policy
 ```text
 dedupe_key = "url:" + canonical_url
 ```
+
+`dedupe_key` 必须能写入 `news_items.dedupe_key` 和 `dedupe_groups.dedupe_key` 的 512 长度上限。遇到超长 canonical URL 或超长标题兜底 key 时，标准化层使用确定性 hash 后缀缩短 key；完整 URL 仍保存在 `canonical_url`、`source_url` 和 `raw_items.raw_payload_json`，不影响追溯。
 
 canonicalize 规则：
 

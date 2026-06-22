@@ -22,6 +22,7 @@ class DailyPipelineRunCreate(BaseModel):
     )
     recommendation_limit: int = Field(default=15, ge=0, le=100)
     source_daily_limit: int = Field(default=2, ge=1, le=20)
+    generation_timeout_seconds: float = Field(default=45.0, ge=5, le=180)
     create_daily_draft: bool = True
     run_ingestion: bool = True
 

@@ -176,7 +176,7 @@ VALUES
 - `source_url`：原始新闻 URL。
 - `source_title`：原始标题，不是生成后的标题。
 - `content`：原始摘要/正文材料。
-- `created_at`：原始发布时间，转 MySQL `YYYY-MM-DD HH:MM:SS`。旧脚本曾可能在解析失败时写 `NULL`；新系统标准导出为了避免内网 `strftime` 类报错，统一写带引号的 `'YYYY-MM-DD HH:MM:SS'` 字面量，缺失发布时间时兜底为日报 `day_key 09:00:00`，并由 `scripts/validate_company_sql.py` 校验。
+- `created_at`：原始发布时间，按北京时间 `Asia/Shanghai` 转 MySQL `YYYY-MM-DD HH:MM:SS`，和日报 `day_key` 归属口径保持一致。旧脚本曾可能在解析失败时写 `NULL`；新系统标准导出为了避免内网 `strftime` 类报错，统一写带引号的 `'YYYY-MM-DD HH:MM:SS'` 字面量，缺失发布时间时兜底为日报 `day_key 09:00:00`，并由 `scripts/validate_company_sql.py` 校验。
 
 ### 5.2 ai_journal_focus
 

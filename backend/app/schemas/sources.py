@@ -24,6 +24,14 @@ class DataSourceRead(BaseModel):
     info_category: str
     source_tags: list[str] = Field(default_factory=list)
     source_secondary_tags: list[str] = Field(default_factory=list)
+    source_tier: str = ""
+    source_channel_type: str = ""
+    expert_routes: list[str] = Field(default_factory=list)
+    inclusion_recommendation: str = ""
+    metadata_only: bool = False
+    needs_entry: bool = False
+    fetch_entry_status: str = ""
+    source_quality_notes: str = ""
     workspace_link_enabled: bool | None = None
     workspace_source_weight: float | None = None
     workspace_daily_limit: int | None = None
@@ -41,6 +49,14 @@ class LegacySeedImportRead(BaseModel):
     created: int
     updated: int
     total: int
+
+
+class TechInsightLoopImportRead(BaseModel):
+    created: int
+    updated: int
+    total: int
+    fetchable: int
+    metadata_only: int
 
 
 class SourceFetchRead(BaseModel):

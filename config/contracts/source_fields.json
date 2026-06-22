@@ -8,7 +8,8 @@
     "legacy_all_index": "config/seeds/legacy/all_sources.index.json",
     "legacy_human_registry": "config/seeds/legacy/source_registry.md",
     "legacy_folo_catalog": "config/seeds/legacy/source_catalog/folo-rss-link-classification-unified-folo-cli-supplemented.csv",
-    "supplemental_source_registry_20260511": "config/seeds/legacy/source_catalog/information_source_registry_20260511.csv"
+    "supplemental_source_registry_20260511": "config/seeds/legacy/source_catalog/information_source_registry_20260511.csv",
+    "tech_insight_loop_sources_zh": "config/seeds/tech_insight_loop/sources_full_zh.csv"
   },
   "source_types": [
     "wiseflow",
@@ -143,6 +144,27 @@
     "metadata.raw_registry_row": "full CSV row",
     "source_score": "综合质量评分 or 源质量分 or 0"
   },
+  "tech_insight_loop_mapping": {
+    "notes": "Tech Insight Loop CSV is a source-governance seed only. It imports source metadata, source-side tags and scoring priors; it must not define generated_news.category or company SQL category.",
+    "domain_code": "ai",
+    "source_type": "paper_rss when source text looks like paper/arxiv/research paper, rss when RSS/RSSHub exists, page_manual when only original HTTP URL exists, manual when no current fetch entry exists",
+    "name": "信息源名称 or 字段：rss_name or 字段：cli_title or 字段：folo_title",
+    "url": "RSS订阅源 or CLI RSS or Folo RSS or original HTTP URL; rsshub:// routes are converted to https://rsshub.app/{route}",
+    "enabled": "true for sources with HTTP/RSS/RSSHub fetch entries; false for metadata-only wx:// or missing-entry rows to avoid scheduler empty failures",
+    "default_focus_id": 1,
+    "backfill_days": 30,
+    "fetch_config.feed_url": "RSS订阅源/CLI RSS/Folo RSS/RSSHub converted URL when present",
+    "fetch_config.original_url": "原始URL, including wx:// for metadata-only governance records",
+    "metadata.source_tier": "源等级",
+    "metadata.source_channel_type": "来源渠道类型",
+    "metadata.expert_routes": "专家路由JSON",
+    "metadata.board_relevance_json": "字段：board_relevance_json",
+    "metadata.source_score_breakdown_json": "字段：source_score_breakdown_json",
+    "metadata.recent_fetch_failure_reason": "最近抓取失败原因",
+    "metadata.metadata_only": "true when no current HTTP/RSS/RSSHub fetch entry exists",
+    "metadata.needs_entry": "same as metadata_only, used by source governance UI",
+    "source_score": "字段：source_quality_score or 信息源综合评分 or 0"
+  },
   "seed_counts": {
     "wiseflow_sources": 1,
     "rss_sources": 108,
@@ -164,6 +186,12 @@
       "paper_rss": 21,
       "page_manual": 2,
       "page_monitor": 2
-    }
+    },
+    "tech_insight_loop_rows": 386,
+    "tech_insight_loop_fetchable_rows": 355,
+    "tech_insight_loop_metadata_only_rows": 31,
+    "tech_insight_loop_unique_data_sources": 363,
+    "tech_insight_loop_enabled_unique_data_sources": 332,
+    "tech_insight_loop_metadata_only_unique_data_sources": 31
   }
 }

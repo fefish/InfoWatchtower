@@ -106,3 +106,13 @@ def test_super_admin_can_normalize_and_list_news(monkeypatch, tmp_path):
     assert len(group_payload) == 1
     assert group_payload[0]["item_count"] == 2
     assert sum(1 for item in group_payload[0]["items"] if item["is_winner"]) == 1
+
+    coverage = client.get(
+        "/api/ingestion/coverage",
+        params={"workspace_code": "planning_intel", "day_key": "2026-05-05"},
+    )
+    assert coverage.status_code == 200
+    coverage_payload = coverage.json()
+    assert coverage_payload["funnel"]["raw_in_target"] == 2
+    assert coverage_payload["funnel"]["news_items"] == 2
+    assert coverage_payload["funnel"]["dedupe_winners"] == 1

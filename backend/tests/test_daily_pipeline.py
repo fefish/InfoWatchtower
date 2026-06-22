@@ -1,4 +1,6 @@
 from datetime import UTC, datetime
+from datetime import time as datetime_time
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import create_engine, func, select
@@ -10,7 +12,11 @@ from app.core.database import Base, get_engine
 from app.models.content import DedupeGroup, GeneratedNews, RawItem
 from app.models.reports import DailyReport, DailyReportItem
 from app.pipeline.daily import DailyPipelineRequest, run_daily_pipeline, run_daily_pipeline_job
-from app.workers.scheduler import _enqueue_scheduled_job
+from app.workers.scheduler import (
+    _enqueue_scheduled_job,
+    _parse_daily_time,
+    _seconds_until_next_daily_run,
+)
 from tests.test_news_normalization import add_raw_item, seed_source, seed_workspace
 
 
@@ -153,3 +159,58 @@ def test_scheduler_defaults_to_daily_pipeline_job():
     assert function is run_daily_pipeline_job
     assert args == ("planning_intel", ["rss"], 10, 8, 25, 15, 2, True, True)
     assert kwargs["job_timeout"] == 60 * 60 * 3
+
+
+def test_scheduler_passes_offset_day_key_to_daily_pipeline_job():
+    queue = FakeQueue()
+    settings = type(
+        "Settings",
+        (),
+        {
+            "scheduler_job_mode": "daily_pipeline",
+            "ingestion_scheduler_workspace_code": "planning_intel",
+            "ingestion_source_type_list": ["rss", "paper_rss"],
+            "ingestion_scheduler_limit": None,
+            "ingestion_concurrency": 16,
+            "ingestion_source_timeout_seconds": 20,
+            "daily_pipeline_recommendation_limit": 10,
+            "daily_pipeline_source_daily_limit": 2,
+            "daily_pipeline_create_daily_draft": True,
+            "daily_pipeline_run_ingestion": True,
+            "daily_pipeline_day_offset_days": -1,
+            "ingestion_scheduler_timezone": "Asia/Shanghai",
+        },
+    )()
+
+    _enqueue_scheduled_job(
+        queue,
+        settings,
+        now=datetime(2026, 5, 21, 9, 0, tzinfo=ZoneInfo("Asia/Shanghai")),
+    )
+
+    function, args, _kwargs = queue.calls[0]
+    assert function is run_daily_pipeline_job
+    assert args == (
+        "planning_intel",
+        ["rss", "paper_rss"],
+        None,
+        16,
+        20,
+        10,
+        2,
+        True,
+        True,
+        "2026-05-20",
+    )
+
+
+def test_scheduler_daily_time_uses_next_wall_clock_time():
+    daily_time = _parse_daily_time("09:00")
+    assert daily_time == datetime_time(9, 0)
+
+    timezone = ZoneInfo("Asia/Shanghai")
+    before_run = datetime(2026, 5, 21, 8, 30, tzinfo=timezone)
+    after_run = datetime(2026, 5, 21, 9, 30, tzinfo=timezone)
+
+    assert _seconds_until_next_daily_run(before_run, daily_time) == 30 * 60
+    assert _seconds_until_next_daily_run(after_run, daily_time) == 23.5 * 60 * 60

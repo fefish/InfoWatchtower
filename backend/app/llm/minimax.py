@@ -44,6 +44,7 @@ def generate_news_with_minimax(
     allowed_categories: Sequence[str],
     recommendation_reason: str,
     settings: Settings | None = None,
+    timeout_seconds: float | None = None,
 ) -> GeneratedNewsDraft | None:
     settings = settings or get_settings()
     if not settings.minimax_generation_enabled or not settings.minimax_api_key:
@@ -63,7 +64,7 @@ def generate_news_with_minimax(
         recommendation_reason=recommendation_reason,
     )
     try:
-        content = _request_completion(settings, system_prompt, user_prompt)
+        content = _request_completion(settings, system_prompt, user_prompt, timeout_seconds)
         parsed = _normalize_generation_payload(_parse_json_object(content))
     except (httpx.HTTPError, KeyError, TypeError, ValueError, json.JSONDecodeError):
         return None
@@ -168,7 +169,12 @@ def _chat_completions_url(settings: Settings) -> str:
     return f"{base_url}/chat/completions"
 
 
-def _request_completion(settings: Settings, system_prompt: str, user_prompt: str) -> str:
+def _request_completion(
+    settings: Settings,
+    system_prompt: str,
+    user_prompt: str,
+    timeout_seconds: float | None,
+) -> str:
     payload = {
         "model": settings.minimax_model,
         "messages": [
@@ -180,7 +186,8 @@ def _request_completion(settings: Settings, system_prompt: str, user_prompt: str
         "stream": False,
     }
     retry_times = max(settings.minimax_retry_times, 1)
-    with httpx.Client(timeout=180.0, trust_env=False) as client:
+    request_timeout = max(float(timeout_seconds or 180.0), 5.0)
+    with httpx.Client(timeout=request_timeout, trust_env=False) as client:
         for attempt in range(1, retry_times + 1):
             response = client.post(
                 _chat_completions_url(settings),

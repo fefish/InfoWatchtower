@@ -640,7 +640,7 @@ def canonical_header(path: Path, baseline: Path, generated_at: str, stats: dict[
         f"-- 生成时间: {generated_at}\n"
         "-- 导出规则: 已发布日报；仅 adoption_status = 2；generated_news.generation_status = ready；非 rule_v1 fallback。\n"
         "-- 表顺序: ai_journal -> ai_journal_focus -> ai_journal_analysis -> t_news_data_info\n"
-        "-- 日期规则: created_at 使用 'YYYY-MM-DD HH:MM:SS'；缺失发布时间兜底为日报 day_key 09:00:00；禁止 NULL/STR_TO_DATE。\n"
+        "-- 日期规则: created_at 使用北京时间 'YYYY-MM-DD HH:MM:SS'；缺失发布时间兜底为日报 day_key 09:00:00；禁止 NULL/STR_TO_DATE。\n"
         f"-- 校验基准: {baseline_relative}\n"
         f"-- 汇总: {stats['items']} 条新闻，{stats['statements']} 条 SQL 语句。\n\n"
     )

@@ -128,6 +128,10 @@ function scoreParts(item: RecommendationItemRecord) {
   ] as const;
 }
 
+function compactList(items: string[], limit = 2) {
+  return items.slice(0, limit).join(" / ");
+}
+
 watch(
   () => workspace.currentCode,
   () => {
@@ -226,11 +230,21 @@ onMounted(loadRuns);
                 <span :class="item.selected ? 'status-on' : 'status-off'">
                   {{ item.selected ? "进入日报" : "未入选" }}
                 </span>
+                <span class="admission-pill">{{ item.admission_level || "未评分" }} · {{ item.admission_pool || "unknown" }}</span>
+                <span>准入分 {{ item.admission_score.toFixed(2) }}</span>
                 <span>最终分 {{ item.final_score.toFixed(2) }}</span>
                 <span>{{ item.source_name }}</span>
               </div>
               <h3>{{ item.source_title }}</h3>
               <p>{{ item.recommendation_reason || "暂无推荐理由" }}</p>
+              <div
+                v-if="item.noise_types.length || item.reject_reasons.length || item.expert_routes.length"
+                class="admission-line"
+              >
+                <span v-if="item.noise_types.length">噪声：{{ compactList(item.noise_types, 3) }}</span>
+                <span v-if="item.reject_reasons.length">限制：{{ compactList(item.reject_reasons, 2) }}</span>
+                <span v-if="item.expert_routes.length">专家：{{ compactList(item.expert_routes, 2) }}</span>
+              </div>
               <div class="score-grid">
                 <div v-for="[label, score] in scoreParts(item)" :key="label" class="score-cell">
                   <span>{{ label }}</span>

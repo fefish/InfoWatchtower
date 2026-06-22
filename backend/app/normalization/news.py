@@ -5,6 +5,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from hashlib import sha1
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from sqlalchemy import select
@@ -21,6 +22,8 @@ from app.models.content import (
 from app.models.workspace import Workspace, WorkspaceSourceLink
 
 TRACKING_QUERY_KEYS = {"fbclid", "gclid", "igshid", "mc_cid", "mc_eid", "ref", "ref_src", "spm"}
+MAX_DEDUPE_KEY_LENGTH = 512
+DEDUPE_KEY_HASH_LENGTH = 16
 
 
 @dataclass(frozen=True)
@@ -295,10 +298,21 @@ def _dedupe_key(
     published_at: datetime | None,
 ) -> str | None:
     if canonical_url:
-        return f"url:{canonical_url}"
+        return normalize_dedupe_key(f"url:{canonical_url}")
     if normalized_title and published_at:
-        return f"title:{normalized_title}|date:{published_at.date().isoformat()}"
+        return normalize_dedupe_key(
+            f"title:{normalized_title}|date:{published_at.date().isoformat()}",
+        )
     return None
+
+
+def normalize_dedupe_key(dedupe_key: str) -> str:
+    value = str(dedupe_key or "").strip()
+    if len(value) <= MAX_DEDUPE_KEY_LENGTH:
+        return value
+    digest = sha1(value.encode("utf-8")).hexdigest()[:DEDUPE_KEY_HASH_LENGTH]
+    prefix_length = MAX_DEDUPE_KEY_LENGTH - DEDUPE_KEY_HASH_LENGTH - 1
+    return f"{value[:prefix_length]}#{digest}"
 
 
 def _rebuild_dedupe_group(session: Session, workspace: Workspace, dedupe_key: str) -> int:

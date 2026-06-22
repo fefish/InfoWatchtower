@@ -87,7 +87,7 @@ def test_company_sql_export_matches_legacy_table_order_and_content_shape():
     )
     assert "INSERT INTO t_news_data_info" in sql_text
     assert "SELECT NULL, id, NULL, 2," in sql_text
-    assert "'2026-04-30 08:00:00'" in sql_text
+    assert "'2026-04-30 16:00:00'" in sql_text
     assert "STR_TO_DATE(" not in sql_text
     assert "O''Hara" in sql_text
     assert "STARFlow-V,归一化流,端到端视频生成" in sql_text

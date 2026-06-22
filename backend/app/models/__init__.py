@@ -14,6 +14,13 @@ from app.models.export import ExportJob, ExportJobItem
 from app.models.feedback import AuditLog, Comment, EditorialAction, Rating, Reaction
 from app.models.identity import Permission, Role, User, role_permissions, user_roles
 from app.models.labels import ContentLabel, Label, LabelSet
+from app.models.legacy import (
+    EntityMilestone,
+    HistoricalFeedbackItem,
+    HistoricalJobRun,
+    HistoricalReport,
+    TrackedEntity,
+)
 from app.models.reports import DailyReport, DailyReportItem, WeeklyReport, WeeklyReportItem
 from app.models.strategy import (
     Insight,
@@ -39,6 +46,10 @@ __all__ = [
     "ExportJob",
     "ExportJobItem",
     "GeneratedNews",
+    "HistoricalFeedbackItem",
+    "HistoricalJobRun",
+    "HistoricalReport",
+    "EntityMilestone",
     "IngestionRun",
     "Insight",
     "Label",
@@ -59,6 +70,7 @@ __all__ = [
     "SyncOutbox",
     "SyncRun",
     "TopicTask",
+    "TrackedEntity",
     "User",
     "WeeklyReport",
     "WeeklyReportItem",

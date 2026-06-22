@@ -4,6 +4,7 @@ export interface RecommendationRunCreate {
   limit: number;
   source_daily_limit: number;
   create_daily_draft: boolean;
+  generation_timeout_seconds?: number;
 }
 
 export interface RecommendationRunCreateResult {
@@ -20,6 +21,7 @@ export interface DailyPipelineRunCreate {
   ingestion_limit?: number | null;
   recommendation_limit: number;
   source_daily_limit: number;
+  generation_timeout_seconds?: number;
   create_daily_draft: boolean;
   run_ingestion: boolean;
 }
@@ -92,6 +94,21 @@ export interface DailyReportItemUpdatePayload {
   editor_notes?: string;
 }
 
+export interface DailyReportGenerationRerunPayload {
+  item_ids?: string[] | null;
+  limit?: number | null;
+  replace_ready?: boolean;
+  generation_timeout_seconds?: number;
+}
+
+export interface DailyReportGenerationRerunResult {
+  report: DailyReportRecord;
+  attempted_total: number;
+  ready_total: number;
+  fallback_total: number;
+  skipped_total: number;
+}
+
 export interface CommentRecord {
   id: string;
   user_id: string;
@@ -100,6 +117,45 @@ export interface CommentRecord {
   parent_id: string | null;
   root_id: string | null;
   created_at: string;
+}
+
+export interface WeeklyReportItemRecord {
+  id: string;
+  daily_report_item_id: string | null;
+  daily_day_key: string | null;
+  generated_news: GeneratedNewsRecord | null;
+  adoption_status: number;
+  sort_order: number;
+  editor_title: string | null;
+  editor_summary: string | null;
+  editor_content_json: Record<string, unknown> | null;
+}
+
+export interface WeeklyReportRecord {
+  id: string;
+  workspace_code: string;
+  domain_code: string;
+  week_key: string;
+  title: string;
+  summary: string;
+  status: string;
+  published_at: string | null;
+  items: WeeklyReportItemRecord[];
+}
+
+export interface WeeklyReportCreatePayload {
+  workspace_code: string;
+  week_key: string;
+  limit: number;
+  include_unpublished_daily: boolean;
+}
+
+export interface WeeklyReportItemUpdatePayload {
+  adoption_status?: number;
+  sort_order?: number;
+  editor_title?: string;
+  editor_summary?: string;
+  editor_content_json?: Record<string, unknown>;
 }
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
@@ -146,6 +202,19 @@ export async function fetchDailyReport(reportId: string): Promise<DailyReportRec
   return requestJson<DailyReportRecord>(`/api/daily-reports/${reportId}`);
 }
 
+export async function regenerateDailyReportGeneratedNews(
+  reportId: string,
+  payload: DailyReportGenerationRerunPayload
+): Promise<DailyReportGenerationRerunResult> {
+  return requestJson<DailyReportGenerationRerunResult>(
+    `/api/daily-reports/${reportId}/regenerate-generated-news`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
 export async function publishDailyReport(reportId: string): Promise<DailyReportRecord> {
   return requestJson<DailyReportRecord>(`/api/daily-reports/${reportId}/publish`, {
     method: "POST"
@@ -188,5 +257,37 @@ export async function createDailyReportItemComment(
   return requestJson<CommentRecord>(`/api/daily-report-items/${itemId}/comments`, {
     method: "POST",
     body: JSON.stringify({ body, parent_id: parentId ?? null })
+  });
+}
+
+export async function fetchWeeklyReports(workspaceCode: string): Promise<WeeklyReportRecord[]> {
+  const params = new URLSearchParams({ workspace_code: workspaceCode });
+  return requestJson<WeeklyReportRecord[]>(`/api/weekly-reports?${params.toString()}`);
+}
+
+export async function fetchWeeklyReport(reportId: string): Promise<WeeklyReportRecord> {
+  return requestJson<WeeklyReportRecord>(`/api/weekly-reports/${reportId}`);
+}
+
+export async function createWeeklyReport(payload: WeeklyReportCreatePayload): Promise<WeeklyReportRecord> {
+  return requestJson<WeeklyReportRecord>("/api/weekly-reports", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function publishWeeklyReport(reportId: string): Promise<WeeklyReportRecord> {
+  return requestJson<WeeklyReportRecord>(`/api/weekly-reports/${reportId}/publish`, {
+    method: "POST"
+  });
+}
+
+export async function updateWeeklyReportItem(
+  itemId: string,
+  payload: WeeklyReportItemUpdatePayload
+): Promise<WeeklyReportItemRecord> {
+  return requestJson<WeeklyReportItemRecord>(`/api/weekly-report-items/${itemId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
   });
 }

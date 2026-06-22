@@ -59,6 +59,15 @@
         "source_score",
         "heat_score",
         "final_score"
+      ],
+      "structured_admission_fields": [
+        "admission_level",
+        "admission_score",
+        "admission_pool",
+        "noise_types_json",
+        "reject_reasons_json",
+        "scorer_breakdown_json",
+        "expert_routes_json"
       ]
     },
     "generator_provider": {

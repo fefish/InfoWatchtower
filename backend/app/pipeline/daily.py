@@ -37,6 +37,7 @@ class DailyPipelineRequest:
     ingestion_source_timeout_seconds: float = DEFAULT_SOURCE_TIMEOUT_SECONDS
     recommendation_limit: int = 15
     source_daily_limit: int = 2
+    generation_timeout_seconds: float = 45.0
     create_daily_draft: bool = True
     run_ingestion: bool = True
 
@@ -84,6 +85,7 @@ async def run_daily_pipeline(
             limit=request.recommendation_limit,
             source_daily_limit=request.source_daily_limit,
             create_daily_draft=request.create_daily_draft,
+            generation_timeout_seconds=request.generation_timeout_seconds,
         ),
     )
     return DailyPipelineResult(
@@ -101,6 +103,7 @@ def run_daily_pipeline_job(
     ingestion_source_timeout_seconds: float = DEFAULT_SOURCE_TIMEOUT_SECONDS,
     recommendation_limit: int = 15,
     source_daily_limit: int = 2,
+    generation_timeout_seconds: float = 45.0,
     create_daily_draft: bool = True,
     run_ingestion: bool = True,
     day_key: str | None = None,
@@ -114,6 +117,7 @@ def run_daily_pipeline_job(
             ingestion_source_timeout_seconds=ingestion_source_timeout_seconds,
             recommendation_limit=recommendation_limit,
             source_daily_limit=source_daily_limit,
+            generation_timeout_seconds=generation_timeout_seconds,
             create_daily_draft=create_daily_draft,
             run_ingestion=run_ingestion,
             day_key=day_key,
@@ -129,6 +133,7 @@ async def _run_daily_pipeline_job(
     ingestion_source_timeout_seconds: float,
     recommendation_limit: int,
     source_daily_limit: int,
+    generation_timeout_seconds: float,
     create_daily_draft: bool,
     run_ingestion: bool,
     day_key: str | None,
@@ -149,6 +154,7 @@ async def _run_daily_pipeline_job(
                 ingestion_source_timeout_seconds=ingestion_source_timeout_seconds,
                 recommendation_limit=recommendation_limit,
                 source_daily_limit=source_daily_limit,
+                generation_timeout_seconds=generation_timeout_seconds,
                 create_daily_draft=create_daily_draft,
                 run_ingestion=run_ingestion,
             ),

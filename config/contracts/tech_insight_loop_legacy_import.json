@@ -1,0 +1,270 @@
+{
+  "schema_version": 1,
+  "description": "Tech Insight Loop legacy asset inventory and import boundary contract.",
+  "input_assets": {
+    "sqlite_path": "references/参考工具/data/insight_loop.sqlite3",
+    "source_csv_path": "config/seeds/tech_insight_loop/sources_full_zh.csv",
+    "scoring_config_path": "config/scoring/content_scorer_v2.json"
+  },
+  "first_round_completed": {
+    "scope": "source governance and structured content admission scoring only",
+    "source_import_endpoint": "POST /api/sources/import-tech-insight-loop",
+    "source_rows": 386,
+    "source_fetchable_rows": 355,
+    "source_metadata_only_rows": 31,
+    "unique_data_sources": 363,
+    "company_sql_contract_changed": false
+  },
+  "legacy_sqlite_expected_counts": {
+    "sources": 386,
+    "articles": 14834,
+    "reports": 66,
+    "ai_entities": 23,
+    "entity_milestones": 275,
+    "feedback": 4,
+    "article_quality_feedback": 4,
+    "jobs": 257
+  },
+  "dry_run_expected_importable_counts": {
+    "articles": 14834,
+    "reports": 58,
+    "report_refs_total": 2773,
+    "report_refs_resolved": 2743,
+    "report_refs_unresolved": 30
+  },
+  "inventory_outputs": {
+    "script": "scripts/tech_insight_loop_inventory.py",
+    "json_report": "outputs/tech_insight_loop/tech_insight_loop_inventory.json",
+    "markdown_report": "outputs/tech_insight_loop/tech_insight_loop_inventory.md",
+    "write_policy": "reports only; do not write legacy SQLite or InfoWatchtower application database"
+  },
+  "dry_run_outputs": {
+    "script": "scripts/tech_insight_loop_legacy_dry_run.py",
+    "json_report": "outputs/tech_insight_loop/tech_insight_loop_legacy_dry_run.json",
+    "markdown_report": "outputs/tech_insight_loop/tech_insight_loop_legacy_dry_run.md",
+    "write_policy": "reports only; do not write legacy SQLite or InfoWatchtower application database",
+    "scope": "plan articles and daily/weekly reports before real historical import"
+  },
+    "actual_import": {
+    "script": "scripts/tech_insight_loop_legacy_import.py",
+    "default_mode": "no write; prints dry-run instruction",
+    "execute_flag": "--execute",
+    "article_target": "raw_items via a disabled legacy_tech_insight_loop archive data source",
+    "report_target": "historical_reports",
+    "workspace_code": "legacy_tech_insight_loop",
+    "requires_database_url": true,
+    "idempotency": "upsert by archive data_source_id + legacy entry_key for raw_items and by legacy_system + legacy_table + legacy_id for historical_reports"
+  },
+  "entity_import": {
+    "script": "scripts/tech_insight_loop_entity_import.py",
+    "default_mode": "no write; prints inventory review instruction",
+    "execute_flag": "--execute",
+    "entity_target": "tracked_entities",
+    "milestone_target": "entity_milestones",
+    "workspace_code": "legacy_tech_insight_loop",
+    "requires_database_url": true,
+    "idempotency": "upsert by legacy_system + legacy_table + legacy_id for tracked_entities and entity_milestones",
+    "lineage_resolution": [
+      "entity_milestones.entity_id resolves to tracked_entities via legacy ai_entities.id",
+      "entity_milestones.article_id resolves to imported raw_items when historical articles have already been imported",
+      "entity_milestones.report_id resolves to historical_reports when historical reports have already been imported"
+    ],
+    "unresolved_ref_policy": "keep the milestone and write unresolved legacy references to metadata_json.legacy_refs"
+  },
+  "quality_archive_import": {
+    "script": "scripts/tech_insight_loop_quality_import.py",
+    "default_mode": "no write; prints inventory review instruction",
+    "execute_flag": "--execute",
+    "feedback_target": "historical_feedback_items",
+    "quality_feedback_target": "historical_feedback_items",
+    "job_target": "historical_job_runs",
+    "workspace_code": "legacy_tech_insight_loop",
+    "requires_database_url": true,
+    "idempotency": "upsert by legacy_system + legacy_table + legacy_id for historical_feedback_items and historical_job_runs",
+    "lineage_resolution": [
+      "feedback.article_id resolves to imported raw_items when historical articles have already been imported",
+      "article_quality_feedback.article_id resolves to imported raw_items when historical articles have already been imported",
+      "jobs are imported as statistics-only records and do not create ingestion_runs"
+    ],
+    "unresolved_ref_policy": "keep the feedback item and write unresolved legacy article references to metadata_json.legacy_refs"
+  },
+  "archive_read_api": {
+    "summary_endpoint": "GET /api/historical-reports/summary",
+    "list_endpoint": "GET /api/historical-reports",
+    "detail_endpoint": "GET /api/historical-reports/{id}",
+    "frontend_route": "/historical-reports",
+    "filters": [
+      "workspace_code",
+      "report_type",
+      "status",
+      "start_date",
+      "end_date",
+      "q",
+      "has_unresolved_refs"
+    ],
+    "write_policy": "read-only; must not trigger import, recommendation, daily/weekly adoption or company SQL export"
+  },
+  "entity_read_api": {
+    "summary_endpoint": "GET /api/entity-timeline/summary",
+    "entity_list_endpoint": "GET /api/tracked-entities",
+    "milestone_list_endpoint": "GET /api/entity-milestones",
+    "milestone_detail_endpoint": "GET /api/entity-milestones/{id}",
+    "frontend_route": "/entity-milestones",
+    "filters": [
+      "workspace_code",
+      "tracked_entity_id",
+      "entity_type",
+      "event_type",
+      "importance_level",
+      "board",
+      "start_date",
+      "end_date",
+      "q",
+      "has_unresolved_refs"
+    ],
+    "write_policy": "read-only; must not trigger import, recommendation, daily/weekly adoption or company SQL export"
+  },
+  "quality_archive_read_api": {
+    "summary_endpoint": "GET /api/quality-archive/summary",
+    "feedback_list_endpoint": "GET /api/historical-feedback-items",
+    "job_list_endpoint": "GET /api/historical-job-runs",
+    "frontend_route": "/quality-archive",
+    "filters": [
+      "workspace_code",
+      "feedback_kind",
+      "feedback_type",
+      "job_type",
+      "status",
+      "q",
+      "has_unresolved_refs"
+    ],
+    "write_policy": "read-only; must not trigger import, mutate current comments/ratings/ingestion_runs, recommendation, daily/weekly adoption or company SQL export"
+  },
+  "legacy_import_read_api": {
+    "summary_endpoint": "GET /api/legacy-import/summary",
+    "gap_endpoint": "GET /api/legacy-import/gaps",
+    "frontend_surface": "/historical-reports import QA panel",
+    "purpose": "read current InfoWatchtower database after explicit --execute imports and compare actual imported rows with frozen Tech Insight Loop baseline counts",
+    "gap_kinds": [
+      "historical_reports",
+      "entity_milestones",
+      "historical_feedback"
+    ],
+    "write_policy": "read-only; must not execute import scripts, mutate archived rows, trigger recommendation or export company SQL"
+  },
+  "legacy_import_verification": {
+    "script": "scripts/tech_insight_loop_import_verify.py",
+    "default_mode": "no write; prints check-only and small-limit execution guidance",
+    "check_only_flag": "--check-only",
+    "execute_flag": "--execute",
+    "full_import_guard": "--confirm-full-import is required when execute limits are omitted",
+    "optional_quality_archive_flag": "--include-quality-archive",
+    "json_report": "outputs/tech_insight_loop/tech_insight_loop_import_execution_report.json",
+    "markdown_report": "outputs/tech_insight_loop/tech_insight_loop_import_execution_report.md",
+    "purpose": "run small-batch or full real-database import acceptance and emit the same coverage/gap summary used by /api/legacy-import/summary and /api/legacy-import/gaps"
+  },
+  "migration_identity_rule": "legacy_table + legacy primary identifier -> tech_insight_loop:{legacy_table}:{legacy_id}",
+  "target_mappings": {
+    "articles": {
+      "target": "raw_items; optional archived news_items in a later batch",
+      "identity": "article_id, falling back to id",
+      "required_lineage": "raw_items.raw_payload_json.legacy_tech_insight_loop",
+      "default_status": "historical_imported",
+      "must_not": [
+        "auto-enter recommendation_runs",
+        "auto-create SQL-ready generated_news",
+        "auto-enter company SQL"
+      ]
+    },
+    "reports": {
+      "target": "historical_reports archive; optional daily_reports / weekly_reports views later",
+      "identity": "id",
+      "daily_report_type": "daily",
+      "weekly_report_type": "weekly",
+      "other_report_types": [
+        "brief",
+        "brief_ppt"
+      ],
+      "default_status": "imported or published_imported",
+      "lineage": "source_article_ids_json resolves primarily to legacy articles.id; article_id text is a fallback",
+      "reason": "legacy reports can have multiple reports for the same day/week, so the lossless first import target is historical_reports rather than the current one-report-per-day/week tables",
+      "must_not": [
+        "use standard company SQL export scope",
+        "overwrite generated_news or raw_items"
+      ]
+    },
+    "ai_entities": {
+      "target": "tracked_entities",
+      "identity": "id",
+      "status": "model_and_import_script_ready; real database execution pending",
+      "lineage": "full legacy row is preserved in metadata_json.legacy_tech_insight_loop"
+    },
+    "entity_milestones": {
+      "target": "entity_milestones",
+      "identity": "id",
+      "status": "model_and_import_script_ready; real database execution pending",
+      "lineage": [
+        "entity_id -> ai_entities.id",
+        "article_id -> articles.id and imported raw_items when available",
+        "report_id -> reports.id and historical_reports when available"
+      ],
+      "must_not": [
+        "mutate raw_items",
+        "mutate news_items",
+        "mutate imported reports"
+      ]
+    },
+    "feedback": {
+      "target": "historical feedback archive",
+      "status": "model_and_import_script_ready; real database execution pending",
+      "lineage": "article_id -> articles.id and imported raw_items when available",
+      "must_not": [
+        "mutate current comments",
+        "mutate current ratings",
+        "auto-enter recommendation_runs"
+      ]
+    },
+    "article_quality_feedback": {
+      "target": "historical quality feedback archive",
+      "status": "model_and_import_script_ready; real database execution pending",
+      "lineage": "article_id -> articles.id and imported raw_items when available",
+      "must_not": [
+        "mutate current comments",
+        "mutate current ratings",
+        "auto-enter recommendation_runs"
+      ]
+    },
+    "jobs": {
+      "target": "historical_job_runs archive summary",
+      "status": "model_and_import_script_ready; real database execution pending",
+      "rule": "migrate statistics and failure reasons only; do not migrate the old task state machine"
+    }
+  },
+  "guardrails": [
+    "InfoWatchtower remains the only runtime system",
+    "do not run Tech Insight Loop app.py",
+    "do not copy SQLite tables into PostgreSQL with the same names",
+    "historical imported assets are not candidates for current daily recommendation by default",
+    "historical imported assets are not exported by standard company SQL",
+    "generated_news.category remains the current ten-class taxonomy",
+    "generated_news.content_json remains the five-field company SQL shape"
+  ],
+  "validation": {
+    "inventory_command": "python3 scripts/tech_insight_loop_inventory.py --preview-limit 3",
+    "legacy_dry_run_command": "python3 scripts/tech_insight_loop_legacy_dry_run.py --preview-limit 3",
+    "legacy_import_no_write_command": "python3 scripts/tech_insight_loop_legacy_import.py",
+    "legacy_import_execute_command": "python3 scripts/tech_insight_loop_legacy_import.py --execute",
+    "entity_import_no_write_command": "python3 scripts/tech_insight_loop_entity_import.py",
+    "entity_import_execute_command": "python3 scripts/tech_insight_loop_entity_import.py --execute",
+    "quality_archive_import_no_write_command": "python3 scripts/tech_insight_loop_quality_import.py",
+    "quality_archive_import_execute_command": "python3 scripts/tech_insight_loop_quality_import.py --execute",
+    "import_verification_check_only_command": "python3 scripts/tech_insight_loop_import_verify.py --check-only",
+    "import_verification_small_execute_command": "python3 scripts/tech_insight_loop_import_verify.py --execute --article-limit 20 --report-limit 5 --entity-limit 5 --milestone-limit 20",
+    "import_verification_small_execute_with_quality_command": "python3 scripts/tech_insight_loop_import_verify.py --execute --include-quality-archive --article-limit 20 --report-limit 5 --entity-limit 5 --milestone-limit 20 --feedback-limit 4 --quality-feedback-limit 4 --job-limit 10",
+    "import_verification_full_execute_command": "python3 scripts/tech_insight_loop_import_verify.py --execute --confirm-full-import",
+    "unit_tests": [
+      "backend/.venv/bin/python -m pytest backend/tests/test_tech_insight_loop_inventory.py backend/tests/test_tech_insight_loop_legacy_import.py backend/tests/test_tech_insight_loop_entity_import.py backend/tests/test_tech_insight_loop_quality_import.py"
+    ],
+    "sql_contract_regression": "python3 scripts/validate_company_sql.py"
+  }
+}

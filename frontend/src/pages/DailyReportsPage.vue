@@ -23,6 +23,7 @@ import {
   fetchDailyReports,
   publishDailyReport,
   rateDailyReportItem,
+  regenerateDailyReportGeneratedNews,
   reactToDailyReportItem,
   updateDailyReportItem,
   type CommentRecord,
@@ -36,6 +37,7 @@ const reports = ref<DailyReportRecord[]>([]);
 const loading = ref(false);
 const generating = ref(false);
 const publishingId = ref("");
+const regeneratingReportId = ref("");
 const selectedReportId = ref("");
 const selectedItemId = ref("");
 const detailOpen = ref(false);
@@ -164,6 +166,7 @@ async function generateDraft() {
       ingestion_limit: null,
       recommendation_limit: 15,
       source_daily_limit: 2,
+      generation_timeout_seconds: 45,
       create_daily_draft: true,
       run_ingestion: true
     });
@@ -192,6 +195,27 @@ async function publishReport(report: DailyReportRecord) {
     error.value = exc instanceof Error ? exc.message : "发布日报失败";
   } finally {
     publishingId.value = "";
+  }
+}
+
+async function regenerateReport(report: DailyReportRecord) {
+  regeneratingReportId.value = report.id;
+  error.value = "";
+  message.value = "";
+  try {
+    const result = await regenerateDailyReportGeneratedNews(report.id, {
+      replace_ready: false,
+      generation_timeout_seconds: 45
+    });
+    const index = reports.value.findIndex((candidate) => candidate.id === report.id);
+    if (index >= 0) {
+      reports.value.splice(index, 1, result.report);
+    }
+    message.value = `生成稿重跑完成：尝试 ${result.attempted_total} 条，ready ${result.ready_total} 条，fallback ${result.fallback_total} 条，跳过 ${result.skipped_total} 条`;
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "重跑生成稿失败";
+  } finally {
+    regeneratingReportId.value = "";
   }
 }
 
@@ -322,6 +346,16 @@ function adoptionLabel(status: number) {
     return "备选";
   }
   return "剔除";
+}
+
+function generationLabel(status: string) {
+  if (status === "ready") {
+    return "LLM成稿";
+  }
+  if (status === "fallback_needs_review") {
+    return "待重跑";
+  }
+  return status || "未知";
 }
 
 function todayKey() {
@@ -492,9 +526,9 @@ onMounted(loadReports);
 <template>
   <section class="report-command">
     <div>
-      <p class="eyebrow">阶段 5 · Daily Intelligence</p>
+      <p class="eyebrow">Daily Intelligence</p>
       <h2>日报</h2>
-      <p>从去重 winner 生成推荐稿，编辑采信后形成每日情报。</p>
+      <p>从推荐链路生成日报草稿，也支持把已校验公司 SQL 预览回填为可查看、可采信、可导出的日报。</p>
     </div>
     <div class="toolbar-actions">
       <label class="date-control" title="日报日期">
@@ -538,16 +572,28 @@ onMounted(loadReports);
           <h3>{{ selectedReport.title }}</h3>
           <p>{{ selectedReport.summary }}</p>
         </div>
-        <button
-          v-if="selectedReport.status !== 'published'"
-          type="button"
-          class="icon-button secondary"
-          :disabled="publishingId === selectedReport.id"
-          @click="publishReport(selectedReport)"
-        >
-          <CheckCircle2 :size="18" />
-          <span>{{ publishingId === selectedReport.id ? "发布中" : "发布" }}</span>
-        </button>
+        <div class="toolbar-actions compact">
+          <button
+            v-if="selectedReport.status !== 'published'"
+            type="button"
+            class="icon-button secondary"
+            :disabled="regeneratingReportId === selectedReport.id"
+            @click="regenerateReport(selectedReport)"
+          >
+            <Sparkles :size="18" />
+            <span>{{ regeneratingReportId === selectedReport.id ? "重跑中" : "重跑生成稿" }}</span>
+          </button>
+          <button
+            v-if="selectedReport.status !== 'published'"
+            type="button"
+            class="icon-button secondary"
+            :disabled="publishingId === selectedReport.id"
+            @click="publishReport(selectedReport)"
+          >
+            <CheckCircle2 :size="18" />
+            <span>{{ publishingId === selectedReport.id ? "发布中" : "发布" }}</span>
+          </button>
+        </div>
       </header>
 
       <div class="report-metrics">
@@ -569,6 +615,7 @@ onMounted(loadReports);
             <div class="daily-item-meta">
               <span class="category-chip">{{ item.generated_news.category }}</span>
               <span class="state-chip">{{ adoptionLabel(item.adoption_status) }}</span>
+              <span class="state-chip subtle">{{ generationLabel(item.generated_news.generation_status) }}</span>
               <span>{{ item.reaction_count }} 赞</span>
               <span>{{ item.comment_count }} 评论</span>
             </div>
@@ -811,7 +858,10 @@ onMounted(loadReports);
     <div>
       <p class="eyebrow">日报草稿</p>
       <h2>{{ loading ? "正在加载" : "还没有日报" }}</h2>
-      <p>先完成抓取、标准化和去重，然后点击“生成日报草稿”。</p>
+      <p>
+        当前工作台还没有可展示的日报。可以先完成抓取、标准化和去重后生成草稿；
+        已经产出的公司 SQL 预览也可以通过回填脚本同步到日报工作台。
+      </p>
     </div>
     <FileText :size="42" />
   </section>

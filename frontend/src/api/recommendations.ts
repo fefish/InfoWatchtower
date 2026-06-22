@@ -21,6 +21,13 @@ export interface RecommendationItemRecord {
   final_score: number;
   selected: boolean;
   recommendation_reason: string;
+  admission_level: string;
+  admission_score: number;
+  admission_pool: string;
+  noise_types: string[];
+  reject_reasons: string[];
+  scorer_breakdown: Record<string, unknown>;
+  expert_routes: string[];
   source_title: string;
   source_name: string;
   source_url: string | null;

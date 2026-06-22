@@ -21,6 +21,16 @@ def make_client(monkeypatch, tmp_path):
         "LEGACY_SEED_ROOT",
         str(Path(__file__).resolve().parents[2] / "config" / "seeds" / "legacy"),
     )
+    monkeypatch.setenv(
+        "TECH_INSIGHT_LOOP_SOURCE_CSV",
+        str(
+            Path(__file__).resolve().parents[2]
+            / "config"
+            / "seeds"
+            / "tech_insight_loop"
+            / "sources_full_zh.csv",
+        ),
+    )
     get_settings.cache_clear()
     get_engine.cache_clear()
 
@@ -84,6 +94,49 @@ def test_super_admin_imports_and_lists_legacy_sources(monkeypatch, tmp_path):
     assert repeated.json() == {"created": 0, "updated": 361, "total": 361}
 
 
+def test_super_admin_imports_tech_insight_loop_sources(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+
+    login = client.post("/api/auth/login", json={"username": "admin", "password": "password"})
+    assert login.status_code == 200
+
+    imported = client.post("/api/sources/import-tech-insight-loop")
+    assert imported.status_code == 200
+    assert imported.json() == {
+        "created": 363,
+        "updated": 23,
+        "total": 386,
+        "fetchable": 355,
+        "metadata_only": 31,
+    }
+
+    sources = client.get("/api/sources", params={"workspace_code": "planning_intel"})
+    assert sources.status_code == 200
+    payload = sources.json()
+    assert len(payload) == 363
+    assert sum(1 for item in payload if item["workspace_link_enabled"]) == 332
+    assert any(
+        item["name"] == "机器之心"
+        and item["metadata_only"] is True
+        and item["needs_entry"] is True
+        and item["workspace_link_enabled"] is False
+        and item["source_tier"] == "P0"
+        and item["source_channel_type"]
+        and isinstance(item["expert_routes"], list)
+        for item in payload
+    )
+
+    repeated = client.post("/api/sources/import-tech-insight-loop")
+    assert repeated.status_code == 200
+    assert repeated.json() == {
+        "created": 0,
+        "updated": 386,
+        "total": 386,
+        "fetchable": 355,
+        "metadata_only": 31,
+    }
+
+
 def test_super_admin_can_create_zero_limit_ingestion_run(monkeypatch, tmp_path):
     client = make_client(monkeypatch, tmp_path)
 
@@ -115,3 +168,18 @@ def test_super_admin_can_create_zero_limit_ingestion_run(monkeypatch, tmp_path):
     detail = client.get(f"/api/ingestion/runs/{payload['id']}")
     assert detail.status_code == 200
     assert detail.json()["run_key"] == payload["run_key"]
+
+    coverage = client.get(
+        "/api/ingestion/coverage",
+        params={
+            "workspace_code": "planning_intel",
+            "day_key": "2026-05-05",
+            "run_id": payload["id"],
+        },
+    )
+    assert coverage.status_code == 200
+    coverage_payload = coverage.json()
+    assert coverage_payload["run_id"] == payload["id"]
+    assert coverage_payload["funnel"]["enabled_sources"] == 294
+    assert coverage_payload["funnel"]["run_sources"] == 0
+    assert coverage_payload["sources"][0]["data_source_id"]

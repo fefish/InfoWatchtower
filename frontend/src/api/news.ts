@@ -32,6 +32,42 @@ export interface DedupeGroupItemRecord {
   source_url: string | null;
 }
 
+export interface DedupeGroupRecommendationRecord {
+  run_id: string;
+  run_key: string;
+  day_key: string | null;
+  recommendation_item_id: string;
+  rank: number;
+  selected: boolean;
+  final_score: number;
+  quality_score: number;
+  topic_score: number;
+  freshness_score: number;
+  feedback_score: number;
+  diversity_score: number;
+  source_score: number;
+  heat_score: number;
+  recommendation_reason: string;
+  admission_level: string;
+  admission_score: number;
+  admission_pool: string;
+  noise_types: string[];
+  reject_reasons: string[];
+  scorer_breakdown: Record<string, unknown>;
+  expert_routes: string[];
+}
+
+export interface DedupeGroupDailyReportRecord {
+  daily_report_id: string;
+  daily_report_item_id: string;
+  day_key: string;
+  report_status: string;
+  adoption_status: number;
+  generated_news_id: string;
+  generation_status: string;
+  category: string;
+}
+
 export interface DedupeGroupRecord {
   id: string;
   workspace_code: string;
@@ -42,6 +78,8 @@ export interface DedupeGroupRecord {
   item_count: number;
   status: string;
   items: DedupeGroupItemRecord[];
+  recommendation: DedupeGroupRecommendationRecord | null;
+  daily_report: DedupeGroupDailyReportRecord | null;
 }
 
 export interface NewsNormalizeResult {

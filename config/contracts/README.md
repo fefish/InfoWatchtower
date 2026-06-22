@@ -34,6 +34,7 @@ contracts 管“代码必须长什么样”
 - `extension_points.json`：数据源、推荐、生成、导出、登录、板块、同步的扩展点。
 - `strategic_loop.json`：外部信号到洞察、需求、任务的规划部闭环。
 - `sync_strategy.json`：公网/内网多环境同步策略、同步表和同步包格式。
+- `tech_insight_loop_legacy_import.json`：Tech Insight Loop 旧 SQLite 资产盘点、历史导入 dry-run、历史导入边界和目标映射。
 
 ## 什么时候改 contracts
 

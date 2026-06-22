@@ -20,6 +20,15 @@ class SeedImportResult:
     total: int
 
 
+@dataclass(frozen=True)
+class TechInsightLoopImportResult:
+    created: int
+    updated: int
+    total: int
+    fetchable: int
+    metadata_only: int
+
+
 def import_legacy_sources(session: Session, seed_root: Path) -> SeedImportResult:
     workspaces = _enabled_workspaces(session)
     sources = [
@@ -52,6 +61,61 @@ def import_legacy_sources(session: Session, seed_root: Path) -> SeedImportResult
     return SeedImportResult(created=created, updated=updated, total=len(sources))
 
 
+def import_tech_insight_loop_sources(session: Session, csv_path: Path) -> TechInsightLoopImportResult:
+    workspaces = _enabled_workspaces(session)
+    sources: list[DataSource] = []
+    fetchable = 0
+    metadata_only = 0
+    with csv_path.open(encoding="utf-8-sig", newline="") as csv_file:
+        reader = csv.DictReader(csv_file)
+        for row in reader:
+            source = _tech_insight_loop_row_to_source(row, csv_path.name)
+            if source is None:
+                continue
+            sources.append(source)
+            if source.metadata_json.get("metadata_only"):
+                metadata_only += 1
+            else:
+                fetchable += 1
+
+    created = 0
+    updated = 0
+    for source in sources:
+        existing = session.scalar(_tech_source_identity_statement(source))
+        if existing is None:
+            session.add(source)
+            session.flush()
+            for workspace in workspaces:
+                _ensure_workspace_source_link(
+                    session,
+                    workspace,
+                    source,
+                    enabled=source.enabled,
+                    origin="tech_insight_loop",
+                )
+            created += 1
+        else:
+            _copy_source_fields(existing, source, update_enabled=False)
+            for workspace in workspaces:
+                _ensure_workspace_source_link(
+                    session,
+                    workspace,
+                    existing,
+                    enabled=source.enabled,
+                    origin="tech_insight_loop",
+                    update_enabled=False,
+                )
+            updated += 1
+        session.flush()
+    return TechInsightLoopImportResult(
+        created=created,
+        updated=updated,
+        total=len(sources),
+        fetchable=fetchable,
+        metadata_only=metadata_only,
+    )
+
+
 def _load_json(path: Path) -> list[dict[str, Any]]:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -63,6 +127,18 @@ def _source_identity_statement(source: DataSource) -> Select[tuple[DataSource]]:
     if source.url is None:
         return statement.where(DataSource.name == source.name, DataSource.url.is_(None))
     return statement.where(DataSource.url == source.url)
+
+
+def _tech_source_identity_statement(source: DataSource) -> Select[tuple[DataSource]]:
+    statement = select(DataSource)
+    if source.url:
+        return statement.where(DataSource.url == source.url)
+    tech_source_id = str(source.metadata_json.get("tech_insight_loop_source_id") or "")
+    if tech_source_id:
+        return statement.where(
+            DataSource.metadata_json["tech_insight_loop_source_id"].as_string() == tech_source_id,
+        )
+    return statement.where(DataSource.name == source.name, DataSource.url.is_(None))
 
 
 def _load_wiseflow_sources(path: Path) -> list[DataSource]:
@@ -298,6 +374,100 @@ def _csv_registry_row_to_source(row: dict[str, str], filename: str) -> DataSourc
     )
 
 
+def _tech_insight_loop_row_to_source(row: dict[str, str], filename: str) -> DataSource | None:
+    name = _first_non_empty(
+        row.get("信息源名称"),
+        row.get("字段：rss_name"),
+        row.get("字段：cli_title"),
+        row.get("字段：folo_title"),
+    )
+    if not name:
+        return None
+
+    feed_url = _tech_feed_url(row)
+    original_url = _clean(row.get("原始URL"))
+    http_original_url = original_url if _is_http_url(original_url) else ""
+    has_fetch_entry = bool(feed_url or http_original_url)
+    metadata_only = not has_fetch_entry
+    source_type = _tech_source_type(row, feed_url, http_original_url)
+    source_tags, source_secondary_tags = _source_tags_from_tech_insight_row(row)
+    source_score = (
+        _float_value(row.get("字段：source_quality_score"))
+        or _float_value(row.get("信息源综合评分"))
+        or 0.0
+    )
+    expert_routes = _json_list(row.get("专家路由JSON"))
+    source_entities = _json_list(row.get("字段：source_entity_types_json"))
+    impact_types = _json_list(row.get("字段：impact_types_json"))
+    board_relevance = _json_object(row.get("字段：board_relevance_json"))
+    score_breakdown = _json_object(row.get("字段：source_score_breakdown_json"))
+    entry_url = feed_url or http_original_url or None
+
+    fetch_config: dict[str, Any] = {
+        "registry_source": filename,
+        "registry_source_id": row.get("信息源编码", ""),
+        "access_method": row.get("接入方式配置", ""),
+        "original_url": original_url,
+        "rss_url": _clean(row.get("RSS订阅源")),
+        "cli_rss": _clean(row.get("CLI RSS")),
+        "folo_rss": _clean(row.get("Folo RSS")),
+        "metadata_only": metadata_only,
+    }
+    if source_type in {"rss", "paper_rss"}:
+        fetch_config["feed_url"] = feed_url
+    elif source_type == "page_manual" and http_original_url:
+        fetch_config["type"] = "manual"
+        fetch_config["articles"] = [{"url": http_original_url}]
+
+    return DataSource(
+        workspace_code="shared",
+        domain_code="ai",
+        source_type=source_type,
+        name=name,
+        url=entry_url,
+        enabled=has_fetch_entry,
+        default_focus_id=1,
+        backfill_days=30,
+        fetch_config=fetch_config,
+        paper_config={"enabled": source_type == "paper_rss"},
+        metadata_json={
+            "origin": "tech_insight_loop",
+            "registry_filename": filename,
+            "database_id": row.get("数据库ID", ""),
+            "tech_insight_loop_source_id": row.get("信息源编码", ""),
+            "source_tier": row.get("源等级", ""),
+            "source_channel_type": row.get("来源渠道类型", ""),
+            "access_method": row.get("接入方式配置", ""),
+            "current_status": row.get("当前状态", ""),
+            "csv_status": row.get("字段：csv_status", ""),
+            "primary_category": row.get("一级分类", ""),
+            "secondary_category": row.get("二级分类", ""),
+            "info_category": row.get("来源信息分类", ""),
+            "business_board": row.get("业务板块", ""),
+            "primary_board": row.get("主业务板块", ""),
+            "source_score": source_score,
+            "source_tags": source_tags,
+            "source_secondary_tags": source_secondary_tags,
+            "expert_routes": expert_routes,
+            "source_entity_types": source_entities,
+            "impact_types": impact_types,
+            "board_relevance_json": board_relevance,
+            "source_score_breakdown_json": score_breakdown,
+            "source_quality_notes": row.get("字段：quality_notes", ""),
+            "source_eval_summary": row.get("字段：source_eval_summary", ""),
+            "inclusion_recommendation": row.get("字段：inclusion_recommendation", ""),
+            "recent_fetch_failure_reason": row.get("最近抓取失败原因", ""),
+            "consecutive_failure_count": _int_value(row.get("连续失败次数")),
+            "field_governance_status": row.get("字段：field_governance_status", ""),
+            "metadata_only": metadata_only,
+            "needs_entry": metadata_only,
+            "fetch_entry_status": "ready" if has_fetch_entry else "needs_entry",
+            "raw_registry_row": row,
+        },
+        source_score=source_score,
+    )
+
+
 def _looks_like_paper_source(row: dict[str, str]) -> bool:
     text = " ".join(
         [
@@ -310,6 +480,43 @@ def _looks_like_paper_source(row: dict[str, str]) -> bool:
         ],
     )
     return any(token in text.lower() for token in ["arxiv", "论文", "paper", "research paper"])
+
+
+def _tech_source_type(row: dict[str, str], feed_url: str, original_url: str) -> str:
+    text = " ".join(
+        [
+            row.get("一级分类", ""),
+            row.get("二级分类", ""),
+            row.get("来源信息分类", ""),
+            row.get("来源类型", ""),
+            row.get("信息源名称", ""),
+            row.get("业务板块", ""),
+            row.get("主业务板块", ""),
+        ],
+    )
+    if feed_url:
+        return "paper_rss" if any(token in text.lower() for token in ["arxiv", "论文", "paper"]) else "rss"
+    if original_url:
+        return "page_manual"
+    return "manual"
+
+
+def _tech_feed_url(row: dict[str, str]) -> str:
+    feed_url = _first_non_empty(
+        row.get("RSS订阅源"),
+        row.get("CLI RSS"),
+        row.get("Folo RSS"),
+    )
+    if _is_http_url(feed_url):
+        return feed_url
+    if feed_url.startswith("rsshub://"):
+        route = feed_url.removeprefix("rsshub://").strip("/")
+        return f"https://rsshub.app/{route}" if route else ""
+    original_url = _clean(row.get("原始URL"))
+    if original_url.startswith("rsshub://"):
+        route = original_url.removeprefix("rsshub://").strip("/")
+        return f"https://rsshub.app/{route}" if route else ""
+    return ""
 
 
 def _source_tags_from_registry_row(row: dict[str, str]) -> tuple[list[str], list[str]]:
@@ -357,8 +564,86 @@ def _source_tags_from_registry_row(row: dict[str, str]) -> tuple[list[str], list
     return tags, secondary_tags
 
 
+def _source_tags_from_tech_insight_row(row: dict[str, str]) -> tuple[list[str], list[str]]:
+    tags: list[str] = []
+    secondary_tags: list[str] = []
+
+    def add(tag: str, *secondary: str) -> None:
+        if tag not in tags:
+            tags.append(tag)
+        for item in secondary:
+            if item and item not in secondary_tags:
+                secondary_tags.append(item)
+
+    relevance = _json_object(row.get("字段：board_relevance_json"))
+    board_rules = [
+        ("AI模型", "AI前沿洞察", "模型"),
+        ("AI模型、训练与评测", "AI前沿洞察", "模型"),
+        ("模型训练", "AI工程能力", "训练技术"),
+        ("模型评测", "AI前沿洞察", "测评技术"),
+        ("AI推理与服务加速", "AI工程能力", "推理加速"),
+        ("智能体平台、协议与执行系统", "AI工程能力", "智能体"),
+        ("AI应用与产品化场景", "AI前沿洞察", "AI 应用"),
+        ("AI安全、可信与治理", "AI前沿洞察", "AI安全"),
+        ("云与AI基础设施", "AI基础设施", "AI Infra"),
+        ("AI与通算硬件", "硬件/芯片/数据中心", "AI芯片"),
+        ("基础竞争力", "软件性能/内存/成本", "软件性能"),
+        ("核心网与通信系统架构", "核心网/通信系统", "核心网"),
+        ("通信设备供应商", "核心网/通信系统", "通信设备供应商"),
+        ("通信服务提供商", "核心网/通信系统", "通信服务提供商"),
+        ("标准、协议与产业联盟", "标准/产业联盟", "标准"),
+    ]
+    for board, tag, secondary in board_rules:
+        value = relevance.get(board)
+        if isinstance(value, str) and value.strip() in {"强相关", "中相关", "弱相关"}:
+            add(tag, secondary)
+
+    relevance_fields = [
+        ("字段：ai_model_training_eval_relevance", "AI前沿洞察", "模型"),
+        ("字段：ai_inference_serving_relevance", "AI工程能力", "推理加速"),
+        ("字段：agent_platform_relevance", "AI工程能力", "智能体"),
+        ("字段：ai_application_relevance", "AI前沿洞察", "AI 应用"),
+        ("字段：telecom_vendor_relevance", "核心网/通信系统", "通信设备供应商"),
+        ("字段：telecom_operator_relevance", "核心网/通信系统", "通信服务提供商"),
+        ("字段：cloud_ai_infra_relevance", "AI基础设施", "AI Infra"),
+        ("字段：ai_hardware_relevance", "硬件/芯片/数据中心", "AI芯片"),
+        ("字段：software_perf_relevance", "软件性能/内存/成本", "软件性能"),
+        ("字段：telecom_system_efficiency_relevance", "通信系统成本", "TCO"),
+        ("字段：core_network_relevance", "核心网/通信系统", "核心网"),
+        ("字段：standards_relevance", "标准/产业联盟", "标准"),
+        ("字段：ai_security_relevance", "AI前沿洞察", "AI安全"),
+    ]
+    for field, tag, secondary in relevance_fields:
+        if _is_relevant(row.get(field, "")):
+            add(tag, secondary)
+
+    board_text = " ".join([row.get("业务板块", ""), row.get("主业务板块", "")])
+    if any(token in board_text for token in ["推理", "智能体", "训练"]):
+        add("AI工程能力")
+    if any(token in board_text for token in ["云", "基础设施"]):
+        add("AI基础设施")
+    if any(token in board_text for token in ["硬件", "芯片"]):
+        add("硬件/芯片/数据中心")
+    if any(token in board_text for token in ["通信", "核心网"]):
+        add("核心网/通信系统")
+    if any(token in board_text for token in ["标准", "协议", "联盟"]):
+        add("标准/产业联盟")
+
+    if not tags:
+        add("AI前沿洞察")
+    return tags, secondary_tags
+
+
 def _is_relevant(value: str) -> bool:
-    return value.strip() in {"强相关", "弱相关"}
+    return value.strip() in {"强相关", "中相关", "弱相关"}
+
+
+def _is_http_url(value: str) -> bool:
+    return value.startswith(("http://", "https://"))
+
+
+def _clean(value: str | None) -> str:
+    return (value or "").strip()
 
 
 def _first_non_empty(*values: str | None) -> str:
@@ -376,6 +661,13 @@ def _float_value(value: str | None) -> float | None:
         return None
 
 
+def _int_value(value: str | None) -> int:
+    try:
+        return int(float((value or "").strip()))
+    except ValueError:
+        return 0
+
+
 def _json_object(value: str | None) -> dict[str, Any]:
     if not value:
         return {}
@@ -386,6 +678,18 @@ def _json_object(value: str | None) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _json_list(value: str | None) -> list[str]:
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [str(item) for item in parsed if str(item).strip()]
+
+
 def _first_manual_article_url(item: dict[str, Any]) -> str | None:
     articles = item.get("articles") or []
     if not articles:
@@ -393,11 +697,12 @@ def _first_manual_article_url(item: dict[str, Any]) -> str | None:
     return articles[0].get("url")
 
 
-def _copy_source_fields(target: DataSource, source: DataSource) -> None:
+def _copy_source_fields(target: DataSource, source: DataSource, *, update_enabled: bool = True) -> None:
     target.workspace_code = source.workspace_code
     target.domain_code = source.domain_code
     target.url = source.url
-    target.enabled = True
+    if update_enabled:
+        target.enabled = source.enabled
     target.default_focus_id = source.default_focus_id
     target.backfill_days = source.backfill_days
     target.fetch_config = source.fetch_config or {}
@@ -435,6 +740,10 @@ def _ensure_workspace_source_link(
     session: Session,
     workspace: Workspace,
     source: DataSource,
+    *,
+    enabled: bool = True,
+    origin: str = "legacy_seed",
+    update_enabled: bool = True,
 ) -> WorkspaceSourceLink:
     link = session.scalar(
         select(WorkspaceSourceLink).where(
@@ -447,22 +756,23 @@ def _ensure_workspace_source_link(
             workspace=workspace,
             data_source=source,
             domain_code=source.domain_code,
-            enabled=True,
+            enabled=enabled,
             source_weight=1.0,
             config_json={
                 "clustering_config": {},
-                "origin": "legacy_seed",
+                "origin": origin,
             },
         )
         session.add(link)
     else:
         config = link.config_json or {}
         link.domain_code = source.domain_code
-        link.enabled = True
+        if update_enabled:
+            link.enabled = enabled
         link_config = {
             **config,
             "clustering_config": config.get("clustering_config", {}),
-            "origin": config.get("origin", "legacy_seed"),
+            "origin": config.get("origin", origin),
         }
         link_config.pop("label_set_codes", None)
         link_config.pop("default_label_paths", None)

@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 from app.models.common import IdMixin, JsonColumn, JsonDict, ScopeMixin, SyncMixin, TimestampMixin
+
+if TYPE_CHECKING:
+    from app.models.content import GeneratedNews
+    from app.models.feedback import Comment, Rating, Reaction
 
 
 class DailyReport(IdMixin, ScopeMixin, SyncMixin, TimestampMixin, Base):
@@ -43,15 +48,22 @@ class DailyReportItem(IdMixin, ScopeMixin, SyncMixin, TimestampMixin, Base):
     editor_notes: Mapped[str] = mapped_column(Text, default="")
 
     daily_report: Mapped[DailyReport] = relationship(back_populates="items")
-    generated_news: Mapped["GeneratedNews"] = relationship(back_populates="daily_report_items")
-    reactions: Mapped[list["Reaction"]] = relationship(back_populates="daily_report_item")
-    ratings: Mapped[list["Rating"]] = relationship(back_populates="daily_report_item")
-    comments: Mapped[list["Comment"]] = relationship(back_populates="daily_report_item")
+    generated_news: Mapped[GeneratedNews] = relationship(back_populates="daily_report_items")
+    reactions: Mapped[list[Reaction]] = relationship(back_populates="daily_report_item")
+    ratings: Mapped[list[Rating]] = relationship(back_populates="daily_report_item")
+    comments: Mapped[list[Comment]] = relationship(back_populates="daily_report_item")
 
 
 class WeeklyReport(IdMixin, ScopeMixin, SyncMixin, TimestampMixin, Base):
     __tablename__ = "weekly_reports"
-    __table_args__ = (UniqueConstraint("domain_code", "week_key", name="uq_weekly_reports_domain_week"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_code",
+            "domain_code",
+            "week_key",
+            name="uq_weekly_reports_workspace_domain_week",
+        ),
+    )
 
     week_key: Mapped[str] = mapped_column(String(16), index=True)
     title: Mapped[str] = mapped_column(String(255))
@@ -83,3 +95,5 @@ class WeeklyReportItem(IdMixin, ScopeMixin, SyncMixin, TimestampMixin, Base):
     editor_content_json: Mapped[JsonDict | None] = mapped_column(JsonColumn, nullable=True)
 
     weekly_report: Mapped[WeeklyReport] = relationship(back_populates="items")
+    daily_report_item: Mapped[DailyReportItem | None] = relationship()
+    generated_news: Mapped[GeneratedNews | None] = relationship()

@@ -6,7 +6,11 @@ from sqlalchemy.orm import sessionmaker
 
 from app.adapters.base import AdapterRegistry, RawItemInput
 from app.core.database import Base
-from app.ingestion.fetch import fetch_source_to_raw_items
+from app.ingestion.fetch import (
+    MAX_RAW_ENTRY_KEY_LENGTH,
+    fetch_source_to_raw_items,
+    normalize_raw_entry_key,
+)
 from app.models.content import DataSource, RawItem
 
 
@@ -84,3 +88,14 @@ async def test_fetch_source_persists_raw_items_idempotently():
     session.refresh(data_source)
     assert data_source.last_success_at == fetched_at.replace(tzinfo=None)
     assert data_source.last_error == ""
+
+
+def test_raw_entry_key_is_deterministically_shortened_for_long_feed_ids():
+    long_key = "https://example.com/feed?" + ("q=" + "x" * 400)
+
+    normalized = normalize_raw_entry_key(long_key)
+
+    assert len(normalized) == MAX_RAW_ENTRY_KEY_LENGTH
+    assert normalized == normalize_raw_entry_key(long_key)
+    assert normalized != long_key
+    assert "#" in normalized

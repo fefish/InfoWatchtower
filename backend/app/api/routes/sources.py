@@ -10,7 +10,7 @@ from app.api.routes.auth import get_current_user, require_super_admin
 from app.core.config import Settings, get_settings
 from app.core.database import get_db_session
 from app.ingestion.fetch import SourceFetchError, SourceNotFoundError, fetch_source_to_raw_items
-from app.ingestion.source_seeds import import_legacy_sources
+from app.ingestion.source_seeds import import_legacy_sources, import_tech_insight_loop_sources
 from app.models.content import DataSource
 from app.models.identity import User
 from app.models.workspace import Workspace, WorkspaceSourceLink
@@ -19,6 +19,7 @@ from app.schemas.sources import (
     DataSourceWorkspaceConfigUpdate,
     LegacySeedImportRead,
     SourceFetchRead,
+    TechInsightLoopImportRead,
 )
 
 router = APIRouter(prefix="/api/sources", tags=["sources"])
@@ -56,6 +57,30 @@ def import_legacy_seed_sources(
     result = import_legacy_sources(session, seed_root)
     session.commit()
     return LegacySeedImportRead(created=result.created, updated=result.updated, total=result.total)
+
+
+@router.post("/import-tech-insight-loop", response_model=TechInsightLoopImportRead)
+def import_tech_insight_loop_seed_sources(
+    _: User = Depends(require_super_admin),
+    session: Session = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> TechInsightLoopImportRead:
+    csv_path = Path(settings.tech_insight_loop_source_csv)
+    if not csv_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Tech Insight Loop source CSV does not exist: {csv_path}",
+        )
+
+    result = import_tech_insight_loop_sources(session, csv_path)
+    session.commit()
+    return TechInsightLoopImportRead(
+        created=result.created,
+        updated=result.updated,
+        total=result.total,
+        fetchable=result.fetchable,
+        metadata_only=result.metadata_only,
+    )
 
 
 @router.patch("/{source_id}/workspace-link", response_model=DataSourceRead)
@@ -176,6 +201,14 @@ def _source_to_read(source: DataSource, workspace_link: WorkspaceSourceLink | No
         info_category=str(metadata.get("info_category") or ""),
         source_tags=_string_list(metadata.get("source_tags")),
         source_secondary_tags=_string_list(metadata.get("source_secondary_tags")),
+        source_tier=str(metadata.get("source_tier") or ""),
+        source_channel_type=str(metadata.get("source_channel_type") or ""),
+        expert_routes=_string_list(metadata.get("expert_routes")),
+        inclusion_recommendation=str(metadata.get("inclusion_recommendation") or ""),
+        metadata_only=bool(metadata.get("metadata_only")),
+        needs_entry=bool(metadata.get("needs_entry")),
+        fetch_entry_status=str(metadata.get("fetch_entry_status") or ""),
+        source_quality_notes=str(metadata.get("source_quality_notes") or ""),
         workspace_link_enabled=workspace_link.enabled if workspace_link else False,
         workspace_source_weight=workspace_link.source_weight if workspace_link else None,
         workspace_daily_limit=workspace_link.daily_limit if workspace_link else None,

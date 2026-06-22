@@ -19,11 +19,11 @@
 - 用户权限页面已能读取用户、读取角色并保存用户角色。
 - 公网安全和 SSO 后续计划见 `docs/auth-security-roadmap.md`。
 - 工作台模型按共享主链路实现；工作台列表来自 `workspaces`，页面来自 `workspace_sections`，所有工作台共享数据源管理、候选池、日报、周报和导出能力。差异配置通过 `workspaces.config_json.label_policy` 的工作台统一一级/二级标签策略、`workspace_source_links` 的源启用/权重/日限和可选插件模块完成。
-- 阶段 3 已有共享数据源导入 API、数据源页面、工作台统一标签策略 API、工作台源链接配置 API、工作台级 ingestion run API、Redis/RQ worker + scheduler 调度入口、adapter registry、RSS/paper RSS/page_manual/page_monitor adapter 和 wiseflow/paper API/manual 骨架；旧种子源导入后会为所有已启用默认工作台创建源链接；RSS/paper RSS/page_manual/page_monitor 源可通过手动 API 抓取并幂等写入 `raw_items`，也可通过 ingestion run 按工作台批量触发；ingestion run 支持 `concurrency` 和 `source_timeout_seconds`，默认并发 8、单源 25 秒超时。前端已切到浅色工作台壳、数据库驱动导航、信息流式数据源列表和紧凑工作台标签策略面板。
+- 阶段 3 已有共享数据源导入 API、数据源页面、工作台统一标签策略 API、工作台源链接配置 API、工作台级 ingestion run API、多模式历史补采 API、Redis/RQ worker + scheduler 调度入口、adapter registry、RSS/paper RSS/page_manual/page_monitor adapter 和 wiseflow/paper API/manual 骨架；旧种子源导入后会为所有已启用默认工作台创建源链接；RSS/paper RSS/page_manual/page_monitor 源可通过手动 API 抓取并幂等写入 `raw_items`，也可通过 ingestion run 按工作台批量触发；ingestion run 支持 `concurrency` 和 `source_timeout_seconds`，默认并发 8、单源 25 秒超时；历史补采支持 `rss_window/paper_api/archive_page/sitemap/manual_import`。前端已切到浅色工作台壳、数据库驱动导航、信息流式数据源列表和紧凑工作台标签策略面板。
 - 阶段 4 已有 raw 到 news 标准化与硬去重 API：`POST /api/news-items/normalize`、`GET /api/news-items`、`GET /api/dedupe-groups`。同一共享 raw 可以被不同工作台各自标准化；去重组按 `workspace_code + dedupe_key` 隔离；winner/loser 会回写到 `news_items.active` 和 `duplicate_of_id`。
-- 阶段 5 已有按日期回填的完整流水线、推荐 run、可解释推荐分、可选 MiniMax `generated_news`、日报草稿、发布、条目编辑和点赞/评分/评论最小 API；前端 `/daily-reports` 可选择日期并触发完整流水线，支持正文展示、采信切换、编辑、点赞、评分、评论和追溯查看；scheduler 开启后默认执行每日完整流水线：抓取、标准化/去重、推荐和日报草稿。
+- 阶段 5 已有按日期回填的完整流水线、推荐 run、可解释推荐分、可选 MiniMax `generated_news`、日报草稿、发布、条目编辑和点赞/评分/评论最小 API；MiniMax 单条默认 45 秒超时，失败会落到 `fallback_needs_review` 并可在草稿日报重跑生成稿；前端 `/daily-reports` 可选择日期并触发完整流水线，支持正文展示、采信切换、编辑、点赞、评分、评论、追溯查看和生成状态展示；scheduler 开启后默认执行每日完整流水线：抓取、标准化/去重、推荐和日报草稿。
 
-业务流程 API 还未实现：候选池完整页面、日报深度编辑页面、周报和 SQL 导出会在后续阶段逐步补齐。
+业务流程 API 当前已具备：候选池、日报、周报、SQL 导出、需求、任务、同步运行和审计页面。后续重点是候选池增强、SQL 逐条追溯、完整同步包导出/导入和生产部署硬化。
 
 ## 2. 后端本地运行
 
@@ -148,7 +148,7 @@ curl http://localhost:5173/healthz
 6. 数据源页应显示共享源 294、当前工作台启用 294。
 7. 点击任意源的“配置”，应出现数据源配置面板，可设置启用状态、权重和日限，启用开关文案为“启用”。
 8. 对启用的 `rss` 或 `paper_rss` 源点击“抓取”，页面应提示拉取、新增、更新数量。
-9. 数据源页在桌面宽度下不应横向截断；右侧标签策略不应依赖难发现的内部滚动条；候选池、日报、周报、SQL 导出、用户权限和审计占位页应使用统一内容容器。
+9. 数据源页在桌面宽度下不应横向截断；右侧标签策略不应依赖难发现的内部滚动条；候选池、日报、周报、SQL 导出、用户权限、同步和审计页应使用统一内容容器。
 
 API 验收：
 
@@ -231,7 +231,7 @@ curl -fsS -b /tmp/iw_cookie.txt \
 
 ## 5.3 当前阶段 5 验收
 
-本阶段已经做到：从目标日期的去重 winner 生成推荐 run、推荐分、`generated_news` 和日报草稿，并支持发布、条目编辑、点赞、评分、评论。若设置 `MINIMAX_GENERATION_ENABLED=true` 且 `MINIMAX_API_KEY` 可用，结构化新闻优先由 MiniMax 中国区 OpenAI-compatible `https://api.minimaxi.com/v1/chat/completions` 生成；否则使用规则 fallback，状态为 `fallback_needs_review`，只能用于页面复核，标准公司 SQL 导出不会接受。
+本阶段已经做到：从目标日期的去重 winner 生成推荐 run、推荐分、`generated_news` 和日报草稿，并支持发布、条目编辑、点赞、评分、评论。若设置 `MINIMAX_GENERATION_ENABLED=true` 且 `MINIMAX_API_KEY` 可用，结构化新闻优先由 MiniMax 中国区 OpenAI-compatible `https://api.minimaxi.com/v1/chat/completions` 生成；单条生成默认 45 秒超时。超时、未启用或调用失败时使用规则 fallback，状态为 `fallback_needs_review`，只能用于页面复核，标准公司 SQL 导出不会接受；草稿日报可重跑非 ready 生成稿。
 
 前端验收：
 
@@ -273,4 +273,4 @@ curl -fsS -b /tmp/iw_cookie.txt \
 
 ## 6. 下一阶段
 
-阶段 5-6 已完成推荐、日报草稿、反馈链路和公司 SQL 标准导出的可回填闭环，并已本地验证 `2026-04-30`、`2026-05-01` 到 `2026-05-08`、`2026-05-09` 到 `2026-05-14` 的日报/SQL 预览。所有 SQL 预览导入内网前必须通过 `scripts/validate_company_sql.py`，需要统一标题时先运行 `scripts/validate_company_sql.py --fix-headers`。下一步进入候选质量治理、抓取覆盖率/历史补采、周报/需求/任务后端 API、公网/内网同步骨架和试运行稳定性。
+阶段 5-6 已完成推荐、日报草稿、反馈链路和公司 SQL 标准导出的可回填闭环，并已本地验证 `2026-04-30`、`2026-05-01` 到 `2026-05-08`、`2026-05-09` 到 `2026-05-14`、`2026-05-15` 到 `2026-05-20`、`2026-05-21` 到 `2026-05-27` 的日报/SQL 预览。所有 SQL 预览导入内网前必须通过 `scripts/validate_company_sql.py`，需要统一标题时先运行 `scripts/validate_company_sql.py --fix-headers`。当前已补日报生成超时/重跑、多模式历史补采、周报前端、覆盖率详情、需求/任务/同步/审计页面。下一步优先做候选池增强、SQL 逐条追溯、完整同步包导出/导入和试运行稳定性。

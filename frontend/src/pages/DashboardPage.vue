@@ -2,30 +2,87 @@
 import { computed, onMounted, ref } from "vue";
 
 import { fetchHealth, type HealthResponse } from "../api/health";
+import { fetchDailyReports, fetchWeeklyReports, type DailyReportRecord, type WeeklyReportRecord } from "../api/reports";
+import { fetchSources, type DataSourceRecord } from "../api/sources";
 import { useWorkspaceStore } from "../stores/workspace";
 
 const health = ref<HealthResponse | null>(null);
+const sources = ref<DataSourceRecord[]>([]);
+const dailyReports = ref<DailyReportRecord[]>([]);
+const weeklyReports = ref<WeeklyReportRecord[]>([]);
 const loading = ref(false);
 const error = ref("");
 const workspace = useWorkspaceStore();
 
+const enabledSourceCount = computed(() => sources.value.filter((source) => source.workspace_link_enabled).length);
+const metadataOnlyCount = computed(() => sources.value.filter((source) => source.needs_entry || source.metadata_only).length);
+const fetchableSourceCount = computed(() =>
+  sources.value.filter(
+    (source) =>
+      source.workspace_link_enabled &&
+      source.enabled &&
+      ["rss", "paper_rss", "page_manual", "page_monitor"].includes(source.source_type)
+  ).length
+);
+const latestDailyReport = computed(() => dailyReports.value[0] ?? null);
+const latestWeeklyReport = computed(() => weeklyReports.value[0] ?? null);
+
 const metrics = computed(() => [
-  { label: "种子源", value: "113", detail: "wiseflow/RSS/page" },
-  { label: "论文源", value: "17", detail: "14 个启用" },
-  { label: "工作台源链接", value: "113", detail: "每个默认工作台" },
-  { label: "当前阶段", value: "5", detail: "日报草稿" }
+  {
+    label: "共享源",
+    value: loading.value && sources.value.length === 0 ? "..." : String(sources.value.length),
+    detail: `${enabledSourceCount.value} 已启用 · ${metadataOnlyCount.value} 待补入口`
+  },
+  {
+    label: "可抓取源",
+    value: loading.value && sources.value.length === 0 ? "..." : String(fetchableSourceCount.value),
+    detail: "RSS / 论文 RSS / 页面源"
+  },
+  {
+    label: "最新日报",
+    value: latestDailyReport.value?.day_key ?? "暂无",
+    detail: latestDailyReport.value
+      ? `${statusLabel(latestDailyReport.value.status)} · ${latestDailyReport.value.items.length} 条`
+      : "先生成或回填日报"
+  },
+  {
+    label: "最新周报",
+    value: latestWeeklyReport.value?.week_key ?? "暂无",
+    detail: latestWeeklyReport.value
+      ? `${statusLabel(latestWeeklyReport.value.status)} · ${latestWeeklyReport.value.items.length} 条`
+      : "从已发布日报生成"
+  }
 ]);
 
 onMounted(async () => {
+  await loadDashboard();
+});
+
+async function loadDashboard() {
   loading.value = true;
+  error.value = "";
   try {
-    health.value = await fetchHealth();
+    const workspaceCode = workspace.currentCode || "planning_intel";
+    const [healthResult, sourceResult, dailyResult, weeklyResult] = await Promise.all([
+      fetchHealth(),
+      fetchSources(workspaceCode),
+      fetchDailyReports(workspaceCode),
+      fetchWeeklyReports(workspaceCode)
+    ]);
+    health.value = healthResult;
+    sources.value = sourceResult;
+    dailyReports.value = dailyResult;
+    weeklyReports.value = weeklyResult;
   } catch (exc) {
-    error.value = exc instanceof Error ? exc.message : "health check failed";
+    error.value = exc instanceof Error ? exc.message : "加载工作台概览失败";
   } finally {
     loading.value = false;
   }
-});
+}
+
+function statusLabel(status: string) {
+  return status === "published" ? "已发布" : "草稿";
+}
 </script>
 
 <template>
@@ -39,14 +96,14 @@ onMounted(async () => {
 
   <section class="work-band">
     <div>
-      <p class="eyebrow">阶段 5</p>
-      <h2>推荐 run、结构化稿与日报草稿</h2>
+      <p class="eyebrow">当前工作台状态</p>
+      <h2>源治理、日报周报与归档闭环</h2>
       <p>
-        当前工作台：{{ workspace.current?.name }}。系统已完成登录与 RBAC、数据库驱动工作台、
-        共享数据源导入、工作台统一标签策略、adapter 注册、RSS/paper RSS 手动抓取到 raw_items，
-        raw_items 到 news_items 的标准化和硬去重，并能生成推荐 run、generated_news 和日报草稿。
-        下一步完善候选池与日报编辑体验，再进入 SQL 导出。
+        当前工作台：{{ workspace.current?.name }}。系统已完成源治理融合、抓取覆盖率、候选池、
+        推荐准入评分、日报采信、周报板块管理、历史归档、实体大事记、质量归档和公司 SQL 导出。
+        如果日报或周报为空，优先检查当前数据库是否已经生成或回填对应日期的数据，再检查抓取覆盖率和推荐链路。
       </p>
+      <p v-if="error" class="form-error">{{ error }}</p>
     </div>
 
     <div class="health-panel">

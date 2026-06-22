@@ -33,6 +33,7 @@
 - `config/contracts/extension_points.json`
 - `config/contracts/strategic_loop.json`
 - `config/contracts/sync_strategy.json`
+- `config/contracts/tech_insight_loop_legacy_import.json`
 - `config/taxonomy/news_categories.json`
 - `config/taxonomy/source_tags.json`
 - `config/taxonomy/intelligence_domains.json`
@@ -222,7 +223,15 @@ AuthAdapter -> ExternalIdentity -> IdentityResolver -> users -> session/JWT -> R
 
 ### 5.4 数据源导入
 
-当前进度：已实现旧种子源导入 API、补充信息源台账导入、数据源列表 API、工作台统一标签/新闻结构策略 API、工作台源链接配置 API、单源手动抓取 API、工作台级 ingestion run API 和 Redis/RQ worker + scheduler 调度入口。导入器会先读取旧 113 个种子源，再读取 `source_catalog/information_source_registry_20260511.csv` 中 248 条可导入 RSS 记录；合计 361 条导入记录按 `source_type + url` 去重后进入 294 个共享数据源，规划部工作台 v1 默认全部启用。补充台账只用于新增源、源侧方向标签和源质量评分；CSV 状态/纳入建议保留在 metadata 中做评分先验，不再作为初始停用开关。管理员可在数据源页增删改当前工作台统一新闻一级/二级标签策略，并能查看/配置 `news_format_code`、`export_category_mode` 与生成稿必填内容字段；`planning_intel` 成品新闻一级标签已恢复为旧系统 AI 十分类，数据源侧新增 `source_tags/source_secondary_tags` 方向标签。单个源只配置启用、权重和日限。RSS/paper RSS/page_manual/page_monitor 源可手动触发抓取到 `raw_items`，重复抓取按 `(data_source_id, entry_key)` 幂等更新；wiseflow 源保留为 adapter 扩展入口，未配置真实接口时不会贡献数据。`/api/ingestion/runs` 当前同步执行工作台级抓取，默认覆盖该工作台启用的 `rss/paper_rss/page_manual/page_monitor/wiseflow` 源；抓取阶段支持并发池和单源超时，默认 `INGESTION_CONCURRENCY=8`、`INGESTION_SOURCE_TIMEOUT_SECONDS=25`，避免几百个源被串行阻塞。完整日报流水线通过 `/api/pipeline/daily-runs` 默认沿用同一套全量源类型。scheduler 默认关闭自动任务，开启后定时把每日完整流水线入队给 worker 执行。前端已改为浅色工作台壳、数据库驱动分组导航、信息流式数据源列表和参考高保真风格的右侧标签策略面板；`/ingestion-runs` 已接入抓取运行历史和安全运行入口，用于解释覆盖率问题。周报、需求、任务、同步和审计目前是模块化路线页，不代表后端 API 已完成。
+当前进度：已实现旧种子源导入 API、补充信息源台账导入、Tech Insight Loop 源治理导入 API、数据源列表 API、工作台统一标签/新闻结构策略 API、工作台源链接配置 API、单源手动抓取 API、工作台级 ingestion run API、历史补采 API 和 Redis/RQ worker + scheduler 调度入口。
+
+数据源导入会先读取旧 113 个种子源，再读取 `source_catalog/information_source_registry_20260511.csv` 中 248 条可导入 RSS 记录；合计 361 条导入记录按 `source_type + url` 去重后进入 294 个共享数据源，规划部工作台 v1 默认全部启用。`POST /api/sources/import-tech-insight-loop` 读取 `config/seeds/tech_insight_loop/sources_full_zh.csv`，按 RSS/URL/RSSHub 去重合并 386 行源治理记录，其中 355 行有入口、31 行为 `wx://` 等待补入口，去重后写入 363 个共享源；`source_tier`、`source_channel_type`、专家路由、板块相关度、评分拆解和最近失败原因写入 `metadata_json`，`source_quality_score/信息源综合评分` 写入 `source_score`，且重复导入不覆盖已有人工启用关系。补充台账只用于新增源、源侧方向标签和源质量评分；CSV 状态/纳入建议保留在 metadata 中做评分先验，不再作为初始停用开关。
+
+工作台统一标签/新闻结构策略、RSS/paper RSS/page_manual/page_monitor 抓取、工作台级 ingestion run、RSS 窗口补采、并发池和单源超时、每日完整流水线 scheduler 都已接入。前端已改为浅色工作台壳、数据库驱动分组导航、信息流式数据源列表和右侧标签策略面板；`/sources`、`/ingestion-runs`、周报、需求、任务、同步、审计、历史归档、实体大事记和质量归档页面均已升级为真实 API 页面。
+
+Tech Insight Loop 第二轮阶段 0 已完成只读资产盘点和历史素材/报告 dry-run，并已补真实导入脚本：`scripts/tech_insight_loop_inventory.py` 输出旧 SQLite 的表统计、字段质量、关系检查和迁移预览，`scripts/tech_insight_loop_legacy_dry_run.py` 输出旧 `articles/reports` 的导入计划、状态映射和报告引用缺口，`scripts/tech_insight_loop_legacy_import.py --execute` 在配置 `DATABASE_URL` 后把旧素材写入禁用归档源的 `raw_items`，把 daily/weekly 旧报告写入 `historical_reports`。
+
+实体大事记归档模型、导入脚本和只读页面已补齐：`tracked_entities/entity_milestones` 保存旧 `ai_entities/entity_milestones`，`scripts/tech_insight_loop_entity_import.py --execute` 在配置 `DATABASE_URL` 后写入 23 个实体和 275 条事件，并把旧 `article_id/report_id` 尽量解析到已导入的 `raw_items/historical_reports`；未解析引用保留在 `metadata_json.legacy_refs`。`GET /api/entity-timeline/summary`、`GET /api/tracked-entities`、`GET /api/entity-milestones`、`GET /api/entity-milestones/{id}` 和前端 `/entity-milestones` 可只读查看实体列表、事件时间线和引用缺口。历史反馈和旧任务归档模型也已补齐：`historical_feedback_items/historical_job_runs` 保存旧 `feedback/article_quality_feedback/jobs`，`scripts/tech_insight_loop_quality_import.py --execute` 在配置 `DATABASE_URL` 后写入；反馈只作为历史质量信号归档，不创建当前 `comments/ratings`，旧任务只保存统计和失败原因，不创建当前 `ingestion_runs`。`GET /api/quality-archive/summary`、`GET /api/historical-feedback-items`、`GET /api/historical-job-runs` 和前端 `/quality-archive` 可只读查看旧反馈、旧质量反馈、旧任务统计和反馈引用缺口。导入验收入口已补齐：`GET /api/legacy-import/summary` 按冻结基线统计历史 raw、报告、实体、事件、历史反馈和旧任务覆盖率，`GET /api/legacy-import/gaps` 汇总历史报告、实体事件和历史反馈的未解析旧引用，前端 `/historical-reports` 顶部展示只读验收面板。`scripts/tech_insight_loop_import_verify.py` 已提供真实库执行验收包装：`--check-only` 只读核对，`--execute` 配合 limit 做小批量导入，全量必须显式 `--confirm-full-import`；需要同步验收反馈/旧任务归档时加 `--include-quality-archive` 和对应 limit。`config/contracts/tech_insight_loop_legacy_import.json` 固化“历史导入不进当前推荐和公司 SQL”的边界；后续真实库执行仍必须继续保留旧行追溯。
 
 从这些文件导入初始源：
 
@@ -239,7 +248,7 @@ AuthAdapter -> ExternalIdentity -> IdentityResolver -> users -> session/JWT -> R
 - wiseflow 作为 `source_type=wiseflow` 单独存在，不要混成 RSS。
 - 前端首页当前显示阶段 5 进度；数据源页应能继续验收阶段 3 的增删改工作台统一一级/二级标签策略、查看和保存工作台新闻结构字段、单源启用/权重/日限、手动触发 RSS/paper RSS/page_manual/page_monitor 抓取；单源配置里不得维护标签；`/ingestion-runs` 可用 `limit=0` 验收抓取 run 权限和接口链路。
 - 重复抓取同一个 RSS 源时，`raw_items` 按 `(data_source_id, entry_key)` 更新，不重复插入。
-- `POST /api/ingestion/runs` 能创建工作台级抓取 run；`GET /api/ingestion/runs` 和 `GET /api/ingestion/runs/{id}` 能查看历史与详情。
+- `POST /api/ingestion/runs` 能创建工作台级抓取 run；`POST /api/ingestion/backfill-runs` 能创建 `rss_window/paper_api/archive_page/sitemap/manual_import` 补采 run；`GET /api/ingestion/runs` 和 `GET /api/ingestion/runs/{id}` 能查看历史与每源详情。
 
 ### 5.5 Adapter 注册
 
@@ -306,9 +315,11 @@ class SourceAdapter:
 
 ### 5.8 推荐
 
-当前进度：已实现可回填闭环，并新增内容级准入层。`POST /api/pipeline/daily-runs` 可按工作台和 `day_key` 执行抓取、标准化/去重、推荐和日报草稿；`POST /api/recommendation/runs` 可只重跑推荐层。推荐读取目标日期的 `dedupe_groups` winner，先计算 `P0/P1/P2/P3/R` 准入等级，再写入 `recommendation_runs/recommendation_items`，并为 selected 推荐生成 `generated_news`。推荐分数包含 `quality_score/topic_score/freshness_score/feedback_score/diversity_score/source_score/heat_score/final_score` 和 `recommendation_reason`；`recommendation_reason` 必须包含 `admission=...`、`pool=...`、`content_value=...`，`recommendation_runs.summary_json.admission` 汇总各等级、内容池和噪声类型。`planning_intel` 默认采用技术情报优先策略：提升 AI 软件、AI 基础设施、模型工程、推理/训练、RAG、多智能体、Agent 记忆、硬件厂商技术路线、友商技术动态、AI 芯片、GPU 集群、数据中心架构和通信系统信号；但源侧方向标签只是弱先验，厂商源/硬件源不能绕过内容级准入，单条内容仍要有架构、推理、模型服务、芯片、数据中心、通信系统、标准或工程实现证据。降权融资、财报、股价、宏观产业收入数据、传闻曝光、采购/中标/集采、消费硬件、活动预告、宣传推广会/品牌行动、泛商业合作、纯营销、航天火箭等离题工程新闻、法律/版权元讨论、标题党、社会/教育离题内容和离题生物医学/纯学术论文。日报选择先选 P0/P1，再用无噪声且有明确技术信号的 P2 补齐；P2 paper_rss、带噪声 P2、P3/R 默认不进日报；每个源仍受 `source_daily_limit` 限制，`paper_rss` 默认不超过日报条数约 10%，单个内容池默认不超过约 40%，避免新闻过度集中。MiniMax 生成通过 `MINIMAX_GENERATION_ENABLED=true` 开启，按旧参考脚本已验证的中国区 OpenAI-compatible `https://api.minimaxi.com/v1/chat/completions` 调用。生成 prompt 强制简体中文和旧系统五段正文；失败时不阻塞流水线，但只会落回 `rule_v1:fallback` 且标记 `fallback_needs_review`，不能直接导出标准公司 SQL。
+当前进度：已实现可回填闭环，并新增内容级准入层。`POST /api/pipeline/daily-runs` 可按工作台和 `day_key` 执行抓取、标准化/去重、推荐和日报草稿；`POST /api/recommendation/runs` 可只重跑推荐层。推荐读取目标日期的 `dedupe_groups` winner，先计算 `P0/P1/P2/P3/R` 准入等级，再写入 `recommendation_runs/recommendation_items`，并为 selected 推荐生成 `generated_news`。推荐分数包含 `quality_score/topic_score/freshness_score/feedback_score/diversity_score/source_score/heat_score/final_score` 和 `recommendation_reason`；`recommendation_reason` 必须包含 `admission=...`、`pool=...`、`content_value=...`，`recommendation_runs.summary_json.admission` 汇总各等级、内容池和噪声类型。`planning_intel` 默认采用技术情报优先策略：提升 AI 软件、AI 基础设施、模型工程、推理/训练、RAG、多智能体、Agent 记忆、硬件厂商技术路线、友商技术动态、AI 芯片、GPU 集群、数据中心架构和通信系统信号；但源侧方向标签只是弱先验，厂商源/硬件源不能绕过内容级准入，单条内容仍要有架构、推理、模型服务、芯片、数据中心、通信系统、标准或工程实现证据。降权融资、财报、股价、宏观产业收入数据、传闻曝光、采购/中标/集采、消费硬件、活动预告、宣传推广会/品牌行动、泛商业合作、纯营销、航天火箭等离题工程新闻、法律/版权元讨论、标题党、社会/教育离题内容和离题生物医学/纯学术论文。日报选择先选 P0/P1，再用无噪声且有明确技术信号的 P2 补齐；P2 paper_rss、带噪声 P2、P3/R 默认不进日报；每个源仍受 `source_daily_limit` 限制，`paper_rss` 默认不超过日报条数约 10%，单个内容池默认不超过约 40%，避免新闻过度集中。MiniMax 生成通过 `MINIMAX_GENERATION_ENABLED=true` 开启，按旧参考脚本已验证的中国区 OpenAI-compatible `https://api.minimaxi.com/v1/chat/completions` 调用。生成 prompt 强制简体中文和旧系统五段正文；单条生成默认 45 秒超时，失败或超时不阻塞整轮流水线，只落回 `rule_v1:fallback` 且标记 `fallback_needs_review`，不能直接导出标准公司 SQL。推荐 run 的 `summary_json.generation_status` 会汇总 ready/fallback 状态；日报草稿可通过 `POST /api/daily-reports/{report_id}/regenerate-generated-news` 对非 ready 项或指定条目重跑结构化生成。
 
-`backend/app/pipeline/daily.py` 已提供每日完整流水线：可选抓取、标准化/去重、按 `day_key` 推荐、结构化生成和日报草稿。`POST /api/pipeline/daily-runs` 与 scheduler 都调用同一套 service；如果只想抓取，设置 `SCHEDULER_JOB_MODE=ingestion_only`。
+第一轮 Tech Insight Loop 评分器融合已落地：`config/scoring/content_scorer_v2.json` 保存迁入的阈值、权重、source channel score、source tier score、topic weights、noise rules 和 expert routes；`backend/app/scoring/content_scorer.py` 在缺配置时回退现有 baseline 准入逻辑，配置存在时把源等级、渠道、板块相关度、专家路由、噪声和拒绝原因输出为结构化结果。`recommendation_items` 已增加 `admission_level/admission_score/admission_pool/noise_types_json/reject_reasons_json/scorer_breakdown_json/expert_routes_json`；`recommendation_reason` 仍保留人类可读摘要。该融合不修改 `generated_news.content_json` 五段结构，不修改公司 SQL 导出筛选和 category 合同。
+
+`backend/app/pipeline/daily.py` 已提供每日完整流水线：可选抓取、标准化/去重、按 `day_key` 推荐、结构化生成和日报草稿。`POST /api/pipeline/daily-runs` 与 scheduler 都调用同一套 service；如果只想抓取，设置 `SCHEDULER_JOB_MODE=ingestion_only`。生产定时推荐配置为 `INGESTION_SCHEDULER_ENABLED=true`、`INGESTION_SCHEDULER_DAILY_TIME=09:00`、`INGESTION_SCHEDULER_TIMEZONE=Asia/Shanghai`、`DAILY_PIPELINE_DAY_OFFSET_DAYS=-1`，表示每天北京时间 09:00 生成昨天日报；如果不配置固定时间，则使用 `INGESTION_SCHEDULER_INTERVAL_SECONDS` 的旧 interval 模式。
 
 实现可重跑的推荐 run。
 
@@ -332,7 +343,7 @@ class SourceAdapter:
 
 ### 5.9 日报与编辑
 
-当前进度：已实现可回填闭环。推荐 run 可创建或替换 `daily_reports/daily_report_items` 草稿；`GET /api/daily-reports`、`GET /api/daily-reports/{id}` 可查看日报；`PATCH /api/daily-report-items/{id}` 可编辑日报层覆盖字段；`POST /api/daily-reports/{id}/publish` 可发布。`generated_news.content_json` 已按 `company_sql_v1` 保证 `background/effects/eventSummary/technologyAndInnovation/valueAndImpact` 必填字段；MiniMax 结果会标记 `ready`，规则 fallback 只作为待复核草稿。前端 `/daily-reports` 可选择日期并点击生成日报草稿，触发完整流水线；列表只展示 brief，点击条目后在详情弹窗里查看完整结构化正文，并立即完成采信切换、条目编辑、点赞、评分、评论和追溯查看。
+当前进度：已实现可回填闭环。推荐 run 可创建或替换 `daily_reports/daily_report_items` 草稿；`GET /api/daily-reports`、`GET /api/daily-reports/{id}` 可查看日报；`PATCH /api/daily-report-items/{id}` 可编辑日报层覆盖字段；`POST /api/daily-reports/{id}/publish` 可发布；`POST /api/daily-reports/{id}/regenerate-generated-news` 可重跑草稿中的结构化生成稿。`generated_news.content_json` 已按 `company_sql_v1` 保证 `background/effects/eventSummary/technologyAndInnovation/valueAndImpact` 必填字段；MiniMax 结果会标记 `ready`，规则 fallback 只作为待复核草稿。前端 `/daily-reports` 可选择日期并点击生成日报草稿，触发完整流水线；列表只展示 brief，点击条目后在详情弹窗里查看完整结构化正文，并立即完成采信切换、条目编辑、点赞、评分、评论和追溯查看；草稿页会展示 ready/fallback 状态并支持重跑生成稿。`2026-05-21` 到 `2026-05-27` 已完成规划部日报发布和公司 SQL 预览；`2026-05-21` 到 `2026-05-26` 每天 10 条采信项，`2026-05-27` 通过当天 RSS/paper RSS 窗口补采新增 72 条 raw/news 后生成 6 条采信项，全部标准导出条目均为 MiniMax `ready`。
 
 实现：
 
@@ -347,7 +358,24 @@ class SourceAdapter:
 - 原始 `generated_news` 不被覆盖。
 - 已发布日报可按时间线展示。
 
-### 5.10 反馈
+### 5.10 周报与编辑
+
+当前进度：已实现第一版周报 API。`POST /api/weekly-reports` 按 `week_key`（ISO 周，形如 `2026-W19`）从该工作台已发布日报中读取 `daily_report_items.adoption_status = 2` 的条目，生成或替换 `weekly_reports/weekly_report_items` 草稿；周报条目保留 `daily_report_item_id` 和 `generated_news_id`，可一路追溯回日报、生成稿、news、raw 和 source。新生成的 `weekly_report_items.adoption_status = 1`，表示“周报候选”；管理员通过 `PATCH /api/weekly-report-items/{id}` 设置为 `2` 才是周报最终采信，设置为 `0` 表示剔除。`POST /api/weekly-reports/{id}/publish` 发布周报并写审计。`weekly_reports` 唯一键已调整为 `workspace_code + domain_code + week_key`，避免多个工作台同一周互相覆盖。前端 `/weekly-reports` 已接入这些 API，并按 `generated_news.category` 形成周报板块；默认只展示板块统计、来源日期、标题、短摘要、来源域名和采信动作，五段正文只在编辑态出现。
+
+实现：
+
+- 从已发布日报采信条目生成周报候选草稿。
+- 周报页必须按板块管理，第一版板块来自成品新闻一级标签；不要把所有条目的五段正文直接平铺成日报明细页。
+- 管理员采信、剔除、排序、编辑标题/摘要/正文 JSON。
+- 发布周报。
+
+验收：
+
+- 周报条目保留 `daily_report_item_id` 和 `generated_news_id`。
+- 周报生成不会覆盖日报、生成稿、news 或 raw。
+- 同一 `workspace_code + domain_code + week_key` 只保留一个可替换草稿。
+
+### 5.11 反馈
 
 当前进度：已实现日报条目的点赞、评分、评论和楼中楼最小 API：
 
@@ -360,14 +388,17 @@ POST /api/daily-report-items/{id}/comments
 
 反馈会同时挂到 `daily_report_item` 和对应 `news_item`，后续推荐 run 可读取这些数据进入 `heat_score/feedback_score`。
 
-### 5.11 公司 SQL 导出
+### 5.12 公司 SQL 导出
 
 当前进度：已实现标准日报 SQL 导出。`POST /api/exports/company-sql/daily-reports/{daily_report_id}` 会校验日报必须 `status = published`，并且只导出 `daily_report_items.adoption_status = 2`、`generated_news.generation_status = ready` 且 `generated_by` 非 `rule_v1` 的采信项；每条采信项写出旧系统兼容的 4 条 SQL，同时写入 `export_jobs` 和 `export_job_items`。导出的 `content_json` 只保留 `background/effects/eventSummary/technologyAndInnovation/valueAndImpact` 五个旧内网字段，InfoWatchtower 自己的 `source/raw/news` 追溯信息保留在关系表，不进入公司 SQL 的 JSON。标准模式下 `ai_journal_analysis.category` 和 `t_news_data_info.category` 使用 `generated_news.category`，即旧系统 AI 十分类。`ai_journal.source_title` 和 `ai_journal.content` 导出前必须清洗为纯文本，去除 HTML 标签和 script/style 内容；`ai_journal.created_at` 和 `ai_journal_analysis.created_at` 都必须保留旧脚本同款列顺序和旧式日期字面量：`'YYYY-MM-DD HH:MM:SS'`，来源缺失发布时间时兜底为日报 `day_key 09:00:00`，不得改成 `STR_TO_DATE`、`CAST`，也不得省略 `ai_journal_analysis.created_at`；SQL 文件头统一为 `InfoWatchtower Company SQL Preview`；所有预览 SQL 必须先通过 `python3 scripts/validate_company_sql.py` 校验，脚本以 `outputs/sql/previews/planning_intel_2026-05-05_company_sql_preview.sql` 为基准，逐字段校验 4 表顺序、列名、URL 串联、日期、五段正文 JSON、HTML 污染和禁用写法；原始 HTML 保留在 `raw_items.raw_content/raw_payload_json`。前端 `/exports` 已接入已发布日报选择、导出历史、SQL 生成、预览和下载；后续补字段长度/URL/HTML 污染校验和 SQL 条目级追溯 UI。
+
+补充约定：公司 SQL 的 `created_at` 仍使用旧内网可识别的字符串字面量格式，但时间值必须按北京时间 `Asia/Shanghai` 渲染，和日报 `day_key` 的归属判断保持一致，避免 UTC 16:00 之后的来源在 SQL 中显示成前一天。
 
 已验证的本地输出：
 
 - `2026-04-30` 规划部日报草稿、发布和公司 SQL 预览。
 - `2026-05-01` 到 `2026-05-08` 批量日报、发布和合并 SQL 预览。
+- `2026-05-21` 到 `2026-05-27` 批量日报、发布和合并 SQL 预览。
 - 批量 SQL 中每条采信新闻固定生成 4 类 SQL，`content_json` 只含旧系统五段字段。
 - 第一版 `focus_id` 默认 `1`，`adoption_status` 默认 `2`，日报日期和 SQL 日期按 `day_key` 对齐。
 - 导出 SQL 不应包含 `<span>`、`<p>`、script/style 等 HTML 污染。
@@ -395,7 +426,7 @@ daily_report_items.adoption_status = 2
 - SQL 使用旧系统安全写法。
 - SQL 导出任务写入 `export_jobs` 和 `export_job_items`。
 
-### 5.11.1 抓取覆盖率和候选数解释
+### 5.13 抓取覆盖率和候选数解释
 
 启用源数量不是当天候选数量。当天候选必须经过：
 
@@ -416,15 +447,21 @@ workspace_source_links enabled
 - 条目的 `published_at` 落在别的日期。
 - 去重后多个来源合并成一个 winner。
 
-后续实现必须补：
+当前已经实现：
 
-- 抓取覆盖率页面或 API：按 day_key 展示启用源数、成功源数、失败源数、每源 raw 数、失败原因、最近成功时间。
+- 抓取覆盖率页面和 API：`GET /api/ingestion/coverage` 按 `workspace_code + day_key + 可选 run_id` 展示启用源数、本次运行源数、成功/失败源、目标日 raw、news、dedupe winner、推荐候选、推荐选中、generated ready 和日报采信数量；每源详情同时展示 fetched、created/updated、in/out target、missing published_at、news、winner、推荐和采信计数。
+- 历史补采/backfill：`POST /api/ingestion/backfill-runs` 和 `run_historical_backfill_job` 复用工作台启用源、adapter registry、并发池和单源超时，创建 `run_type=historical_backfill` 的 `ingestion_runs`。
+- 历史补采任务模型：`params_json` 写入 `target_day_start`、`target_day_end`、`backfill_mode`、`source_scope`、`retry_policy`、`include_undated` 和 `manual_items` 规模；`summary_json.sources` 记录每源成功、失败、fetched、in_target_range、out_of_target_range、missing_published_at、raw 新增/更新和失败原因。默认只持久化 `published_at` 落入目标日期窗口的 raw，`include_undated=true` 只作为手工修复模式使用。
+- 补采模式：`rss_window` 用当前 RSS/feed 窗口恢复，`paper_api` 调用已注册 paper adapter，`archive_page` 抓取配置里的归档页链接，`sitemap` 解析官方 sitemap，`manual_import` 从显式传入的条目写入 raw。
+- RSS 时间解析：RSS/paper RSS adapter 已兼容邮件格式时间、ISO 8601 时间和 feedparser `published_parsed/updated_parsed`，避免条目失去日期后在推荐层被错误当成最新内容。
+- 候选池追溯：`GET /api/dedupe-groups` 返回 winner 最近一次 recommendation trace 和 daily report trace；前端候选池展示推荐分、推荐状态、日报采信状态、推荐理由和追溯 ID，第一屏仍保持可读摘要。
+
+后续继续补：
+
 - 失败源重试和告警。
-- 历史补采/backfill：RSS 当前窗口以外的日期要走页面归档、官方 API 或 crawler，不能只靠普通 RSS 拉取。
-- 历史补采任务模型：第一版可以复用 `ingestion_runs`，在 `params_json` 写入 `run_type=historical_backfill`、`target_day_start`、`target_day_end`、`backfill_mode`、`source_scope` 和 `retry_policy`；`summary_json.sources` 仍记录每源成功、失败、raw 新增/更新和失败原因。
-- 补采 adapter 顺序：`paper_api/arxiv/openalex/semantic_scholar` 按日期回查优先；其次是厂商/标准组织归档页、sitemap 和分页 crawler；最后才是通用搜索、手工 CSV 或 SQL 导入。普通 RSS 只能作为当前窗口抓取，不承担完整历史恢复承诺。
+- 更完整的论文 API provider、标准组织/厂商分页归档 crawler、失败源长超时重试策略和手工 CSV 导入页面。
 
-### 5.12 公网到内网同步骨架
+### 5.14 公网到内网同步骨架
 
 第一版先实现应用层同步骨架，不需要一开始做实时同步。
 
@@ -454,14 +491,23 @@ API 与页面细节见 `docs/api-and-ui-implementation.md`。
 - 登录页。
 - 数据源列表页：已实现共享源信息流、工作台统一标签/新闻结构、单源启停/权重/日限。
 - 数据源详情页：已实现配置、启停、最近抓取、来源评分。
-- 候选池页：已实现 winner/loser、重复来源和候选搜索；后续补推荐分、采信状态和追溯入口。
+- 候选池页：已实现 winner/loser、重复来源、候选搜索、推荐分、日报采信状态和追溯入口。
 - 推荐运行页：已实现推荐 run 历史、创建推荐 run、分数拆解和是否进入日报。
-- 抓取覆盖率页：已实现 ingestion run 摘要和安全运行入口；后续补每源明细和历史补采。
+- 抓取覆盖率页：已实现 ingestion run 摘要、安全运行入口、多模式历史补采、目标日覆盖漏斗和每源覆盖详情。
 - 日报时间线页：已实现展示、点赞、评分、评论、采信和编辑弹窗。
 - 日报详情/编辑路由：已实现独立详情与轻编辑入口。
 - SQL 导出页：已实现已发布日报选择、导出历史、SQL 生成、预览和下载。
 - 用户和角色管理页：已实现。
-- 周报、需求、任务、同步、审计：当前为模块路线页，后续补真实 API 后升级为业务页。
+- 周报、需求、任务、同步、审计：已从模块路线页升级为真实 API 页面；同步页当前记录同步 run，完整同步包导出/导入仍按 `docs/multi-environment-sync.md` 继续实现。
+
+当前前端/后端下一步边界：
+
+- SQL 导出页下一步只补导出前校验、复制下载体验和逐条追溯 UI，不改变公司 SQL 字段契约。
+- 历史归档/质量归档下一步只做配置 `DATABASE_URL` 后的真实库小批量/全量导入执行验收，并使用 `scripts/tech_insight_loop_import_verify.py`、现有导入验收面板和 `/quality-archive` 核对覆盖率、未解析引用和旧任务失败原因；历史反馈和旧任务归档可用 `--include-quality-archive` 一并验收。不增加编辑、采信或 SQL 导出入口。
+- 同步页下一步从“记录一次同步 run”升级为“生成同步包、下载、导入、幂等校验和冲突审计”，不做公网/内网实时双写。
+- 周报页下一步补热度/反馈排序、自动周报正文和周报导出；板块 v1 继续来自成品新闻一级标签，若需要业务化板块名，新增映射层而不是改 `generated_news.category`。
+- 补采页下一步补论文 provider、分页归档、sitemap 深挖、失败源重试和手工 CSV 上传；`rss_window` 的语义继续是当前 feed 窗口恢复，不能宣传成全站历史归档抓取。
+- 需求/任务页下一步从已发布日报/周报条目一键沉淀 insight、requirement 和 task，并补完整追溯。
 
 前端不要做营销首页，打开后就是工作台。
 

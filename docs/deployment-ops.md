@@ -39,17 +39,18 @@ internet / intranet
 
 因此内网快速上线的目标是：拉同一个 Git 仓库，换一份内网 `.env.production`，执行迁移和 Compose 启动。
 
-当前 scheduler 已接入每日完整流水线，默认关闭自动任务。开启后默认执行：
+当前 scheduler 已接入每日完整流水线，默认关闭自动任务。开启后可按固定墙上时间执行：
 
 ```text
 ingestion -> normalize/dedupe -> recommendation -> daily_report_draft
 ```
 
-需要开启时在生产环境变量中设置：
+生产环境推荐每天北京时间 09:00 生成昨天的规划部日报，避免早上任务误生成当天未完成数据：
 
 ```text
 INGESTION_SCHEDULER_ENABLED=true
-INGESTION_SCHEDULER_INTERVAL_SECONDS=86400
+INGESTION_SCHEDULER_DAILY_TIME=09:00
+INGESTION_SCHEDULER_TIMEZONE=Asia/Shanghai
 INGESTION_SCHEDULER_WORKSPACE_CODE=planning_intel
 INGESTION_SCHEDULER_SOURCE_TYPES=rss,paper_rss,page_manual,page_monitor,wiseflow
 INGESTION_CONCURRENCY=8
@@ -59,13 +60,16 @@ DAILY_PIPELINE_RUN_INGESTION=true
 DAILY_PIPELINE_CREATE_DAILY_DRAFT=true
 DAILY_PIPELINE_RECOMMENDATION_LIMIT=15
 DAILY_PIPELINE_SOURCE_DAILY_LIMIT=2
+DAILY_PIPELINE_DAY_OFFSET_DAYS=-1
 MINIMAX_GENERATION_ENABLED=false
 # MINIMAX_BASE_URL=https://api.minimaxi.com/v1
 ```
 
+若不设置 `INGESTION_SCHEDULER_DAILY_TIME`，scheduler 会保留旧的 interval 模式：启动后立即入队一次，然后按 `INGESTION_SCHEDULER_INTERVAL_SECONDS` 间隔重复。固定生产任务优先使用 `INGESTION_SCHEDULER_DAILY_TIME`，减少容器重启导致的时间漂移。
+
 如果要限制单次调度处理源数量，可设置 `INGESTION_SCHEDULER_LIMIT=10`。
 
-若生产环境希望日报结构化稿调用 MiniMax，设置 `MINIMAX_GENERATION_ENABLED=true`、`MINIMAX_API_KEY`，并使用旧参考脚本已验证的中国区 OpenAI-compatible 地址 `MINIMAX_BASE_URL=https://api.minimaxi.com/v1`；未显式设置 `MINIMAX_BASE_URL` 时也会默认走该地址。旧 `.env` 中可能残留的 `MINIMAX_ANTHROPIC_BASE_URL` 只保留兼容读取，不会覆盖主链路。未启用或调用失败时会使用规则 fallback，不阻塞日报流水线；但 fallback 会标记为 `fallback_needs_review`，标准公司 SQL 导出会拒绝，必须重跑 MiniMax 或人工编辑后再导出。
+若生产环境希望日报结构化稿调用 MiniMax，设置 `MINIMAX_GENERATION_ENABLED=true`、`MINIMAX_API_KEY`，并使用旧参考脚本已验证的中国区 OpenAI-compatible 地址 `MINIMAX_BASE_URL=https://api.minimaxi.com/v1`；未显式设置 `MINIMAX_BASE_URL` 时也会默认走该地址。旧 `.env` 中可能残留的 `MINIMAX_ANTHROPIC_BASE_URL` 只保留兼容读取，不会覆盖主链路。单条生成默认 45 秒超时；未启用、超时或调用失败时会使用规则 fallback，不阻塞日报流水线；但 fallback 会标记为 `fallback_needs_review`，标准公司 SQL 导出会拒绝，必须通过日报草稿重跑 MiniMax 或人工编辑后再导出。
 
 如果只想执行抓取、不生成日报草稿，可设置 `SCHEDULER_JOB_MODE=ingestion_only`。
 

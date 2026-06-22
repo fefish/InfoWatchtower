@@ -13,6 +13,16 @@ DEFAULT_LEGACY_SEED_ROOT = (
     if (REPO_ROOT / "config" / "seeds" / "legacy").exists()
     else Path("/config/seeds/legacy")
 )
+DEFAULT_TECH_INSIGHT_LOOP_SOURCE_CSV = (
+    REPO_ROOT / "config" / "seeds" / "tech_insight_loop" / "sources_full_zh.csv"
+    if (REPO_ROOT / "config" / "seeds" / "tech_insight_loop" / "sources_full_zh.csv").exists()
+    else Path("/config/seeds/tech_insight_loop/sources_full_zh.csv")
+)
+DEFAULT_CONTENT_SCORER_CONFIG_PATH = (
+    REPO_ROOT / "config" / "scoring" / "content_scorer_v2.json"
+    if (REPO_ROOT / "config" / "scoring" / "content_scorer_v2.json").exists()
+    else Path("/config/scoring/content_scorer_v2.json")
+)
 
 
 class Settings(BaseSettings):
@@ -56,11 +66,24 @@ class Settings(BaseSettings):
 
     cors_origins: str = Field(default="", alias="CORS_ORIGINS")
     legacy_seed_root: str = Field(default=str(DEFAULT_LEGACY_SEED_ROOT), alias="LEGACY_SEED_ROOT")
+    tech_insight_loop_source_csv: str = Field(
+        default=str(DEFAULT_TECH_INSIGHT_LOOP_SOURCE_CSV),
+        alias="TECH_INSIGHT_LOOP_SOURCE_CSV",
+    )
+    content_scorer_config_path: str = Field(
+        default=str(DEFAULT_CONTENT_SCORER_CONFIG_PATH),
+        alias="CONTENT_SCORER_CONFIG_PATH",
+    )
 
     ingestion_scheduler_enabled: bool = Field(default=False, alias="INGESTION_SCHEDULER_ENABLED")
     ingestion_scheduler_interval_seconds: int = Field(
         default=60 * 60 * 24,
         alias="INGESTION_SCHEDULER_INTERVAL_SECONDS",
+    )
+    ingestion_scheduler_daily_time: str = Field(default="", alias="INGESTION_SCHEDULER_DAILY_TIME")
+    ingestion_scheduler_timezone: str = Field(
+        default="Asia/Shanghai",
+        alias="INGESTION_SCHEDULER_TIMEZONE",
     )
     ingestion_scheduler_workspace_code: str = Field(
         default="planning_intel",
@@ -90,6 +113,7 @@ class Settings(BaseSettings):
         default=2,
         alias="DAILY_PIPELINE_SOURCE_DAILY_LIMIT",
     )
+    daily_pipeline_day_offset_days: int = Field(default=0, alias="DAILY_PIPELINE_DAY_OFFSET_DAYS")
 
     minimax_generation_enabled: bool = Field(default=False, alias="MINIMAX_GENERATION_ENABLED")
     minimax_api_key: str = Field(default="", alias="MINIMAX_API_KEY")

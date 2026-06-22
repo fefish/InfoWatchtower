@@ -10,8 +10,9 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
+from app.core.config import get_settings
 from app.llm import generate_news_with_minimax
 from app.models.common import utc_now
 from app.models.content import (
@@ -26,10 +27,12 @@ from app.models.feedback import Comment, Rating, Reaction
 from app.models.reports import DailyReport, DailyReportItem
 from app.models.workspace import Workspace, WorkspaceSourceLink
 from app.news_keywords import fallback_key_points
+from app.scoring.content_scorer import load_content_scorer
 
 BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 DEFAULT_RECOMMENDATION_LIMIT = 15
 DEFAULT_SOURCE_DAILY_LIMIT = 2
+DEFAULT_GENERATION_TIMEOUT_SECONDS = 45.0
 AI_SQL_CATEGORIES = (
     "AI Infra",
     "AI 应用",
@@ -468,6 +471,7 @@ class RecommendationRunRequest:
     limit: int = DEFAULT_RECOMMENDATION_LIMIT
     source_daily_limit: int = DEFAULT_SOURCE_DAILY_LIMIT
     create_daily_draft: bool = True
+    generation_timeout_seconds: float = DEFAULT_GENERATION_TIMEOUT_SECONDS
 
 
 @dataclass(frozen=True)
@@ -485,6 +489,28 @@ class WorkspaceNotFoundError(ValueError):
 
 class PublishedDailyReportError(ValueError):
     pass
+
+
+class DailyReportNotFoundError(ValueError):
+    pass
+
+
+@dataclass(frozen=True)
+class DailyReportGenerationRerunRequest:
+    report_id: str
+    item_ids: list[str] | None = None
+    limit: int | None = None
+    replace_ready: bool = False
+    generation_timeout_seconds: float = DEFAULT_GENERATION_TIMEOUT_SECONDS
+
+
+@dataclass(frozen=True)
+class DailyReportGenerationRerunResult:
+    report: DailyReport
+    attempted_total: int
+    ready_total: int
+    fallback_total: int
+    skipped_total: int
 
 
 def run_daily_recommendation(
@@ -528,6 +554,9 @@ def run_daily_recommendation(
             "limit": limit,
             "source_daily_limit": source_daily_limit,
             "create_daily_draft": request.create_daily_draft,
+            "generation_timeout_seconds": _normalize_generation_timeout(
+                request.generation_timeout_seconds,
+            ),
         },
     )
     session.add(run)
@@ -555,13 +584,28 @@ def run_daily_recommendation(
             final_score=score.final_score,
             selected=score.news_item.id in selected_ids,
             recommendation_reason=score.reason,
+            admission_level=score.admission_level,
+            admission_score=score.admission_score,
+            admission_pool=score.admission_pool,
+            noise_types_json=list(score.noise_types),
+            reject_reasons_json=list(score.reject_reasons),
+            scorer_breakdown_json=score.scorer_breakdown,
+            expert_routes_json=list(score.expert_routes),
         )
         session.add(recommendation_item)
         recommendation_items.append(recommendation_item)
 
     session.flush()
+    generation_timeout_seconds = _normalize_generation_timeout(
+        request.generation_timeout_seconds,
+    )
     generated_news = [
-        _create_generated_news(session, workspace, item)
+        _create_generated_news(
+            session,
+            workspace,
+            item,
+            generation_timeout_seconds=generation_timeout_seconds,
+        )
         for item in recommendation_items
         if item.selected
     ]
@@ -580,6 +624,9 @@ def run_daily_recommendation(
         "candidates_total": len(scored),
         "selected_total": len(selected_ids),
         "generated_total": len(generated_news),
+        "generation_status": dict(
+            Counter(item.generation_status for item in generated_news),
+        ),
         "daily_report_id": daily_report.id if daily_report else None,
         "admission": _admission_summary(scored),
     }
@@ -590,6 +637,77 @@ def run_daily_recommendation(
         candidates_total=len(scored),
         selected_total=len(selected_ids),
         generated_total=len(generated_news),
+    )
+
+
+def regenerate_daily_report_generated_news(
+    session: Session,
+    request: DailyReportGenerationRerunRequest,
+) -> DailyReportGenerationRerunResult:
+    report = session.scalar(
+        select(DailyReport)
+        .options(
+            selectinload(DailyReport.items)
+            .selectinload(DailyReportItem.generated_news)
+            .selectinload(GeneratedNews.recommendation_item)
+            .selectinload(RecommendationItem.news_item),
+        )
+        .where(DailyReport.id == request.report_id),
+    )
+    if report is None:
+        raise DailyReportNotFoundError(f"Daily report not found: {request.report_id}")
+    if report.status == "published":
+        raise PublishedDailyReportError(f"Daily report is already published: {report.id}")
+
+    workspace = session.scalar(
+        select(Workspace).where(
+            Workspace.code == report.workspace_code,
+            Workspace.enabled.is_(True),
+        ),
+    )
+    if workspace is None:
+        raise WorkspaceNotFoundError(f"Workspace not found: {report.workspace_code}")
+
+    allowed_item_ids = set(request.item_ids or [])
+    items = sorted(report.items, key=lambda item: (item.sort_order, item.created_at, item.id))
+    if allowed_item_ids:
+        items = [item for item in items if item.id in allowed_item_ids]
+    if request.limit is not None:
+        items = items[: max(0, request.limit)]
+
+    attempted_total = 0
+    ready_total = 0
+    fallback_total = 0
+    skipped_total = 0
+    timeout_seconds = _normalize_generation_timeout(request.generation_timeout_seconds)
+    for item in items:
+        generated = item.generated_news
+        if generated.generation_status == "ready" and not request.replace_ready:
+            skipped_total += 1
+            continue
+        recommendation_item = generated.recommendation_item
+        if recommendation_item is None:
+            skipped_total += 1
+            continue
+        attempted_total += 1
+        _refresh_generated_news(
+            generated,
+            workspace,
+            recommendation_item,
+            generation_timeout_seconds=timeout_seconds,
+        )
+        if generated.generation_status == "ready":
+            ready_total += 1
+        else:
+            fallback_total += 1
+
+    session.flush()
+    return DailyReportGenerationRerunResult(
+        report=report,
+        attempted_total=attempted_total,
+        ready_total=ready_total,
+        fallback_total=fallback_total,
+        skipped_total=skipped_total,
     )
 
 
@@ -609,6 +727,9 @@ class ScoredCandidate:
     admission_score: float
     admission_pool: str
     noise_types: tuple[str, ...]
+    reject_reasons: tuple[str, ...]
+    expert_routes: tuple[str, ...]
+    scorer_breakdown: dict[str, object]
     quality_score: float
     topic_score: float
     freshness_score: float
@@ -627,6 +748,9 @@ class ContentAdmission:
     pool: str
     noise_types: tuple[str, ...]
     positive_reasons: tuple[str, ...]
+    reject_reasons: tuple[str, ...]
+    expert_routes: tuple[str, ...]
+    scorer_breakdown: dict[str, object]
     eligible_for_daily: bool
 
 
@@ -701,6 +825,9 @@ def _score_candidate(
         admission_score=round(admission.score, 2),
         admission_pool=admission.pool,
         noise_types=admission.noise_types,
+        reject_reasons=admission.reject_reasons,
+        expert_routes=admission.expert_routes,
+        scorer_breakdown=admission.scorer_breakdown,
         quality_score=round(quality_score, 2),
         topic_score=round(topic_score, 2),
         freshness_score=round(freshness_score, 2),
@@ -1033,13 +1160,36 @@ def _content_admission(
     if workspace.code != "planning_intel" and level == "R" and not noise:
         level = "P2"
 
-    return ContentAdmission(
+    baseline_admission = ContentAdmission(
         level=level,
         score=round(score, 2),
         pool=pool,
         noise_types=tuple(dict.fromkeys(noise)),
         positive_reasons=tuple(dict.fromkeys(positive)),
+        reject_reasons=(),
+        expert_routes=(),
+        scorer_breakdown={"mode": "baseline"},
         eligible_for_daily=_eligible_level(level),
+    )
+    scorer_result = _configured_content_scorer().score(
+        news_item,
+        baseline_level=baseline_admission.level,
+        baseline_score=baseline_admission.score,
+        baseline_pool=baseline_admission.pool,
+        baseline_noise_types=baseline_admission.noise_types,
+        baseline_positive_reasons=baseline_admission.positive_reasons,
+        freshness_score=freshness_score,
+    )
+    return ContentAdmission(
+        level=scorer_result.level,
+        score=scorer_result.score,
+        pool=scorer_result.pool,
+        noise_types=scorer_result.noise_types,
+        positive_reasons=scorer_result.positive_reasons,
+        reject_reasons=scorer_result.reject_reasons,
+        expert_routes=scorer_result.expert_routes,
+        scorer_breakdown=scorer_result.breakdown,
+        eligible_for_daily=scorer_result.eligible_for_daily,
     )
 
 
@@ -1050,8 +1200,19 @@ def _admission_summary(scored: list[ScoredCandidate]) -> dict[str, object]:
         "noise_types": dict(
             Counter(noise for item in scored for noise in item.noise_types),
         ),
+        "reject_reasons": dict(
+            Counter(reason for item in scored for reason in item.reject_reasons),
+        ),
+        "expert_routes": dict(
+            Counter(route for item in scored for route in item.expert_routes),
+        ),
         "eligible_for_daily": sum(1 for item in scored if _eligible_level(item.admission_level)),
     }
+
+
+def _configured_content_scorer():
+    settings = get_settings()
+    return load_content_scorer(settings.content_scorer_config_path)
 
 
 def _quality_score(news_item: NewsItem) -> float:
@@ -1249,6 +1410,10 @@ def _recommendation_reason(
     reasons.extend(admission.positive_reasons[:4])
     if admission.noise_types:
         reasons.append(f"noise={','.join(admission.noise_types)}")
+    if admission.reject_reasons:
+        reasons.append(f"reject={','.join(admission.reject_reasons[:3])}")
+    if admission.expert_routes:
+        reasons.append(f"expert={','.join(admission.expert_routes[:2])}")
     if quality_score >= 75:
         reasons.append("content_quality")
     if topic_score >= 75:
@@ -1266,7 +1431,63 @@ def _create_generated_news(
     session: Session,
     workspace: Workspace,
     recommendation_item: RecommendationItem,
+    *,
+    generation_timeout_seconds: float,
 ) -> GeneratedNews:
+    news_item = recommendation_item.news_item
+    generated_fields = _generated_news_fields(
+        workspace,
+        recommendation_item,
+        generation_timeout_seconds=generation_timeout_seconds,
+    )
+    generated = GeneratedNews(
+        recommendation_item=recommendation_item,
+        news_item=news_item,
+        workspace_code=workspace.code,
+        domain_code=news_item.domain_code,
+        visibility_scope=news_item.visibility_scope,
+        sync_policy=news_item.sync_policy,
+        category=str(generated_fields["category"]),
+        title=str(generated_fields["title"]),
+        summary=str(generated_fields["summary"]),
+        key_points=str(generated_fields["key_points"]),
+        content_json=generated_fields["content_json"],
+        source_url=news_item.source_url,
+        generated_by=str(generated_fields["generated_by"]),
+        generation_status=str(generated_fields["generation_status"]),
+    )
+    session.add(generated)
+    return generated
+
+
+def _refresh_generated_news(
+    generated: GeneratedNews,
+    workspace: Workspace,
+    recommendation_item: RecommendationItem,
+    *,
+    generation_timeout_seconds: float,
+) -> None:
+    generated_fields = _generated_news_fields(
+        workspace,
+        recommendation_item,
+        generation_timeout_seconds=generation_timeout_seconds,
+    )
+    generated.category = str(generated_fields["category"])
+    generated.title = str(generated_fields["title"])
+    generated.summary = str(generated_fields["summary"])
+    generated.key_points = str(generated_fields["key_points"])
+    generated.content_json = generated_fields["content_json"]
+    generated.source_url = recommendation_item.news_item.source_url
+    generated.generated_by = str(generated_fields["generated_by"])
+    generated.generation_status = str(generated_fields["generation_status"])
+
+
+def _generated_news_fields(
+    workspace: Workspace,
+    recommendation_item: RecommendationItem,
+    *,
+    generation_timeout_seconds: float,
+) -> dict[str, object]:
     news_item = recommendation_item.news_item
     category = _category_for_news(workspace, news_item)
     policy = _label_policy(workspace)
@@ -1275,6 +1496,7 @@ def _create_generated_news(
         fallback_category=category,
         allowed_categories=list(policy["allowed_primary_categories"]),
         recommendation_reason=recommendation_item.recommendation_reason,
+        timeout_seconds=generation_timeout_seconds,
     )
     if llm_draft is None:
         content_json = {
@@ -1309,26 +1531,14 @@ def _create_generated_news(
             "news_item_id": news_item.id,
             "raw_item_id": news_item.raw_item_id,
             "data_source_id": news_item.data_source_id,
+            "generation_timeout_seconds": generation_timeout_seconds,
         },
     }
-    generated = GeneratedNews(
-        recommendation_item=recommendation_item,
-        news_item=news_item,
-        workspace_code=workspace.code,
-        domain_code=news_item.domain_code,
-        visibility_scope=news_item.visibility_scope,
-        sync_policy=news_item.sync_policy,
-        category=str(generated_fields["category"]),
-        title=str(generated_fields["title"]),
-        summary=str(generated_fields["summary"]),
-        key_points=str(generated_fields["key_points"]),
-        content_json=generated_fields["content_json"],
-        source_url=news_item.source_url,
-        generated_by=str(generated_fields["generated_by"]),
-        generation_status=str(generated_fields["generation_status"]),
-    )
-    session.add(generated)
-    return generated
+    return generated_fields
+
+
+def _normalize_generation_timeout(value: float) -> float:
+    return min(max(float(value or DEFAULT_GENERATION_TIMEOUT_SECONDS), 5.0), 180.0)
 
 
 def _create_or_replace_daily_draft(

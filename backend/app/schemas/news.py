@@ -56,6 +56,42 @@ class DedupeGroupItemRead(BaseModel):
     source_url: str | None
 
 
+class DedupeGroupRecommendationRead(BaseModel):
+    run_id: str
+    run_key: str
+    day_key: str | None
+    recommendation_item_id: str
+    rank: int
+    selected: bool
+    final_score: float
+    quality_score: float
+    topic_score: float
+    freshness_score: float
+    feedback_score: float
+    diversity_score: float
+    source_score: float
+    heat_score: float
+    recommendation_reason: str
+    admission_level: str
+    admission_score: float
+    admission_pool: str
+    noise_types: list[str] = Field(default_factory=list)
+    reject_reasons: list[str] = Field(default_factory=list)
+    scorer_breakdown: dict[str, object] = Field(default_factory=dict)
+    expert_routes: list[str] = Field(default_factory=list)
+
+
+class DedupeGroupDailyReportRead(BaseModel):
+    daily_report_id: str
+    daily_report_item_id: str
+    day_key: str
+    report_status: str
+    adoption_status: int
+    generated_news_id: str
+    generation_status: str
+    category: str
+
+
 class DedupeGroupRead(BaseModel):
     id: str
     workspace_code: str
@@ -66,3 +102,5 @@ class DedupeGroupRead(BaseModel):
     item_count: int
     status: str
     items: list[DedupeGroupItemRead] = Field(default_factory=list)
+    recommendation: DedupeGroupRecommendationRead | None = None
+    daily_report: DedupeGroupDailyReportRead | None = None

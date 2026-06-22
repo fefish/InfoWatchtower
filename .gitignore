@@ -23,3 +23,12 @@ frontend/vite.config.js.map
 # git@github.com:fefish/InfoWatchtower-References.git
 references/legacy-auto-sync-20260412/
 references/private/
+references/参考工具/
+
+# Local source archives and exported markdown reports are not repository assets.
+*.zip
+技术洞察日报-*.md
+技术洞察周报-*.md
+
+# codrax runtime artifacts (logs, memory, blob caches, worktrees, plans)
+.codrax/

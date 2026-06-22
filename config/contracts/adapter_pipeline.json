@@ -17,6 +17,7 @@
   ],
   "ingestion_run_rule": "A workspace ingestion run selects enabled workspace_source_links, executes the registered adapters, persists raw_items idempotently, and records run-level source success/failure plus raw created/updated counts. Schedulers and workers must call this same service layer instead of bypassing adapters.",
   "adapter_rule": "Each source type may have its own input structure, but every adapter must persist the full raw payload and emit canonical raw_items. Normalization enriches and maps fields; it must not discard the original payload.",
+  "raw_item_identity_rule": "raw_items are idempotent by data_source_id + entry_key. entry_key must fit raw_items.entry_key length 255. If an upstream feed id or redirect URL is longer, the ingestion layer must deterministically shorten it with a stable hash suffix while preserving the original value inside raw_payload_json.",
   "source_type_to_adapter": {
     "wiseflow": "WiseflowReadInfoAdapter",
     "rss": "RssFeedAdapter",
@@ -74,6 +75,7 @@
     "runs_before": "scoring_and_recommendation",
     "reason": "Different source structures must first be normalized before they can be compared fairly. Scoring should only run on deduped winners.",
     "workspace_scope_rule": "dedupe_groups are unique by workspace_code + dedupe_key. Shared raw_items may be normalized independently into each enabled workspace, and each workspace owns its own winner/loser state.",
+    "dedupe_key_length_rule": "dedupe_key must fit news_items.dedupe_key and dedupe_groups.dedupe_key length 512. Long canonical URLs or title/date keys are deterministically shortened with a stable hash suffix; canonical_url and raw source_url remain stored as full Text fields for lineage.",
     "hard_dedupe_key_order": [
       "canonical_url",
       "normalized_title + published_date_bucket when canonical_url is missing"
@@ -120,6 +122,28 @@
       "freshness",
       "noise penalty"
     ],
+    "content_scorer_v2": {
+      "config_path": "config/scoring/content_scorer_v2.json",
+      "source": "Tech Insight Loop content_scorer_config.v3-enhanced-no-new-boards.json",
+      "rule": "The recommendation service remains responsible for candidate selection and daily generation, but content admission must be persisted as structured fields on recommendation_items. Missing config must fall back to the existing baseline content-admission logic.",
+      "persisted_fields": [
+        "admission_level",
+        "admission_score",
+        "admission_pool",
+        "noise_types_json",
+        "reject_reasons_json",
+        "scorer_breakdown_json",
+        "expert_routes_json"
+      ],
+      "source_priors": [
+        "data_sources.source_score",
+        "metadata.source_tier",
+        "metadata.source_channel_type",
+        "metadata.board_relevance_json",
+        "metadata.source_score_breakdown_json",
+        "metadata.expert_routes"
+      ]
+    },
     "selection_caps": {
       "source_daily_limit": "hard per-source selected item cap",
       "paper_rss_daily_ratio": "paper_rss selected items are capped at about 10% of the requested limit",
@@ -148,11 +172,26 @@
     "adoption_rule": "Recommendation creates draft daily_report_items with adoption_status = 2 for selected items. Editors may later change adoption_status on daily_report_items; news_items and raw_items are never overwritten.",
     "workspace_scope_rule": "Daily reports are unique by workspace_code + domain_code + day_key so multiple workspaces can generate same-day reports independently."
   },
+  "weekly_report_stage": {
+    "status": "phase_1_backend",
+    "implemented_endpoints": [
+      "GET /api/weekly-reports",
+      "POST /api/weekly-reports",
+      "GET /api/weekly-reports/{id}",
+      "POST /api/weekly-reports/{id}/publish",
+      "PATCH /api/weekly-report-items/{id}"
+    ],
+    "source_rule": "Weekly draft generation starts from daily_report_items with adoption_status=2 in the requested ISO week, published daily reports by default, and keeps daily_report_item_id plus generated_news_id for lineage.",
+    "adoption_rule": "Generated weekly_report_items start with adoption_status=1 as weekly candidates. Admins set adoption_status=2 for final weekly adoption or 0 to remove from the weekly report.",
+    "workspace_scope_rule": "Weekly reports are unique by workspace_code + domain_code + week_key so multiple workspaces can build the same ISO week independently."
+  },
   "generator_stage": {
     "current_provider": "MiniMax China OpenAI-compatible chat/completions at MINIMAX_BASE_URL or default https://api.minimaxi.com/v1 when MINIMAX_GENERATION_ENABLED=true and MINIMAX_API_KEY is set; deterministic rule_v1 fallback otherwise",
+    "default_generation_timeout_seconds": 45,
     "provider_rule": "Model output must be strict JSON, must be Simplified Chinese except for proper nouns, and category must be one of the workspace label policy primary labels. Source trace IDs are forced by backend after generation.",
     "news_format_rule": "For planning_intel/company_sql_v1, generated_news.content_json must contain background, effects, eventSummary, technologyAndInnovation and valueAndImpact so later SQL export can map without guessing.",
-    "fallback_rule": "LLM failure must not abort the daily pipeline; selected recommendations still generate rule_v1:fallback drafts with the same required content_json fields, but generation_status must be fallback_needs_review and standard Company SQL export must reject them until an LLM-ready or edited-ready version exists."
+    "fallback_rule": "LLM timeout or failure must not abort the daily pipeline; selected recommendations still generate rule_v1:fallback drafts with the same required content_json fields, but generation_status must be fallback_needs_review and standard Company SQL export must reject them until an LLM-ready or edited-ready version exists.",
+    "rerun_api": "POST /api/daily-reports/{report_id}/regenerate-generated-news can rerun non-ready or selected generated_news rows for a draft daily report."
   },
   "scheduled_daily_pipeline": {
     "current_job": "app.pipeline.daily.run_daily_pipeline_job",
@@ -166,8 +205,12 @@
       "INGESTION_SCHEDULER_SOURCE_TYPES",
       "INGESTION_SCHEDULER_LIMIT",
       "INGESTION_CONCURRENCY",
-      "INGESTION_SOURCE_TIMEOUT_SECONDS"
+      "INGESTION_SOURCE_TIMEOUT_SECONDS",
+      "INGESTION_SCHEDULER_DAILY_TIME",
+      "INGESTION_SCHEDULER_TIMEZONE",
+      "DAILY_PIPELINE_DAY_OFFSET_DAYS"
     ],
+    "schedule_rule": "When INGESTION_SCHEDULER_DAILY_TIME is set, the scheduler must wait for that HH:MM or HH:MM:SS wall-clock time in INGESTION_SCHEDULER_TIMEZONE instead of running immediately on container start. If DAILY_PIPELINE_DAY_OFFSET_DAYS is non-zero, the scheduler must pass the derived day_key to the daily pipeline; for a morning planning_intel job use -1 so a 09:00 Asia/Shanghai run generates yesterday's daily report.",
     "ordered_steps": [
       "optional workspace_ingestion_run",
       "normalize_to_news_item",
@@ -179,10 +222,21 @@
     "rule": "The scheduled job must call the same service functions as the manual APIs. It must not bypass adapter, normalization, dedupe or recommendation contracts."
   },
   "historical_backfill_stage": {
-    "status": "planned",
+    "status": "phase_2_modes_v1",
     "purpose": "Recover target-date raw/news candidates that cannot be restored from current RSS windows.",
-    "run_record": "Reuse ingestion_runs in phase 1 with params_json.run_type=historical_backfill and explicit target_day_start, target_day_end, backfill_mode, source_scope and retry_policy.",
+    "run_record": "Reuse ingestion_runs with run_type=historical_backfill and explicit params_json.target_day_start, target_day_end, backfill_mode, source_scope, retry_policy, include_undated and manual_items count.",
+    "endpoint": "POST /api/ingestion/backfill-runs",
+    "current_behavior": "Fetch enabled workspace sources through the selected backfill mode, persist only raw inputs whose published_at falls inside the target day range by default, and record fetched/in-range/out-of-range/missing-date counts in summary_json.",
+    "implemented_modes": [
+      "rss_window",
+      "paper_api",
+      "archive_page",
+      "sitemap",
+      "manual_import"
+    ],
+    "mode_caveat": "paper_api depends on a registered source adapter. rss_window is not a full archive guarantee. archive_page and sitemap are lightweight URL discovery modes, not a universal crawler.",
     "mode_priority": [
+      "rss_window: low-cost current-window recovery for target dates still visible in feeds; not a complete historical guarantee",
       "paper_api: arXiv/OpenAlex/Semantic Scholar/OpenReview/Hugging Face Papers date queries",
       "archive_page: vendor blogs, standard organizations, cloud/hardware archives and paginated lists",
       "sitemap: discover dated article URLs from official sitemaps",

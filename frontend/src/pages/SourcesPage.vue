@@ -20,6 +20,7 @@ import {
   fetchSource,
   fetchSources,
   importLegacySources,
+  importTechInsightLoopSources,
   updateSourceWorkspaceConfig,
   type DataSourceRecord
 } from "../api/sources";
@@ -210,12 +211,31 @@ async function importSeeds() {
   }
 }
 
+async function importTechSources() {
+  importing.value = true;
+  error.value = "";
+  lastImportMessage.value = "";
+  try {
+    const result = await importTechInsightLoopSources();
+    lastImportMessage.value = `Tech 源导入完成：新增 ${result.created}，更新 ${result.updated}，识别 ${result.total} 行，可抓取入口 ${result.fetchable}，待补入口 ${result.metadata_only}`;
+    await loadSources();
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "导入 Tech Insight Loop 源失败";
+  } finally {
+    importing.value = false;
+  }
+}
+
 function canFetchSource(source: DataSourceRecord) {
   return (
     source.enabled &&
     source.workspace_link_enabled &&
     ["rss", "paper_rss", "page_manual", "page_monitor"].includes(source.source_type)
   );
+}
+
+function shortExpertRoutes(source: DataSourceRecord) {
+  return source.expert_routes.slice(0, 2).join(" / ");
 }
 
 function sourceTypeLabel(type: string) {
@@ -566,6 +586,16 @@ watch(
           <DownloadCloud :size="16" />
           <span>{{ importing ? "导入中" : "导入数据" }}</span>
         </button>
+        <button
+          type="button"
+          class="icon-button secondary"
+          :disabled="importing"
+          @click="importTechSources"
+          title="导入 Tech Insight Loop 源治理"
+        >
+          <DownloadCloud :size="16" />
+          <span>导入 Tech 源</span>
+        </button>
       </div>
     </section>
 
@@ -602,7 +632,7 @@ watch(
             <div class="source-heading">
               <strong>{{ source.name }}</strong>
               <span :class="source.workspace_link_enabled ? 'status-on' : 'status-off'">
-                {{ source.workspace_link_enabled ? "启用" : "停用" }}
+                {{ source.needs_entry ? "待补入口" : source.workspace_link_enabled ? "启用" : "停用" }}
               </span>
             </div>
             <a v-if="source.url" class="source-url" :href="source.url" target="_blank" rel="noreferrer">
@@ -612,6 +642,10 @@ watch(
 
             <div class="source-meta-line">
               <span class="type-badge">{{ sourceTypeLabel(source.source_type) }}</span>
+              <span v-if="source.source_tier" class="meta-chip source-tier-chip">{{ source.source_tier }}</span>
+              <span v-if="source.source_channel_type" class="meta-chip">{{ source.source_channel_type }}</span>
+              <span v-if="source.source_score" class="meta-chip">质量 {{ source.source_score.toFixed(1) }}</span>
+              <span v-if="source.needs_entry" class="meta-chip needs-entry-chip">待补入口</span>
               <span class="meta-chip">{{ source.domain_code }}</span>
               <span v-if="source.info_category || source.primary_category" class="meta-chip">
                 {{ source.info_category || source.primary_category }}
@@ -621,6 +655,9 @@ watch(
               </span>
               <span class="source-freshness">
                 {{ source.last_success_at ? `最近成功 ${formatDateTime(source.last_success_at)}` : "暂无成功抓取" }}
+              </span>
+              <span v-if="shortExpertRoutes(source)" class="meta-chip route-chip">
+                {{ shortExpertRoutes(source) }}
               </span>
               <span v-if="source.last_error" class="source-error">{{ source.last_error }}</span>
             </div>
