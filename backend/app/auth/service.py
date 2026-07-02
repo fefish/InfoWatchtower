@@ -155,6 +155,48 @@ def role_to_read(role: Role) -> RoleRead:
     )
 
 
+def provision_workspace(
+    session: Session,
+    *,
+    code: str,
+    name: str,
+    description: str = "",
+    workspace_type: str = "intelligence_workspace",
+    default_domain_code: str = "ai",
+) -> Workspace:
+    """Create a new workspace with the shared core sections, the default
+    label policy and owner memberships for existing super admins.
+
+    The caller is responsible for uniqueness checks and the final commit.
+    """
+    workspace = Workspace(
+        code=code,
+        name=name,
+        description=description,
+        workspace_type=workspace_type,
+        default_domain_code=default_domain_code,
+        enabled=True,
+    )
+    session.add(workspace)
+    session.flush()
+    workspace.config_json = {
+        "sort_order": _next_workspace_sort_order(session),
+        "label_policy": _default_workspace_label_policy(),
+    }
+    _ensure_workspace_sections(session, workspace, CORE_WORKSPACE_SECTIONS)
+    _ensure_super_admin_workspace_memberships(session, {code: workspace})
+    session.flush()
+    return workspace
+
+
+def _next_workspace_sort_order(session: Session) -> int:
+    orders = [
+        int((workspace.config_json or {}).get("sort_order", 1000))
+        for workspace in session.scalars(select(Workspace)).all()
+    ]
+    return (max(orders, default=0) // 10) * 10 + 10
+
+
 def ensure_auth_seed(session: Session, settings: Settings) -> None:
     permissions = _ensure_permissions(session)
     roles = _ensure_roles(session, permissions)

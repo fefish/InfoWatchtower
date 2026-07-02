@@ -52,6 +52,39 @@
     {"name": "created_at", "type": "datetime", "required": true},
     {"name": "updated_at", "type": "datetime", "required": true}
   ],
+  "custom_source_api": {
+    "notes": "Self-service source creation so every workspace can integrate its own sources without seed files. Created sources join the shared pool and are enabled per workspace through workspace_source_links.",
+    "create_endpoint": "POST /api/sources (super_admin)",
+    "create_fields": [
+      "workspace_code (link target, required)",
+      "name (required)",
+      "source_type (rss/paper_rss/page_manual/page_monitor only)",
+      "url (required, must start with http:// or https://)",
+      "domain_code (default ai)",
+      "backfill_days (default 7)",
+      "source_weight (default 1.0)",
+      "daily_limit (optional)",
+      "reuse_existing (default true)"
+    ],
+    "create_rules": [
+      "New sources are stored with workspace_code=shared and metadata origin=custom plus created_from_workspace.",
+      "If a source with the same URL already exists in the shared pool, it is reused instead of duplicated and the workspace link is enabled; reuse_existing=false turns this into HTTP 409.",
+      "The creating workspace always gets an enabled workspace_source_link; other workspaces stay untouched.",
+      "Response is {source, created} where created=false means an existing shared source was linked."
+    ],
+    "update_endpoint": "PATCH /api/sources/{source_id} (super_admin, optional workspace_code query for link fields in the response)",
+    "update_fields": [
+      "name",
+      "url (http/https, rejected with 409 when another source already uses it)",
+      "enabled",
+      "backfill_days"
+    ],
+    "update_rules": [
+      "Setting url on a metadata_only/needs_entry governance record clears both flags and sets metadata.fetch_entry_status=manual_entry_added, so Tech Insight Loop 待补入口 sources become fetchable.",
+      "Definition updates never touch workspace_source_links, raw_items or downstream artifacts.",
+      "Secrets must not be written into url, fetch_config or metadata; credential_ref remains the only credential pointer."
+    ]
+  },
   "workspace_source_link_fields": [
     {"name": "id", "type": "uuid", "required": true, "notes": "Internal primary key."},
     {"name": "workspace_id", "type": "uuid", "required": true, "notes": "Work scope that enables the shared source."},

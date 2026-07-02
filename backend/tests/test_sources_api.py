@@ -137,6 +137,118 @@ def test_super_admin_imports_tech_insight_loop_sources(monkeypatch, tmp_path):
     }
 
 
+def test_super_admin_creates_and_edits_custom_source(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+
+    login = client.post("/api/auth/login", json={"username": "admin", "password": "password"})
+    assert login.status_code == 200
+
+    created = client.post(
+        "/api/sources",
+        json={
+            "workspace_code": "planning_intel",
+            "name": "自建测试 RSS",
+            "source_type": "rss",
+            "url": "https://example.com/custom.rss",
+        },
+    )
+    assert created.status_code == 201
+    payload = created.json()
+    assert payload["created"] is True
+    source = payload["source"]
+    assert source["source_type"] == "rss"
+    assert source["url"] == "https://example.com/custom.rss"
+    assert source["backfill_days"] == 7
+    assert source["workspace_link_enabled"] is True
+
+    bad_type = client.post(
+        "/api/sources",
+        json={
+            "workspace_code": "planning_intel",
+            "name": "非法类型",
+            "source_type": "csv",
+            "url": "https://example.com/bad.csv",
+        },
+    )
+    assert bad_type.status_code == 400
+
+    bad_url = client.post(
+        "/api/sources",
+        json={
+            "workspace_code": "planning_intel",
+            "name": "非法地址",
+            "source_type": "rss",
+            "url": "ftp://example.com/bad.rss",
+        },
+    )
+    assert bad_url.status_code == 400
+
+    conflict = client.post(
+        "/api/sources",
+        json={
+            "workspace_code": "planning_intel",
+            "name": "重复地址",
+            "source_type": "rss",
+            "url": "https://example.com/custom.rss",
+            "reuse_existing": False,
+        },
+    )
+    assert conflict.status_code == 409
+
+    patched = client.patch(
+        f"/api/sources/{source['id']}",
+        params={"workspace_code": "planning_intel"},
+        json={"name": "自建测试 RSS v2", "backfill_days": 14},
+    )
+    assert patched.status_code == 200
+    patched_payload = patched.json()
+    assert patched_payload["name"] == "自建测试 RSS v2"
+    assert patched_payload["backfill_days"] == 14
+    assert patched_payload["workspace_link_enabled"] is True
+
+    empty = client.patch(f"/api/sources/{source['id']}", json={})
+    assert empty.status_code == 400
+
+
+def test_patch_url_fills_entry_for_metadata_only_source(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+
+    login = client.post("/api/auth/login", json={"username": "admin", "password": "password"})
+    assert login.status_code == 200
+
+    imported = client.post("/api/sources/import-tech-insight-loop")
+    assert imported.status_code == 200
+
+    sources = client.get("/api/sources", params={"workspace_code": "planning_intel"})
+    assert sources.status_code == 200
+    target = next(item for item in sources.json() if item["name"] == "机器之心")
+    assert target["needs_entry"] is True
+    assert target["metadata_only"] is True
+
+    patched = client.patch(
+        f"/api/sources/{target['id']}",
+        params={"workspace_code": "planning_intel"},
+        json={"url": "https://example.com/jiqizhixin.rss"},
+    )
+    assert patched.status_code == 200
+    patched_payload = patched.json()
+    assert patched_payload["url"] == "https://example.com/jiqizhixin.rss"
+    assert patched_payload["needs_entry"] is False
+    assert patched_payload["metadata_only"] is False
+    assert patched_payload["fetch_entry_status"] == "manual_entry_added"
+
+    reimported = client.post("/api/sources/import-tech-insight-loop")
+    assert reimported.status_code == 200
+
+    after_reimport = client.get("/api/sources", params={"workspace_code": "planning_intel"})
+    assert after_reimport.status_code == 200
+    survivor = next(item for item in after_reimport.json() if item["id"] == target["id"])
+    assert survivor["url"] == "https://example.com/jiqizhixin.rss"
+    assert survivor["needs_entry"] is False
+    assert survivor["metadata_only"] is False
+    assert survivor["fetch_entry_status"] == "manual_entry_added"
+
+
 def test_super_admin_can_create_zero_limit_ingestion_run(monkeypatch, tmp_path):
     client = make_client(monkeypatch, tmp_path)
 

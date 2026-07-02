@@ -45,6 +45,33 @@ class DataSourceWorkspaceConfigUpdate(BaseModel):
     daily_limit: int | None = Field(default=None, ge=0)
 
 
+CUSTOM_SOURCE_TYPES = ["rss", "paper_rss", "page_manual", "page_monitor"]
+
+
+class DataSourceCreate(BaseModel):
+    workspace_code: str
+    name: str = Field(min_length=1, max_length=255)
+    source_type: str = "rss"
+    url: str = Field(min_length=1)
+    domain_code: str = Field(default="ai", min_length=1, max_length=64)
+    backfill_days: int = Field(default=7, ge=0)
+    source_weight: float = Field(default=1.0, ge=0)
+    daily_limit: int | None = Field(default=None, ge=0)
+    reuse_existing: bool = True
+
+
+class DataSourceCreateRead(BaseModel):
+    source: DataSourceRead
+    created: bool
+
+
+class DataSourceDefinitionUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    url: str | None = None
+    enabled: bool | None = None
+    backfill_days: int | None = Field(default=None, ge=0)
+
+
 class LegacySeedImportRead(BaseModel):
     created: int
     updated: int

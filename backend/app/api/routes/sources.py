@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.routes.auth import get_current_user, require_super_admin
+from app.auth.service import write_audit
 from app.core.config import Settings, get_settings
 from app.core.database import get_db_session
 from app.ingestion.fetch import SourceFetchError, SourceNotFoundError, fetch_source_to_raw_items
@@ -15,6 +16,10 @@ from app.models.content import DataSource
 from app.models.identity import User
 from app.models.workspace import Workspace, WorkspaceSourceLink
 from app.schemas.sources import (
+    CUSTOM_SOURCE_TYPES,
+    DataSourceCreate,
+    DataSourceCreateRead,
+    DataSourceDefinitionUpdate,
     DataSourceRead,
     DataSourceWorkspaceConfigUpdate,
     LegacySeedImportRead,
@@ -39,6 +44,129 @@ def list_sources(
     sources = session.scalars(statement).all()
     links_by_source_id = _workspace_links_by_source_id(session, workspace_code)
     return [_source_to_read(source, links_by_source_id.get(source.id)) for source in sources]
+
+
+@router.post("", response_model=DataSourceCreateRead, status_code=status.HTTP_201_CREATED)
+def create_source(
+    payload: DataSourceCreate,
+    current_user: User = Depends(require_super_admin),
+    session: Session = Depends(get_db_session),
+) -> DataSourceCreateRead:
+    workspace = _get_enabled_workspace(session, payload.workspace_code)
+    if payload.source_type not in CUSTOM_SOURCE_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"source_type must be one of: {', '.join(CUSTOM_SOURCE_TYPES)}",
+        )
+    url = _normalize_source_url(payload.url)
+
+    source = session.scalar(select(DataSource).where(DataSource.url == url))
+    created = source is None
+    if source is not None and not payload.reuse_existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Data source with the same URL already exists: {source.name}",
+        )
+    if source is None:
+        source = DataSource(
+            workspace_code="shared",
+            domain_code=payload.domain_code,
+            source_type=payload.source_type,
+            name=payload.name.strip(),
+            url=url,
+            enabled=True,
+            backfill_days=payload.backfill_days,
+            metadata_json={
+                "origin": "custom",
+                "created_from_workspace": workspace.code,
+            },
+        )
+        session.add(source)
+        session.flush()
+
+    link = _ensure_custom_workspace_link(session, workspace, source)
+    link.enabled = True
+    link.source_weight = payload.source_weight
+    link.daily_limit = payload.daily_limit
+    write_audit(
+        session,
+        current_user,
+        action="source.create" if created else "source.link_existing",
+        object_type="data_source",
+        object_id=source.id,
+        detail={
+            "workspace_code": workspace.code,
+            "source_type": source.source_type,
+            "name": source.name,
+            "url": source.url,
+        },
+    )
+    session.commit()
+    session.refresh(source)
+    session.refresh(link)
+    return DataSourceCreateRead(source=_source_to_read(source, link), created=created)
+
+
+@router.patch("/{source_id}", response_model=DataSourceRead)
+def update_source_definition(
+    source_id: str,
+    payload: DataSourceDefinitionUpdate,
+    workspace_code: str | None = Query(default=None),
+    current_user: User = Depends(require_super_admin),
+    session: Session = Depends(get_db_session),
+) -> DataSourceRead:
+    source = session.get(DataSource, source_id)
+    if source is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Data source not found")
+
+    changes: dict[str, object] = {}
+    if payload.name is not None:
+        source.name = payload.name.strip()
+        changes["name"] = source.name
+    if payload.enabled is not None:
+        source.enabled = payload.enabled
+        changes["enabled"] = source.enabled
+    if payload.backfill_days is not None:
+        source.backfill_days = payload.backfill_days
+        changes["backfill_days"] = source.backfill_days
+    if payload.url is not None:
+        url = _normalize_source_url(payload.url)
+        duplicate = session.scalar(
+            select(DataSource).where(DataSource.url == url, DataSource.id != source.id),
+        )
+        if duplicate is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Data source with the same URL already exists: {duplicate.name}",
+            )
+        source.url = url
+        changes["url"] = url
+        metadata = dict(source.metadata_json or {})
+        if metadata.get("needs_entry") or metadata.get("metadata_only"):
+            metadata["needs_entry"] = False
+            metadata["metadata_only"] = False
+            metadata["fetch_entry_status"] = "manual_entry_added"
+            source.metadata_json = metadata
+            changes["fetch_entry_status"] = "manual_entry_added"
+
+    if not changes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No source fields provided",
+        )
+
+    write_audit(
+        session,
+        current_user,
+        action="source.update",
+        object_type="data_source",
+        object_id=source.id,
+        detail=changes,
+    )
+    session.commit()
+    session.refresh(source)
+    link = _workspace_links_by_source_id(session, workspace_code).get(source.id)
+    return _source_to_read(source, link)
 
 
 @router.post("/import-legacy-seeds", response_model=LegacySeedImportRead)
@@ -158,6 +286,53 @@ async def fetch_source(
         created=result.created,
         updated=result.updated,
     )
+
+
+def _get_enabled_workspace(session: Session, workspace_code: str) -> Workspace:
+    workspace = session.scalar(
+        select(Workspace).where(
+            Workspace.code == workspace_code,
+            Workspace.enabled.is_(True),
+        ),
+    )
+    if workspace is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
+    return workspace
+
+
+def _normalize_source_url(url: str) -> str:
+    value = (url or "").strip()
+    if not value.startswith(("http://", "https://")):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="url must start with http:// or https://",
+        )
+    return value
+
+
+def _ensure_custom_workspace_link(
+    session: Session,
+    workspace: Workspace,
+    source: DataSource,
+) -> WorkspaceSourceLink:
+    link = session.scalar(
+        select(WorkspaceSourceLink).where(
+            WorkspaceSourceLink.workspace_id == workspace.id,
+            WorkspaceSourceLink.data_source_id == source.id,
+        ),
+    )
+    if link is None:
+        link = WorkspaceSourceLink(
+            workspace=workspace,
+            data_source=source,
+            domain_code=source.domain_code,
+            enabled=True,
+            source_weight=1.0,
+            config_json={"clustering_config": {}, "origin": "custom"},
+        )
+        session.add(link)
+        session.flush()
+    return link
 
 
 def _workspace_links_by_source_id(

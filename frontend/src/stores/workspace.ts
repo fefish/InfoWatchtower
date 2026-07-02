@@ -1,8 +1,10 @@
 import { defineStore } from "pinia";
 
 import {
+  createWorkspace,
   fetchWorkspaces,
   fetchWorkspaceSections,
+  type WorkspaceCreatePayload,
   type WorkspaceRecord,
   type WorkspaceSectionRecord
 } from "../api/workspaces";
@@ -44,6 +46,13 @@ export const useWorkspaceStore = defineStore("workspace", {
         return;
       }
       this.sections = await fetchWorkspaceSections(targetCode);
+    },
+    async createWorkspace(payload: WorkspaceCreatePayload) {
+      const created = await createWorkspace(payload);
+      this.options = await fetchWorkspaces();
+      this.currentCode = created.code;
+      await this.loadSections(created.code);
+      return created;
     },
     async setWorkspace(code: string) {
       if (!this.options.some((item) => item.code === code)) {

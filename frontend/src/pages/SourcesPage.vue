@@ -17,10 +17,12 @@ import {
 import { computed, reactive, ref, watch } from "vue";
 
 import {
+  createSource,
   fetchSource,
   fetchSources,
   importLegacySources,
   importTechInsightLoopSources,
+  updateSourceDefinition,
   updateSourceWorkspaceConfig,
   type DataSourceRecord
 } from "../api/sources";
@@ -118,6 +120,29 @@ const configForm = reactive({
   enabled: true,
   sourceWeight: 1,
   dailyLimit: ""
+});
+
+const definitionForm = reactive({
+  name: "",
+  url: "",
+  backfillDays: "7"
+});
+const savingDefinition = ref(false);
+
+const customSourceTypes = [
+  { value: "rss", label: "RSS" },
+  { value: "paper_rss", label: "论文 RSS" },
+  { value: "page_manual", label: "页面手工" },
+  { value: "page_monitor", label: "页面监控" }
+];
+const showCreatePanel = ref(false);
+const creatingSource = ref(false);
+const createForm = reactive({
+  name: "",
+  sourceType: "rss",
+  url: "",
+  domainCode: "",
+  backfillDays: "7"
 });
 
 const counts = computed(() => {
@@ -286,6 +311,110 @@ function fillConfigForm(source: DataSourceRecord) {
   configForm.enabled = Boolean(source.workspace_link_enabled);
   configForm.sourceWeight = source.workspace_source_weight ?? 1;
   configForm.dailyLimit = source.workspace_daily_limit == null ? "" : String(source.workspace_daily_limit);
+  definitionForm.name = source.name;
+  definitionForm.url = source.url ?? "";
+  definitionForm.backfillDays = String(source.backfill_days ?? 7);
+}
+
+function openCreatePanel() {
+  createForm.name = "";
+  createForm.sourceType = "rss";
+  createForm.url = "";
+  createForm.domainCode = workspace.current?.default_domain_code ?? "ai";
+  createForm.backfillDays = "7";
+  showCreatePanel.value = true;
+}
+
+function closeCreatePanel() {
+  showCreatePanel.value = false;
+}
+
+async function submitCreateSource() {
+  if (!workspace.currentCode) {
+    return;
+  }
+  const name = createForm.name.trim();
+  const url = createForm.url.trim();
+  if (!name) {
+    error.value = "请填写信息源名称";
+    return;
+  }
+  if (!/^https?:\/\//.test(url)) {
+    error.value = "URL 需以 http:// 或 https:// 开头";
+    return;
+  }
+  const backfillDays = Number(createForm.backfillDays);
+  if (Number.isNaN(backfillDays) || backfillDays < 0) {
+    error.value = "回溯天数必须为非负数字";
+    return;
+  }
+
+  creatingSource.value = true;
+  error.value = "";
+  lastImportMessage.value = "";
+  try {
+    const result = await createSource({
+      workspace_code: workspace.currentCode,
+      name,
+      source_type: createForm.sourceType,
+      url,
+      domain_code: createForm.domainCode.trim() || "ai",
+      backfill_days: backfillDays
+    });
+    lastImportMessage.value = result.created
+      ? `已创建信息源：${result.source.name}，并在当前工作台启用`
+      : `共享池已有同 URL 源：${result.source.name}，已在当前工作台启用`;
+    showCreatePanel.value = false;
+    await loadSources();
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "创建信息源失败";
+  } finally {
+    creatingSource.value = false;
+  }
+}
+
+async function saveDefinition() {
+  if (!selectedSource.value) {
+    return;
+  }
+  const name = definitionForm.name.trim();
+  const url = definitionForm.url.trim();
+  if (!name) {
+    error.value = "信息源名称不能为空";
+    return;
+  }
+  if (url && !/^https?:\/\//.test(url)) {
+    error.value = "URL 需以 http:// 或 https:// 开头";
+    return;
+  }
+  const backfillDays = Number(definitionForm.backfillDays);
+  if (Number.isNaN(backfillDays) || backfillDays < 0) {
+    error.value = "回溯天数必须为非负数字";
+    return;
+  }
+
+  savingDefinition.value = true;
+  error.value = "";
+  lastImportMessage.value = "";
+  try {
+    const updated = await updateSourceDefinition(
+      selectedSource.value.id,
+      {
+        name,
+        ...(url ? { url } : {}),
+        backfill_days: backfillDays
+      },
+      workspace.currentCode || undefined
+    );
+    sources.value = sources.value.map((source) => (source.id === updated.id ? updated : source));
+    selectedSource.value = updated;
+    fillConfigForm(updated);
+    lastImportMessage.value = `已保存：${updated.name} 的源定义`;
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "保存源定义失败";
+  } finally {
+    savingDefinition.value = false;
+  }
 }
 
 function openConfig(source: DataSourceRecord) {
@@ -578,6 +707,10 @@ watch(
       </div>
 
       <div class="source-stats-actions">
+        <button type="button" class="icon-button" @click="openCreatePanel" title="自建信息源">
+          <Plus :size="16" />
+          <span>新增源</span>
+        </button>
         <button type="button" class="icon-button secondary" :disabled="loading" @click="loadSources" title="刷新">
           <RefreshCw :size="16" />
           <span>刷新</span>
@@ -929,6 +1062,80 @@ watch(
 
     <button type="button" class="config-save" :disabled="savingConfig" @click="saveConfig">
       {{ savingConfig ? "保存中" : "保存配置" }}
+    </button>
+
+    <div class="config-section-divider">
+      <span>源定义</span>
+      <small v-if="selectedSource.needs_entry">该源为待补入口，填入 URL 后即可抓取</small>
+      <small v-else>修改共享池中的源名称、入口和回溯范围</small>
+    </div>
+
+    <div class="config-grid">
+      <label>
+        <span>名称</span>
+        <input v-model="definitionForm.name" placeholder="信息源名称" />
+      </label>
+      <label>
+        <span>回溯天数</span>
+        <input v-model="definitionForm.backfillDays" type="number" min="0" />
+      </label>
+    </div>
+    <label class="config-url-field">
+      <span>URL / RSS 入口</span>
+      <input v-model="definitionForm.url" placeholder="https://..." />
+    </label>
+
+    <button type="button" class="config-save secondary" :disabled="savingDefinition" @click="saveDefinition">
+      {{ savingDefinition ? "保存中" : "保存源定义" }}
+    </button>
+  </aside>
+
+  <div v-if="showCreatePanel" class="config-backdrop" @click="closeCreatePanel"></div>
+  <aside v-if="showCreatePanel" class="config-panel" aria-label="新增信息源">
+    <header>
+      <div>
+        <p class="eyebrow">数据源池</p>
+        <h3>新增信息源</h3>
+      </div>
+      <button type="button" class="panel-close" @click="closeCreatePanel" title="关闭">
+        <X :size="18" />
+      </button>
+    </header>
+
+    <p class="workspace-form-hint">
+      新增源进入全局共享池并自动在当前工作台（{{ workspace.current?.name }}）启用；
+      如果共享池已存在同 URL 源，将直接复用并启用，不会产生重复源。
+    </p>
+
+    <div class="config-grid">
+      <label>
+        <span>名称</span>
+        <input v-model="createForm.name" placeholder="例如 机器之心 RSS" />
+      </label>
+      <label>
+        <span>类型</span>
+        <select v-model="createForm.sourceType">
+          <option v-for="item in customSourceTypes" :key="item.value" :value="item.value">
+            {{ item.label }}
+          </option>
+        </select>
+      </label>
+      <label>
+        <span>主题域</span>
+        <input v-model="createForm.domainCode" placeholder="ai / hardware / policy" />
+      </label>
+      <label>
+        <span>回溯天数</span>
+        <input v-model="createForm.backfillDays" type="number" min="0" />
+      </label>
+    </div>
+    <label class="config-url-field">
+      <span>URL / RSS 入口</span>
+      <input v-model="createForm.url" placeholder="https://..." />
+    </label>
+
+    <button type="button" class="config-save" :disabled="creatingSource" @click="submitCreateSource">
+      {{ creatingSource ? "创建中" : "创建并启用" }}
     </button>
   </aside>
 </template>

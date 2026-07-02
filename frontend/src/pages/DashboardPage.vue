@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, ref, watch } from "vue";
 
 import { fetchHealth, type HealthResponse } from "../api/health";
 import { fetchDailyReports, fetchWeeklyReports, type DailyReportRecord, type WeeklyReportRecord } from "../api/reports";
@@ -54,15 +54,24 @@ const metrics = computed(() => [
   }
 ]);
 
-onMounted(async () => {
-  await loadDashboard();
-});
+watch(
+  () => workspace.currentCode,
+  (code) => {
+    if (code) {
+      void loadDashboard();
+    }
+  },
+  { immediate: true }
+);
 
 async function loadDashboard() {
   loading.value = true;
   error.value = "";
   try {
-    const workspaceCode = workspace.currentCode || "planning_intel";
+    const workspaceCode = workspace.currentCode;
+    if (!workspaceCode) {
+      return;
+    }
     const [healthResult, sourceResult, dailyResult, weeklyResult] = await Promise.all([
       fetchHealth(),
       fetchSources(workspaceCode),

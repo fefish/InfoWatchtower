@@ -8,11 +8,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.routes.auth import get_current_user, require_super_admin
+from app.auth.service import provision_workspace, write_audit
 from app.core.database import get_db_session
 from app.models.identity import User
 from app.models.workspace import Workspace, WorkspaceSection
 from app.schemas.workspaces import (
     DEFAULT_REQUIRED_CONTENT_FIELDS,
+    WorkspaceCreate,
     WorkspaceLabelPolicyRead,
     WorkspaceLabelPolicyUpdate,
     WorkspaceRead,
@@ -40,6 +42,45 @@ def list_workspaces(
         ),
     )
     return [_workspace_to_read(workspace) for workspace in workspaces]
+
+
+@router.post("", response_model=WorkspaceRead, status_code=status.HTTP_201_CREATED)
+def create_workspace(
+    payload: WorkspaceCreate,
+    current_user: User = Depends(require_super_admin),
+    session: Session = Depends(get_db_session),
+) -> WorkspaceRead:
+    existing = session.scalar(select(Workspace).where(Workspace.code == payload.code))
+    if existing is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Workspace code already exists: {payload.code}",
+        )
+
+    workspace = provision_workspace(
+        session,
+        code=payload.code,
+        name=payload.name.strip(),
+        description=payload.description.strip(),
+        workspace_type=payload.workspace_type,
+        default_domain_code=payload.default_domain_code,
+    )
+    write_audit(
+        session,
+        current_user,
+        action="workspace.create",
+        object_type="workspace",
+        object_id=workspace.id,
+        detail={
+            "code": workspace.code,
+            "name": workspace.name,
+            "workspace_type": workspace.workspace_type,
+            "default_domain_code": workspace.default_domain_code,
+        },
+    )
+    session.commit()
+    session.refresh(workspace)
+    return _workspace_to_read(workspace)
 
 
 @router.get("/{workspace_code}/sections", response_model=list[WorkspaceSectionRead])

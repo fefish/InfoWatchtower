@@ -44,6 +44,27 @@
       ]
     }
   },
+  "workspace_creation": {
+    "endpoint": "POST /api/workspaces (super_admin)",
+    "fields": [
+      "code (^[a-z][a-z0-9_]*$, unique across enabled and disabled workspaces)",
+      "name",
+      "description",
+      "workspace_type (default intelligence_workspace)",
+      "default_domain_code (default ai)"
+    ],
+    "provisioning": [
+      "All core_sections are registered and enabled for the new workspace.",
+      "config_json.label_policy starts from the default ai_sql_categories policy and is then edited per workspace via PATCH /api/workspaces/{code}/label-policy.",
+      "Existing super admins receive owner memberships.",
+      "sort_order is appended after existing workspaces."
+    ],
+    "rules": [
+      "Custom workspaces are database records; the startup seed only maintains the built-in planning_intel and ai_tools definitions and must never disable or overwrite custom workspaces.",
+      "New workspaces integrate sources through the shared pool: enable existing sources via workspace_source_links or create new ones via POST /api/sources.",
+      "Creating a workspace must not fork the pipeline, the SQL contract or the taxonomy files."
+    ]
+  },
   "core_sections": [
     "dashboard",
     "source_management",

@@ -55,8 +55,23 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+export interface WorkspaceCreatePayload {
+  code: string;
+  name: string;
+  description: string;
+  workspace_type?: string;
+  default_domain_code?: string;
+}
+
 export async function fetchWorkspaces(): Promise<WorkspaceRecord[]> {
   return requestJson<WorkspaceRecord[]>("/api/workspaces");
+}
+
+export async function createWorkspace(payload: WorkspaceCreatePayload): Promise<WorkspaceRecord> {
+  return requestJson<WorkspaceRecord>("/api/workspaces", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
 }
 
 export async function fetchWorkspaceSections(workspaceCode: string): Promise<WorkspaceSectionRecord[]> {
