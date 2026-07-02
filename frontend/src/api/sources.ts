@@ -59,6 +59,30 @@ export interface SourceFetchResult {
   updated: number;
 }
 
+export interface SourceCreatePayload {
+  workspace_code: string;
+  name: string;
+  source_type: string;
+  url: string;
+  domain_code?: string;
+  backfill_days?: number;
+  source_weight?: number;
+  daily_limit?: number | null;
+  reuse_existing?: boolean;
+}
+
+export interface SourceCreateResult {
+  source: DataSourceRecord;
+  created: boolean;
+}
+
+export interface SourceDefinitionUpdatePayload {
+  name?: string;
+  url?: string;
+  enabled?: boolean;
+  backfill_days?: number;
+}
+
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     credentials: "same-origin",
@@ -96,6 +120,25 @@ export async function importTechInsightLoopSources(): Promise<TechInsightLoopImp
 export async function fetchSource(sourceId: string): Promise<SourceFetchResult> {
   return requestJson<SourceFetchResult>(`/api/sources/${sourceId}/fetch`, {
     method: "POST"
+  });
+}
+
+export async function createSource(payload: SourceCreatePayload): Promise<SourceCreateResult> {
+  return requestJson<SourceCreateResult>("/api/sources", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function updateSourceDefinition(
+  sourceId: string,
+  payload: SourceDefinitionUpdatePayload,
+  workspaceCode?: string
+): Promise<DataSourceRecord> {
+  const params = workspaceCode ? `?${new URLSearchParams({ workspace_code: workspaceCode }).toString()}` : "";
+  return requestJson<DataSourceRecord>(`/api/sources/${sourceId}${params}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
   });
 }
 

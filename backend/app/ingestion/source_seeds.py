@@ -95,7 +95,20 @@ def import_tech_insight_loop_sources(session: Session, csv_path: Path) -> TechIn
                 )
             created += 1
         else:
+            manual_entry_url = existing.url
+            has_manual_entry = (
+                bool(manual_entry_url)
+                and (existing.metadata_json or {}).get("fetch_entry_status") == "manual_entry_added"
+            )
             _copy_source_fields(existing, source, update_enabled=False)
+            if has_manual_entry and source.metadata_json.get("metadata_only"):
+                # Re-imports of the governance CSV must not wipe manually filled entries.
+                existing.url = manual_entry_url
+                merged_metadata = dict(existing.metadata_json or {})
+                merged_metadata["metadata_only"] = False
+                merged_metadata["needs_entry"] = False
+                merged_metadata["fetch_entry_status"] = "manual_entry_added"
+                existing.metadata_json = merged_metadata
             for workspace in workspaces:
                 _ensure_workspace_source_link(
                     session,

@@ -26,16 +26,18 @@ POST /api/auth/logout
 GET  /api/auth/me
 
 GET  /api/workspaces
+POST /api/workspaces
 GET  /api/workspaces/{workspace_code}/sections
+GET  /api/workspaces/{workspace_code}/label-policy
+PATCH /api/workspaces/{workspace_code}/label-policy
 
 GET  /api/sources?workspace_code={workspace_code}
+POST /api/sources
+PATCH /api/sources/{source_id}
+PATCH /api/sources/{source_id}/workspace-link
 POST /api/sources/import-legacy-seeds
 POST /api/sources/import-tech-insight-loop
 POST /api/sources/{source_id}/fetch
-GET  /api/data-sources/{id}
-PATCH /api/data-sources/{id}
-POST /api/data-sources/{id}/enable
-POST /api/data-sources/{id}/disable
 
 POST /api/ingestion/runs
 GET  /api/ingestion/runs
@@ -118,6 +120,10 @@ GET  /api/audit-logs
 
 `POST /api/ingestion/runs` 支持 `concurrency` 和 `source_timeout_seconds`，用于几百个源的并发抓取和慢源隔离；默认值来自 `INGESTION_CONCURRENCY=8`、`INGESTION_SOURCE_TIMEOUT_SECONDS=25`。`POST /api/ingestion/backfill-runs` 支持 `rss_window/paper_api/archive_page/sitemap/manual_import` 模式；第一版仍只承诺把补采结果先写入 `raw_items`，后续复用标准化、去重、推荐和日报链路。
 
+`POST /api/workspaces` 是工作台自助扩展入口（super_admin）：按 `code/name/description/workspace_type/default_domain_code` 创建新工作台，自动注册全部核心页面分区、默认标签策略（`ai_sql_categories`，可随后用 label-policy 接口改成工作台自己的口径）和超管 owner 成员。启动 seed 只维护内置 `planning_intel/ai_tools`，不会停用或覆盖自建工作台。契约见 `config/contracts/workspace_model.json` 的 `workspace_creation`。
+
+`POST /api/sources` 是自建信息源入口（super_admin）：`workspace_code + name + source_type(rss/paper_rss/page_manual/page_monitor) + url` 创建共享池源并自动在该工作台启用；同 URL 源默认复用而不是重复创建（`reuse_existing=false` 时返回 409），响应为 `{source, created}`。`PATCH /api/sources/{source_id}` 编辑源定义（名称/URL/启用/回溯天数）；给 `metadata_only/needs_entry` 治理记录补 URL 会清除待补入口标记并写 `fetch_entry_status=manual_entry_added`。契约见 `config/contracts/source_fields.json` 的 `custom_source_api`。早期文档中的 `/api/data-sources/*` 端点从未实现，已由上述端点取代。
+
 `POST /api/sources/import-tech-insight-loop` 是第一轮融合入口，只导入 `config/seeds/tech_insight_loop/sources_full_zh.csv` 的源治理字段，不导入 Tech Insight Loop 的历史素材、报告或实体大事记。响应按 CSV 行返回 `total/fetchable/metadata_only`，按去重写入返回 `created/updated`；当前 seed 为 386 行、355 行有入口、31 行待补入口，去重后 363 个共享源。`GET /api/sources` 会额外返回 `source_tier/source_channel_type/expert_routes/metadata_only/needs_entry` 等治理字段。
 
 `GET /api/ingestion/coverage` 按 `workspace_code + day_key + 可选 run_id` 返回目标日覆盖漏斗：启用源、本次运行源、成功/失败源、目标日 raw、news、dedupe winner、recommendation candidate/selected、generated ready 和日报采信项；每源明细同时返回 fetched、created/updated、in/out target、missing published_at、news、winner、推荐和采信计数。
@@ -190,6 +196,8 @@ workspace_sections     当前工作台启用的页面
 
 - 已完成真实页面：`/sources`、`/ingestion-runs`、`/news`、`/recommendations`、`/daily-reports`、`/weekly-reports`、`/historical-reports`、`/entity-milestones`、`/quality-archive`、`/requirements`、`/tasks`、`/exports`、`/sync`、`/users`、`/audit-logs`。
 - `/sources` 已接入 Tech Insight Loop 源治理导入和展示：源等级、渠道类型、质量分、专家路由、待补入口状态会显示在信息流卡片中；`wx://` 公众号等当前没有抓取 adapter 的记录不进入默认调度。
+- `/sources` 支持自建信息源：stats bar 的“新增源”打开滑出面板（名称/类型/URL/主题域/回溯天数），创建后自动在当前工作台启用；同 URL 源自动复用共享池已有定义。单源配置面板下半部分可编辑源定义（名称/URL/回溯天数），待补入口源补 URL 后即可抓取。
+- 侧边栏工作台切换器下方提供“新建工作台”入口（仅 super_admin 可见）：填 code/name/描述/默认主题域即创建，自动带全部核心页面和默认标签策略，创建后切换到新工作台并跳转数据源管理页配置信息源。
 - `/recommendations` 和 `/news` 已展示 `ContentScorer` 结构化准入结果：`admission_level`、`admission_score`、`admission_pool`、噪声标签、限制原因和专家路由。
 - 仍是 v1 能力：周报只管理采信项和板块，不自动生成整篇周报；历史归档页只读展示 `historical_reports` 和导入验收摘要，导入验收摘要覆盖历史 raw、报告、实体、事件、历史反馈和旧任务记录，不编辑、不采信、不导出 SQL、不执行导入脚本；实体大事记页只读展示旧实体和事件时间线，不触发导入、推荐或采信；质量归档页只读展示旧反馈、质量反馈和旧任务统计，不创建当前评论/评分/抓取任务；同步页只记录同步 run，不生成同步包；SQL 导出页可生成/预览/下载，但条目级追溯和导出前字段校验还要补。
 - 设计保护线：不要把已确认的浅色 indigo/slate 工作台壳、信息流式数据源列表和右侧 tab 化标签策略面板回退成深色壳、宽表格、绿色/青色主调或单源标签配置。
@@ -207,6 +215,7 @@ workspace_sections     当前工作台启用的页面
 - `POST /api/sources/{source_id}/fetch` 第一版只做单源手动抓取，调用对应 adapter，把结果幂等写入 `raw_items`，并更新 `data_sources.last_fetch_at/last_success_at/last_error`。
 - 数据源配置页支持工作台统一新闻一级/二级标签策略的增删改，并支持单源启停、权重和每日上限；单源可以展示源侧方向标签，但不能把源侧方向标签当成成品新闻 category。`ai_tools` 工作台必须展示独立的 `ai_tools_categories`，不能复用规划部的 `ai_sql_categories`。
 - 数据源真实定义只保存一份；多个工作台复用时通过 `workspace_source_links` 配置差异。
+- `POST /api/sources` 自建源进入共享池（`workspace_code=shared`、metadata 标记 `origin=custom`），并自动在发起工作台建立启用的 `workspace_source_links`；同 URL 源复用已有定义。`PATCH /api/sources/{source_id}` 编辑源定义，补 URL 可解除 `metadata_only/needs_entry`。
 - Tech Insight Loop 源导入不会覆盖已有源的人工启用关系；同 RSS/URL 去重合并，治理字段写入 `metadata_json`，质量分写入 `source_score`。
 
 `/historical-reports`：

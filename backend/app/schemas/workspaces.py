@@ -19,6 +19,14 @@ class WorkspaceRead(BaseModel):
     default_domain_code: str
 
 
+class WorkspaceCreate(BaseModel):
+    code: str = Field(min_length=2, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
+    name: str = Field(min_length=1, max_length=128)
+    description: str = ""
+    workspace_type: str = Field(default="intelligence_workspace", min_length=1, max_length=64)
+    default_domain_code: str = Field(default="ai", min_length=1, max_length=64)
+
+
 class WorkspaceSectionRead(BaseModel):
     section_key: str
     name: str

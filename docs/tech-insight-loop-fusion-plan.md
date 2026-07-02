@@ -78,6 +78,17 @@
 - 旧 `reports` 写入 `historical_reports`，记录 `source_article_ids_json` 的 resolved/unresolved 映射；30 个未解析引用保留为缺口。
 - 真实导入幂等键为 `raw_items(data_source_id, entry_key)` 和 `historical_reports(legacy_system, legacy_table, legacy_id)`。
 
+### 第四轮已完成范围：作业界面融合与工作台自助扩展
+
+当前第四轮把融合能力落到规划部作业界面，并让其他工作台可以自助扩展：
+
+- 规划部作业界面（工作台首页、数据源管理、候选池、推荐、历史归档、实体大事记、质量归档）全部由数据库注册的 `workspace_sections` 驱动，工作台首页随工作台切换刷新，不再固定读 `planning_intel`。
+- 新增 `POST /api/workspaces`（super_admin）：界面上直接创建新工作台，自动注册全部核心页面分区、默认标签策略和超管 owner 成员；启动 seed 只维护内置 `planning_intel/ai_tools`，不会停用或覆盖自建工作台。侧边栏工作台切换器下方提供“新建工作台”入口。
+- 新增 `POST /api/sources`（super_admin）：任何工作台可在数据源管理页自建信息源（rss/paper_rss/page_manual/page_monitor），源进入共享池并自动在发起工作台启用；同 URL 源复用共享池已有定义，不产生重复源。
+- 新增 `PATCH /api/sources/{source_id}`：编辑源名称/URL/启用/回溯天数；给 Tech Insight Loop 的 31 个 `metadata_only/needs_entry` 待补入口源补 URL 后自动清除待补标记（`fetch_entry_status=manual_entry_added`），即可进入抓取。
+- 契约同步：`config/contracts/workspace_model.json` 新增 `workspace_creation`，`config/contracts/source_fields.json` 新增 `custom_source_api`。
+- 不变的边界：新工作台仍复用同一条主链路（抓取、raw、news、去重、推荐、日报、周报、导出），不复制源定义，不改公司 SQL 合同，不动成品新闻十分类。
+
 ## 4. 能力融合目标架构
 
 ```text
