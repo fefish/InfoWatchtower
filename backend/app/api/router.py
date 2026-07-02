@@ -9,6 +9,7 @@ from app.api.routes import (
     operations,
     pipeline,
     recommendations,
+    renditions,
     reports,
     sources,
     workspaces,
@@ -25,5 +26,6 @@ api_router.include_router(operations.router)
 api_router.include_router(pipeline.router)
 api_router.include_router(recommendations.router)
 api_router.include_router(reports.router)
+api_router.include_router(renditions.router)
 api_router.include_router(exports.router)
 api_router.include_router(health.router)

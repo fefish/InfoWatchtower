@@ -272,6 +272,8 @@ def update_daily_report_item(
     before = _item_editor_snapshot(item)
     if payload.adoption_status is not None:
         item.adoption_status = payload.adoption_status
+    if payload.is_headline is not None:
+        item.is_headline = payload.is_headline
     if payload.sort_order is not None:
         item.sort_order = payload.sort_order
     if payload.editor_title is not None:
@@ -534,6 +536,7 @@ def _daily_report_item_to_read(item: DailyReportItem) -> DailyReportItemRead:
         id=item.id,
         generated_news=_generated_news_to_read(item.generated_news),
         adoption_status=item.adoption_status,
+        is_headline=bool(item.is_headline),
         sort_order=item.sort_order,
         editor_title=item.editor_title,
         editor_summary=item.editor_summary,
