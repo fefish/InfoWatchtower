@@ -11,8 +11,10 @@ from app.models.reports import ReportFormat, ReportRendition
 from app.models.workspace import Workspace
 from app.reports.renditions import (
     build_daily_rendition,
+    build_weekly_rendition,
     ensure_report_formats,
     load_daily_report_for_rendition,
+    load_weekly_report,
     render_markdown,
 )
 from app.reports.rendition_html import render_html
@@ -235,6 +237,65 @@ def export_daily_rendition(
         )
     workspace_name = _workspace_name(session, report.workspace_code)
     rendition = build_daily_rendition(session, report, fmt, workspace_name)
+    session.commit()
+
+    filename = f"{rendition.title.replace(' ', '-')}.{target}"
+    if target == "md":
+        content = render_markdown(rendition)
+        media_type = "text/markdown; charset=utf-8"
+    else:
+        content = render_html(rendition)
+        media_type = "text/html; charset=utf-8"
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{_rfc5987(filename)}"},
+    )
+
+
+@router.post(
+    "/weekly-reports/{report_id}/renditions/{format_code}/regenerate",
+    response_model=ReportRenditionRead,
+)
+def regenerate_weekly_rendition(
+    report_id: str,
+    format_code: str,
+    _: User = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> ReportRenditionRead:
+    report = load_weekly_report(session, report_id)
+    if report is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Weekly report not found")
+    fmt = _get_enabled_format(session, report.workspace_code, format_code)
+    workspace_name = _workspace_name(session, report.workspace_code)
+    rendition = build_weekly_rendition(session, report, fmt, workspace_name)
+    session.commit()
+    session.refresh(rendition)
+    return _rendition_to_read(rendition)
+
+
+@router.get("/weekly-reports/{report_id}/renditions/{format_code}/export")
+def export_weekly_rendition(
+    report_id: str,
+    format_code: str,
+    target: str = Query(default="md"),
+    _: User = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> Response:
+    if target not in REPORT_FORMAT_EXPORT_TARGETS:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="target must be md or html")
+    report = load_weekly_report(session, report_id)
+    if report is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Weekly report not found")
+    fmt = _get_enabled_format(session, report.workspace_code, format_code)
+    allowed_targets = list((fmt.export_targets or {}).get("targets") or [])
+    if target not in allowed_targets:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Format {format_code} does not export {target}",
+        )
+    workspace_name = _workspace_name(session, report.workspace_code)
+    rendition = build_weekly_rendition(session, report, fmt, workspace_name)
     session.commit()
 
     filename = f"{rendition.title.replace(' ', '-')}.{target}"

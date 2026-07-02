@@ -27,7 +27,10 @@ from app.models.reports import (
     ReportFormat,
     ReportRendition,
     WeeklyReport,
+    WeeklyReportItem,
 )
+
+ReportItem = DailyReportItem | WeeklyReportItem
 
 BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -115,7 +118,7 @@ def ensure_report_formats(session: Session, workspace_code: str) -> list[ReportF
     return list(existing.values())
 
 
-def resolve_insight(item: DailyReportItem) -> dict[str, Any]:
+def resolve_insight(item: ReportItem) -> dict[str, Any]:
     """条目的技术洞察辅助字段：优先模型产出的 insight_json，缺省规则降级。"""
     news = item.generated_news
     insight = dict(news.insight_json or {})
@@ -146,7 +149,7 @@ def resolve_insight(item: DailyReportItem) -> dict[str, Any]:
     }
 
 
-def _board_from_source(item: DailyReportItem) -> str | None:
+def _board_from_source(item: ReportItem) -> str | None:
     news_item = item.generated_news.news_item
     data_source = news_item.data_source if news_item else None
     metadata = (data_source.metadata_json or {}) if data_source else {}
@@ -173,7 +176,7 @@ def _fallback_bullets(content: dict[str, Any], summary: str) -> list[str]:
     return parts
 
 
-def _fallback_tag_line(item: DailyReportItem, board: str) -> list[str]:
+def _fallback_tag_line(item: ReportItem, board: str) -> list[str]:
     tags = [board, item.generated_news.category]
     recommendation = item.generated_news.recommendation_item
     if recommendation is not None:
@@ -199,7 +202,7 @@ def ensure_headlines(session: Session, report: DailyReport, top_n: int) -> None:
     session.flush()
 
 
-def _item_score(item: DailyReportItem) -> float:
+def _item_score(item: ReportItem) -> float:
     recommendation = item.generated_news.recommendation_item
     return float(recommendation.final_score) if recommendation is not None else 0.0
 
@@ -240,11 +243,38 @@ def build_daily_rendition(
     return _upsert_rendition(session, context, fmt, adopted)
 
 
+def build_weekly_rendition(
+    session: Session,
+    report: WeeklyReport,
+    fmt: ReportFormat,
+    workspace_name: str = "",
+) -> ReportRendition:
+    """周报成稿：与日报同构；周报条目没有头条标记，头条区留空。"""
+    adopted = sorted(
+        (
+            item
+            for item in report.items
+            if item.adoption_status == 2 and item.generated_news is not None
+        ),
+        key=lambda item: (item.sort_order, item.created_at),
+    )
+    context = RenditionContext(
+        report_type="weekly",
+        report_id=report.id,
+        workspace_code=report.workspace_code,
+        domain_code=report.domain_code,
+        period_key=report.week_key,
+        period_label=f"{report.week_key} 技术洞察周报",
+        workspace_name=workspace_name or report.workspace_code,
+    )
+    return _upsert_rendition(session, context, fmt, adopted)
+
+
 def _upsert_rendition(
     session: Session,
     context: RenditionContext,
     fmt: ReportFormat,
-    items: list[DailyReportItem],
+    items: list[ReportItem],
 ) -> ReportRendition:
     snapshots = [_item_snapshot(item, fmt) for item in items]
     groups = _group_snapshots(snapshots, fmt)
@@ -295,8 +325,9 @@ def _upsert_rendition(
     return rendition
 
 
-def _item_snapshot(item: DailyReportItem, fmt: ReportFormat) -> dict[str, Any]:
+def _item_snapshot(item: ReportItem, fmt: ReportFormat) -> dict[str, Any]:
     news = item.generated_news
+    assert news is not None
     insight = resolve_insight(item)
     content = news.content_json or {}
     news_item = news.news_item
@@ -318,7 +349,7 @@ def _item_snapshot(item: DailyReportItem, fmt: ReportFormat) -> dict[str, Any]:
         "source_url": news.source_url,
         "source_name": news_item.source_name if news_item else "",
         "score": _item_score(item),
-        "is_headline": bool(item.is_headline),
+        "is_headline": bool(getattr(item, "is_headline", False)),
         "generation_status": news.generation_status,
     }
 
@@ -458,4 +489,10 @@ def load_daily_report_for_rendition(session: Session, report_id: str) -> DailyRe
 
 
 def load_weekly_report(session: Session, report_id: str) -> WeeklyReport | None:
-    return session.scalar(select(WeeklyReport).where(WeeklyReport.id == report_id))
+    return session.scalar(
+        select(WeeklyReport)
+        .options(
+            selectinload(WeeklyReport.items).selectinload(WeeklyReportItem.generated_news),
+        )
+        .where(WeeklyReport.id == report_id),
+    )

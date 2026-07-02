@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "description": "One adoption, many renditions: report format registry and rendition projection contract. Design doc: docs/report-renditions-design.md",
+  "core_rule": "Renditions are projections of adopted report items. Regenerating or deleting a rendition never mutates adoption status, generated_news, recommendation chain or the company SQL export. Business boards live only in insight fields and rendition grouping; they must never be written to generated_news.category or company SQL category.",
+  "tables": {
+    "report_formats": [
+      "workspace_code + format_code (unique)",
+      "name/description",
+      "builtin/locked (company_sql_v1 is locked: structure fixed in code, only enabled can toggle)",
+      "group_by (category|board|none)",
+      "headline_enabled + headline_auto_top_n",
+      "item_fields.fields (ordered subset of: tag_line/bullet_points/takeaway/five_fields/summary/source_link/score)",
+      "export_targets.targets (subset of: md/html; company SQL export is NOT configured here)",
+      "enabled/sort_order"
+    ],
+    "report_renditions": [
+      "report_type (daily|weekly) + report_id + format_code (unique)",
+      "status (draft|ready)",
+      "title/summary_json/body_json (projection snapshot)",
+      "generated_by (rule_projection_v1)/generated_at"
+    ]
+  },
+  "column_additions": {
+    "generated_news.insight_json": "Model-generated auxiliary fields for tech-insight renditions: board (from config/taxonomy/business_boards.json), bullet_points[], takeaway, tag_line[]. Strictly separate from content_json; company SQL export never reads it.",
+    "daily_report_items.is_headline": "Editor-adjustable headline flag. Auto-initialized to recommendation-score top-N on first headline-enabled rendition build; never auto-overwritten afterwards."
+  },
+  "builtin_formats": {
+    "company_sql_v1": "内网版 locked builtin. group_by=category, no headline, five_fields body. The ONLY source feeding the company SQL export chain, which stays on its original hardcoded path.",
+    "tech_insight_v1": "技术洞察版 builtin. group_by=board, headline auto top-6 editable, tag_line/bullet_points/takeaway/source_link fields, exports md+html aligned with 周报文件/技术洞察日报-*.{md,html} samples."
+  },
+  "insight_resolution_order": [
+    "generated_news.insight_json (MiniMax prompt v2 output, validated against business_boards.json)",
+    "rule fallback: board from source board_relevance_json else category mapping; bullets from eventSummary+technologyAndInnovation; takeaway from valueAndImpact/effects; tag_line from board+category+expert route"
+  ],
+  "api": [
+    "GET/POST /api/report-formats, PATCH/DELETE /api/report-formats/{id} (locked: enabled-only; builtin: no delete)",
+    "GET /api/daily-reports/{id}/renditions",
+    "POST /api/daily-reports/{id}/renditions/{format_code}/regenerate",
+    "GET /api/daily-reports/{id}/renditions/{format_code}/export?target=md|html",
+    "POST /api/weekly-reports/{id}/renditions/{format_code}/regenerate",
+    "GET /api/weekly-reports/{id}/renditions/{format_code}/export?target=md|html",
+    "PATCH /api/daily-report-items/{id} accepts is_headline"
+  ],
+  "invariants": [
+    "Company SQL contract unchanged: only published daily reports, adoption_status=2, generation_status=ready, generated_by not rule_v1, 10 categories, five content_json fields.",
+    "insight_json is never merged into content_json and never exported to SQL.",
+    "Custom formats affect rendition views and md/html exports only.",
+    "Rendition regeneration is idempotent on (report_type, report_id, format_code)."
+  ]
+}

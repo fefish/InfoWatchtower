@@ -1477,6 +1477,7 @@ def _refresh_generated_news(
     generated.summary = str(generated_fields["summary"])
     generated.key_points = str(generated_fields["key_points"])
     generated.content_json = generated_fields["content_json"]
+    generated.insight_json = generated_fields.get("insight_json") or {}
     generated.source_url = recommendation_item.news_item.source_url
     generated.generated_by = str(generated_fields["generated_by"])
     generated.generation_status = str(generated_fields["generation_status"])
@@ -1512,6 +1513,7 @@ def _generated_news_fields(
             "summary": news_item.summary or news_item.content[:220],
             "key_points": _key_points(news_item, category),
             "content_json": content_json,
+            "insight_json": {},
             "generated_by": "rule_v1:fallback",
             "generation_status": "fallback_needs_review",
         }
@@ -1522,6 +1524,7 @@ def _generated_news_fields(
             "summary": llm_draft.summary,
             "key_points": llm_draft.key_points,
             "content_json": llm_draft.content_json,
+            "insight_json": llm_draft.insight_json,
             "generated_by": llm_draft.generated_by,
             "generation_status": "ready",
         }

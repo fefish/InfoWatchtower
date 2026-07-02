@@ -4632,6 +4632,234 @@ button:focus-visible {
 }
 
 /* ============================================================
+   成稿格式（renditions）：切换条、技术洞察视图与格式面板
+   ============================================================ */
+
+.rendition-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 4px 0 6px;
+}
+
+.rendition-actions {
+  display: inline-flex;
+  gap: 8px;
+}
+
+.rendition-actions a {
+  text-decoration: none;
+}
+
+.rendition-view {
+  display: grid;
+  gap: 18px;
+}
+
+.rendition-headlines {
+  border: 1px solid rgba(10, 132, 255, 0.22);
+  border-left: 4px solid var(--color-primary);
+  border-radius: 12px;
+  background: rgba(10, 132, 255, 0.05);
+  padding: 12px 16px;
+}
+
+.rendition-headlines h4 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.rendition-headlines ol {
+  margin: 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 4px;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.rendition-group h4 {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 6px 0 4px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--color-border-soft);
+  font-size: 15px;
+}
+
+.rendition-group h4 small {
+  color: var(--color-faint);
+  font-weight: 600;
+}
+
+.rendition-item {
+  border-radius: 12px;
+  padding: 12px 10px;
+  display: grid;
+  gap: 6px;
+  transition: background-color 0.2s ease;
+}
+
+.rendition-item:hover {
+  background: rgba(255, 255, 255, 0.75);
+}
+
+.rendition-item + .rendition-item {
+  border-top: 1px solid var(--color-border-soft);
+}
+
+.rendition-item-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.rendition-item-head h5 {
+  margin: 0;
+  font-size: 14.5px;
+  line-height: 1.5;
+  font-weight: 700;
+}
+
+.headline-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 999px;
+  padding: 3px 10px;
+  background: transparent;
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+.headline-toggle.active {
+  border-color: rgba(255, 159, 10, 0.5);
+  background: rgba(255, 159, 10, 0.14);
+  color: #a05a00;
+}
+
+.rendition-tags {
+  margin: 0;
+  color: var(--color-primary-dark);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.rendition-block {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: var(--color-text);
+}
+
+.rendition-source {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+  color: var(--color-muted);
+}
+
+.rendition-source a {
+  color: var(--color-primary);
+  text-decoration: none;
+}
+
+.rendition-fallback {
+  border-radius: 999px;
+  padding: 1px 8px;
+  background: rgba(120, 130, 150, 0.12);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.format-panel {
+  width: min(420px, calc(100vw - 40px));
+}
+
+.format-list {
+  display: grid;
+  gap: 8px;
+}
+
+.format-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.format-row-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.format-row-main strong {
+  font-size: 13.5px;
+}
+
+.format-row-main small {
+  color: var(--color-muted);
+  font-size: 11.5px;
+}
+
+.format-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.switch-row.compact input[type="checkbox"] {
+  width: 38px;
+  height: 24px;
+}
+
+.switch-row.compact input[type="checkbox"]::after {
+  width: 20px;
+  height: 20px;
+}
+
+.switch-row.compact input[type="checkbox"]:checked::after {
+  transform: translateX(14px);
+}
+
+.format-field-picks {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.format-field-title {
+  color: #475569;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.format-field-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--color-muted);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+/* ============================================================
    抓取与覆盖：源明细筛选与错误折叠
    ============================================================ */
 

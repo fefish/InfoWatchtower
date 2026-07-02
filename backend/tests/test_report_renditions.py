@@ -122,6 +122,46 @@ def test_company_sql_rendition_groups_by_category():
     assert "**事件总结**" in markdown or "**背景**" in markdown
 
 
+def test_weekly_rendition_builds_from_adopted_items():
+    from app.models.reports import WeeklyReport, WeeklyReportItem
+    from app.reports.renditions import build_weekly_rendition
+
+    session, report = _daily_report_session()
+    formats = {fmt.format_code: fmt for fmt in ensure_report_formats(session, "planning_intel")}
+
+    weekly = WeeklyReport(
+        workspace_code="planning_intel",
+        domain_code="ai",
+        week_key="2026-W18",
+        title="2026-W18 周报",
+    )
+    session.add(weekly)
+    session.flush()
+    for index, item in enumerate(report.items):
+        session.add(
+            WeeklyReportItem(
+                weekly_report=weekly,
+                workspace_code="planning_intel",
+                domain_code="ai",
+                daily_report_item_id=item.id,
+                generated_news_id=item.generated_news_id,
+                adoption_status=2,
+                sort_order=index,
+            ),
+        )
+    session.flush()
+    session.refresh(weekly)
+
+    rendition = build_weekly_rendition(session, weekly, formats["tech_insight_v1"], "规划部情报工作台")
+    session.commit()
+    assert rendition.report_type == "weekly"
+    assert rendition.body_json["groups"]
+    assert rendition.body_json["headlines"] == []
+    markdown = render_markdown(rendition)
+    assert "技术洞察版" in rendition.title
+    assert "📋 **要点**" in markdown
+
+
 def test_locked_format_cannot_change_structure():
     session, _ = _daily_report_session()
     ensure_report_formats(session, "planning_intel")
