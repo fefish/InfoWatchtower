@@ -187,6 +187,9 @@ class GeneratedNews(IdMixin, ScopeMixin, SyncMixin, TimestampMixin, Base):
     summary: Mapped[str] = mapped_column(Text, default="")
     key_points: Mapped[str] = mapped_column(Text, default="")
     content_json: Mapped[JsonDict] = mapped_column(JsonColumn, default=dict)
+    # 技术洞察成稿辅助字段（board/bullet_points/takeaway/tag_line）。
+    # 与 content_json 严格隔离：公司 SQL 导出不读取本字段。
+    insight_json: Mapped[JsonDict] = mapped_column(JsonColumn, default=dict)
     source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     generated_by: Mapped[str] = mapped_column(String(64), default="system")
     generation_status: Mapped[str] = mapped_column(String(32), default="draft", index=True)

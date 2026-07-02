@@ -60,6 +60,7 @@ export interface DailyReportItemRecord {
   id: string;
   generated_news: GeneratedNewsRecord;
   adoption_status: number;
+  is_headline: boolean;
   sort_order: number;
   editor_title: string | null;
   editor_summary: string | null;
@@ -86,6 +87,7 @@ export interface DailyReportRecord {
 
 export interface DailyReportItemUpdatePayload {
   adoption_status?: number;
+  is_headline?: boolean;
   sort_order?: number;
   editor_title?: string;
   editor_summary?: string;

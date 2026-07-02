@@ -14,6 +14,7 @@ from app.models.feedback import AuditLog
 from app.models.identity import Permission, Role, User
 from app.models.labels import Label, LabelSet
 from app.models.workspace import Workspace, WorkspaceMembership, WorkspaceSection
+from app.reports.renditions import ensure_report_formats
 from app.schemas.auth import RoleRead, UserRead
 
 ROLE_DEFINITIONS = {
@@ -188,6 +189,7 @@ def provision_workspace(
     }
     _ensure_workspace_sections(session, workspace, CORE_WORKSPACE_SECTIONS)
     _ensure_super_admin_workspace_memberships(session, {code: workspace})
+    ensure_report_formats(session, code)
     session.flush()
     return workspace
 
@@ -207,6 +209,8 @@ def ensure_auth_seed(session: Session, settings: Settings) -> None:
     workspaces = _ensure_workspaces(session)
     _ensure_default_label_sets(session)
     _ensure_super_admin_workspace_memberships(session, workspaces)
+    for code in workspaces:
+        ensure_report_formats(session, code)
     session.commit()
 
 

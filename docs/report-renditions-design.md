@@ -1,7 +1,8 @@
 # 报告多版成稿与格式注册表设计（Report Renditions）
 
-状态：设计定稿（2026-07-02 与用户共同确认），未实施。
-实施前本文是唯一事实源；实施时同步新增 `config/contracts/report_renditions.json`。
+状态：P1-P4 已实施（2026-07-02）。机器契约见 `config/contracts/report_renditions.json`。
+P4 的模型产出（insight prompt v2）已随生成链路接入，配置 MiniMax key 后自动生效；
+未配 key 时成稿走规则降级并在条目上标注「规则降级稿」。
 
 ## 1. 背景与目标
 

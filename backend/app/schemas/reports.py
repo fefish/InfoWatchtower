@@ -23,6 +23,7 @@ class DailyReportItemRead(BaseModel):
     id: str
     generated_news: GeneratedNewsRead
     adoption_status: int
+    is_headline: bool = False
     sort_order: int
     editor_title: str | None
     editor_summary: str | None
@@ -49,6 +50,7 @@ class DailyReportRead(BaseModel):
 
 class DailyReportItemUpdate(BaseModel):
     adoption_status: int | None = Field(default=None, ge=0, le=2)
+    is_headline: bool | None = None
     sort_order: int | None = Field(default=None, ge=0)
     editor_title: str | None = None
     editor_summary: str | None = None

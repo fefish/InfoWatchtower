@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "description": "技术洞察业务板块（源自 Tech Insight Loop business_board_rules 的 14 个启用板块）。只用于成稿分组、源治理、覆盖分析和评分先验；不得写入 generated_news.category 或公司 SQL category。",
+  "boards": [
+    {"code": "AI模型", "suggested_categories": ["模型"]},
+    {"code": "模型训练", "suggested_categories": ["训练技术"]},
+    {"code": "模型评测", "suggested_categories": ["测评技术"]},
+    {"code": "智能体平台、协议与执行系统", "suggested_categories": ["智能体"]},
+    {"code": "AI推理与服务加速", "suggested_categories": ["推理加速"]},
+    {"code": "AI应用与产品化场景", "suggested_categories": ["AI 应用"]},
+    {"code": "AI安全、可信与治理", "suggested_categories": ["测评技术", "基础竞争力"]},
+    {"code": "云与AI基础设施", "suggested_categories": ["AI Infra"]},
+    {"code": "AI与通算硬件", "suggested_categories": ["AI Infra", "基础竞争力"]},
+    {"code": "核心网与通信系统架构", "suggested_categories": ["基础竞争力"]},
+    {"code": "标准、协议与产业联盟", "suggested_categories": ["基础竞争力"]},
+    {"code": "通信设备供应商", "suggested_categories": ["大厂动态", "基础竞争力"]},
+    {"code": "通信服务提供商", "suggested_categories": ["大厂动态", "基础竞争力"]},
+    {"code": "基础竞争力", "suggested_categories": ["基础竞争力", "算法"]}
+  ],
+  "board_order": [
+    "AI应用与产品化场景",
+    "智能体平台、协议与执行系统",
+    "AI推理与服务加速",
+    "AI模型",
+    "模型训练",
+    "模型评测",
+    "AI安全、可信与治理",
+    "云与AI基础设施",
+    "AI与通算硬件",
+    "核心网与通信系统架构",
+    "标准、协议与产业联盟",
+    "通信设备供应商",
+    "通信服务提供商",
+    "基础竞争力"
+  ],
+  "fallback_board": "基础竞争力"
+}

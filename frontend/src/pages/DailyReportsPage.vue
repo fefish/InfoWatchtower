@@ -30,6 +30,16 @@ import {
   type DailyReportItemRecord,
   type DailyReportRecord
 } from "../api/reports";
+import {
+  createReportFormat,
+  dailyRenditionExportUrl,
+  deleteReportFormat,
+  fetchReportFormats,
+  regenerateDailyRendition,
+  updateReportFormat,
+  type ReportFormatRecord,
+  type ReportRenditionRecord
+} from "../api/renditions";
 import { useWorkspaceStore } from "../stores/workspace";
 
 const workspace = useWorkspaceStore();
@@ -123,6 +133,201 @@ const selectedItem = computed(() => {
 const detailItem = computed(() => (detailOpen.value ? selectedItem.value : null));
 
 const adoptedCount = computed(() => reportItems.value.filter((item) => item.adoption_status === 2).length);
+
+// ---- 成稿格式（renditions）----
+const formats = ref<ReportFormatRecord[]>([]);
+const activeFormatCode = ref("company_sql_v1");
+const rendition = ref<ReportRenditionRecord | null>(null);
+const renditionLoading = ref(false);
+const headlineSavingId = ref("");
+const showFormatPanel = ref(false);
+const formatBusyId = ref("");
+const creatingFormat = ref(false);
+
+const formatFieldOptions = [
+  ["tag_line", "标签行"],
+  ["bullet_points", "📋要点"],
+  ["takeaway", "📌总结"],
+  ["five_fields", "五段正文"],
+  ["summary", "摘要"],
+  ["source_link", "来源链接"],
+  ["score", "推荐分"]
+] as const;
+
+const formatForm = reactive({
+  code: "",
+  name: "",
+  groupBy: "board",
+  headlineEnabled: true,
+  headlineTopN: 6,
+  fields: ["tag_line", "bullet_points", "takeaway", "source_link"] as string[],
+  exportMd: true,
+  exportHtml: true
+});
+
+const enabledFormats = computed(() =>
+  formats.value.filter((fmt) => fmt.enabled).sort((left, right) => left.sort_order - right.sort_order)
+);
+const activeFormat = computed(
+  () => formats.value.find((fmt) => fmt.format_code === activeFormatCode.value) ?? null
+);
+const renditionSnapshots = computed(() => rendition.value?.body_json.items ?? {});
+const renditionGroups = computed(() => rendition.value?.body_json.groups ?? []);
+const renditionHeadlines = computed(() =>
+  (rendition.value?.body_json.headlines ?? [])
+    .map((id) => renditionSnapshots.value[id])
+    .filter((snapshot) => Boolean(snapshot))
+);
+const renditionFields = computed(() => rendition.value?.body_json.item_fields ?? []);
+
+async function loadFormats() {
+  if (!workspace.currentCode) {
+    return;
+  }
+  try {
+    formats.value = await fetchReportFormats(workspace.currentCode);
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "加载成稿格式失败";
+    formats.value = [];
+  }
+  if (!enabledFormats.value.some((fmt) => fmt.format_code === activeFormatCode.value)) {
+    activeFormatCode.value = "company_sql_v1";
+  }
+}
+
+async function switchFormat(code: string) {
+  activeFormatCode.value = code;
+  if (code !== "company_sql_v1") {
+    await loadRendition();
+  }
+}
+
+async function loadRendition() {
+  const report = selectedReport.value;
+  if (!report || activeFormatCode.value === "company_sql_v1") {
+    rendition.value = null;
+    return;
+  }
+  renditionLoading.value = true;
+  try {
+    rendition.value = await regenerateDailyRendition(report.id, activeFormatCode.value);
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "生成成稿失败";
+    rendition.value = null;
+  } finally {
+    renditionLoading.value = false;
+  }
+}
+
+function renditionExportHref(target: "md" | "html") {
+  const report = selectedReport.value;
+  if (!report) {
+    return "#";
+  }
+  return dailyRenditionExportUrl(report.id, activeFormatCode.value, target);
+}
+
+async function toggleHeadline(itemId: string, current: boolean) {
+  headlineSavingId.value = itemId;
+  error.value = "";
+  try {
+    await updateDailyReportItem(itemId, { is_headline: !current });
+    const report = selectedReport.value;
+    if (report) {
+      const item = report.items.find((candidate) => candidate.id === itemId);
+      if (item) {
+        item.is_headline = !current;
+      }
+    }
+    await loadRendition();
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "更新头条失败";
+  } finally {
+    headlineSavingId.value = "";
+  }
+}
+
+async function toggleFormatEnabled(fmt: ReportFormatRecord) {
+  formatBusyId.value = fmt.id;
+  error.value = "";
+  try {
+    const updated = await updateReportFormat(fmt.id, { enabled: !fmt.enabled });
+    formats.value = formats.value.map((candidate) => (candidate.id === updated.id ? updated : candidate));
+    if (!updated.enabled && activeFormatCode.value === updated.format_code) {
+      activeFormatCode.value = "company_sql_v1";
+    }
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "更新格式失败";
+  } finally {
+    formatBusyId.value = "";
+  }
+}
+
+async function removeFormat(fmt: ReportFormatRecord) {
+  formatBusyId.value = fmt.id;
+  error.value = "";
+  try {
+    await deleteReportFormat(fmt.id);
+    formats.value = formats.value.filter((candidate) => candidate.id !== fmt.id);
+    if (activeFormatCode.value === fmt.format_code) {
+      activeFormatCode.value = "company_sql_v1";
+    }
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "删除格式失败";
+  } finally {
+    formatBusyId.value = "";
+  }
+}
+
+function toggleFormField(field: string) {
+  if (formatForm.fields.includes(field)) {
+    formatForm.fields = formatForm.fields.filter((candidate) => candidate !== field);
+  } else {
+    formatForm.fields = [...formatForm.fields, field];
+  }
+}
+
+async function submitCustomFormat() {
+  if (!workspace.currentCode) {
+    return;
+  }
+  const code = formatForm.code.trim();
+  const name = formatForm.name.trim();
+  if (!/^[a-z][a-z0-9_]{1,63}$/.test(code)) {
+    error.value = "格式标识需为小写字母开头的英文标识";
+    return;
+  }
+  if (!name || formatForm.fields.length === 0) {
+    error.value = "请填写格式名称并至少选择一个条目字段";
+    return;
+  }
+  creatingFormat.value = true;
+  error.value = "";
+  try {
+    const targets = [
+      ...(formatForm.exportMd ? ["md"] : []),
+      ...(formatForm.exportHtml ? ["html"] : [])
+    ];
+    const created = await createReportFormat({
+      workspace_code: workspace.currentCode,
+      format_code: code,
+      name,
+      group_by: formatForm.groupBy,
+      headline_enabled: formatForm.headlineEnabled,
+      headline_auto_top_n: formatForm.headlineTopN,
+      item_fields: formatForm.fields,
+      export_targets: targets
+    });
+    formats.value = [...formats.value, created];
+    formatForm.code = "";
+    formatForm.name = "";
+    message.value = `已注册格式：${created.name}`;
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "创建格式失败";
+  } finally {
+    creatingFormat.value = false;
+  }
+}
 const averageRating = computed(() => {
   const rated = reportItems.value.filter((item) => item.rating_count > 0);
   if (!rated.length) {
@@ -516,11 +721,23 @@ watch(
     selectedItemId.value = "";
     detailOpen.value = false;
     editingItemId.value = "";
+    activeFormatCode.value = "company_sql_v1";
+    rendition.value = null;
     void loadReports();
+    void loadFormats();
   }
 );
 
-onMounted(loadReports);
+watch(selectedReportId, () => {
+  if (activeFormatCode.value !== "company_sql_v1") {
+    void loadRendition();
+  }
+});
+
+onMounted(() => {
+  void loadReports();
+  void loadFormats();
+});
 </script>
 
 <template>
@@ -602,7 +819,112 @@ onMounted(loadReports);
         <span>{{ averageRating }} 平均评分</span>
       </div>
 
-      <div class="daily-item-list">
+      <div class="rendition-bar">
+        <div class="coverage-filter" role="tablist" aria-label="成稿格式">
+          <button
+            v-for="fmt in enabledFormats"
+            :key="fmt.format_code"
+            type="button"
+            :class="{ active: activeFormatCode === fmt.format_code }"
+            @click="switchFormat(fmt.format_code)"
+          >
+            {{ fmt.name }}
+          </button>
+        </div>
+        <div class="rendition-actions">
+          <a
+            v-if="activeFormat?.export_targets.includes('md')"
+            class="table-action"
+            :href="renditionExportHref('md')"
+            target="_blank"
+          >
+            导出 MD
+          </a>
+          <a
+            v-if="activeFormat?.export_targets.includes('html')"
+            class="table-action"
+            :href="renditionExportHref('html')"
+            target="_blank"
+          >
+            导出 HTML
+          </a>
+          <button type="button" class="table-action" @click="showFormatPanel = true">格式</button>
+        </div>
+      </div>
+
+      <div v-if="activeFormatCode !== 'company_sql_v1'" class="rendition-view">
+        <p v-if="renditionLoading" class="empty-state">正在生成成稿…</p>
+        <template v-else-if="rendition">
+          <section v-if="activeFormat?.headline_enabled && renditionHeadlines.length" class="rendition-headlines">
+            <h4>今日头条</h4>
+            <ol>
+              <li v-for="snapshot in renditionHeadlines" :key="snapshot.item_id">
+                {{ snapshot.title }}
+              </li>
+            </ol>
+          </section>
+
+          <section v-for="group in renditionGroups" :key="group.key" class="rendition-group">
+            <h4>
+              {{ group.title }}
+              <small>{{ group.item_ids.length }} 条</small>
+            </h4>
+            <article
+              v-for="(itemId, index) in group.item_ids"
+              :key="itemId"
+              class="rendition-item"
+            >
+              <template v-if="renditionSnapshots[itemId]">
+                <div class="rendition-item-head">
+                  <h5>{{ index + 1 }}、{{ renditionSnapshots[itemId].title }}</h5>
+                  <button
+                    v-if="activeFormat?.headline_enabled"
+                    type="button"
+                    class="headline-toggle"
+                    :class="{ active: renditionSnapshots[itemId].is_headline }"
+                    :disabled="headlineSavingId === itemId"
+                    :title="renditionSnapshots[itemId].is_headline ? '移出头条' : '设为头条'"
+                    @click="toggleHeadline(itemId, renditionSnapshots[itemId].is_headline)"
+                  >
+                    <Star :size="14" />
+                    <span>{{ renditionSnapshots[itemId].is_headline ? "头条" : "设头条" }}</span>
+                  </button>
+                </div>
+                <p v-if="renditionFields.includes('tag_line') && renditionSnapshots[itemId].tag_line.length" class="rendition-tags">
+                  <span v-for="tag in renditionSnapshots[itemId].tag_line" :key="tag">【{{ tag }}】</span>
+                </p>
+                <p v-if="renditionFields.includes('bullet_points') && renditionSnapshots[itemId].bullet_points.length" class="rendition-block">
+                  📋 <strong>要点</strong>：{{ renditionSnapshots[itemId].bullet_points.join("；") }}
+                </p>
+                <p v-if="renditionFields.includes('takeaway') && renditionSnapshots[itemId].takeaway" class="rendition-block">
+                  📌 <strong>总结</strong>：{{ renditionSnapshots[itemId].takeaway }}
+                </p>
+                <p v-if="renditionFields.includes('summary') && renditionSnapshots[itemId].summary" class="rendition-block">
+                  {{ renditionSnapshots[itemId].summary }}
+                </p>
+                <p class="rendition-source">
+                  <a
+                    v-if="renditionSnapshots[itemId].source_url"
+                    :href="renditionSnapshots[itemId].source_url || '#'"
+                    target="_blank"
+                  >
+                    来源：{{ renditionSnapshots[itemId].source_name || "原文链接" }}
+                  </a>
+                  <span v-else>来源：{{ renditionSnapshots[itemId].source_name || "未知" }}</span>
+                  <span v-if="renditionSnapshots[itemId].insight_source === 'rule_fallback'" class="rendition-fallback">
+                    规则降级稿
+                  </span>
+                </p>
+              </template>
+            </article>
+          </section>
+          <p v-if="renditionGroups.length === 0" class="empty-state">
+            本报告暂无采信条目，先在内网版视图完成采信。
+          </p>
+        </template>
+      </div>
+
+      <div v-if="activeFormatCode === 'company_sql_v1'" class="daily-item-list">
         <article
           v-for="(item, index) in reportItems"
           :key="item.id"
@@ -865,4 +1187,112 @@ onMounted(loadReports);
     </div>
     <FileText :size="42" />
   </section>
+
+  <div v-if="showFormatPanel" class="config-backdrop" @click="showFormatPanel = false"></div>
+  <aside v-if="showFormatPanel" class="config-panel format-panel" aria-label="成稿格式管理">
+    <header>
+      <div>
+        <p class="eyebrow">一次采信，多版成稿</p>
+        <h3>成稿格式</h3>
+      </div>
+      <button type="button" class="panel-close" @click="showFormatPanel = false" title="关闭">
+        <X :size="18" />
+      </button>
+    </header>
+
+    <div class="format-list">
+      <div v-for="fmt in formats" :key="fmt.id" class="format-row">
+        <div class="format-row-main">
+          <strong>{{ fmt.name }}</strong>
+          <small>
+            {{ fmt.format_code }}
+            · {{ fmt.group_by === "board" ? "按板块" : fmt.group_by === "category" ? "按分类" : "平铺" }}
+            <template v-if="fmt.export_targets.length"> · 导出 {{ fmt.export_targets.join("/").toUpperCase() }}</template>
+            <template v-if="fmt.locked"> · 锁定（公司 SQL 口径）</template>
+          </small>
+        </div>
+        <div class="format-row-actions">
+          <label class="switch-row compact" :title="fmt.enabled ? '停用' : '启用'">
+            <input
+              type="checkbox"
+              :checked="fmt.enabled"
+              :disabled="formatBusyId === fmt.id"
+              @change="toggleFormatEnabled(fmt)"
+            />
+          </label>
+          <button
+            v-if="!fmt.builtin"
+            type="button"
+            class="mini-icon-button"
+            :disabled="formatBusyId === fmt.id"
+            title="删除格式"
+            @click="removeFormat(fmt)"
+          >
+            <X :size="14" />
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="config-section-divider">
+      <span>注册自定义格式</span>
+      <small>格式只影响成稿视图与导出，不影响采信和公司 SQL</small>
+    </div>
+
+    <div class="config-grid">
+      <label>
+        <span>标识（英文）</span>
+        <input v-model="formatForm.code" placeholder="leader_brief_v1" />
+      </label>
+      <label>
+        <span>名称</span>
+        <input v-model="formatForm.name" placeholder="领导一页纸" />
+      </label>
+      <label>
+        <span>分组维度</span>
+        <select v-model="formatForm.groupBy">
+          <option value="board">业务板块</option>
+          <option value="category">成品新闻十分类</option>
+          <option value="none">平铺</option>
+        </select>
+      </label>
+      <label>
+        <span>头条条数</span>
+        <input v-model.number="formatForm.headlineTopN" type="number" min="0" max="20" />
+      </label>
+    </div>
+
+    <label class="switch-row">
+      <input v-model="formatForm.headlineEnabled" type="checkbox" />
+      <span>启用头条区</span>
+    </label>
+
+    <div class="format-field-picks">
+      <span class="format-field-title">条目字段</span>
+      <label v-for="[field, label] in formatFieldOptions" :key="field" class="format-field-pick">
+        <input
+          type="checkbox"
+          :checked="formatForm.fields.includes(field)"
+          @change="toggleFormField(field)"
+        />
+        <span>{{ label }}</span>
+      </label>
+    </div>
+
+    <div class="format-field-picks">
+      <span class="format-field-title">导出目标</span>
+      <label class="format-field-pick">
+        <input v-model="formatForm.exportMd" type="checkbox" />
+        <span>Markdown</span>
+      </label>
+      <label class="format-field-pick">
+        <input v-model="formatForm.exportHtml" type="checkbox" />
+        <span>HTML</span>
+      </label>
+    </div>
+
+    <button type="button" class="config-save" :disabled="creatingFormat" @click="submitCustomFormat">
+      {{ creatingFormat ? "注册中" : "注册格式" }}
+    </button>
+  </aside>
 </template>

@@ -13,6 +13,7 @@ import json_repair
 from app.core.config import Settings, get_settings
 from app.models.content import NewsItem
 from app.news_keywords import coerce_key_points, fallback_key_points
+from app.reports.renditions import board_order, fallback_board
 
 DEFAULT_MINIMAX_BASE_URL = "https://api.minimaxi.com/v1"
 SQL_EFFECTS_FALLBACK = (
@@ -34,6 +35,7 @@ class GeneratedNewsDraft:
     summary: str
     key_points: str
     content_json: dict[str, Any]
+    insight_json: dict[str, Any]
     generated_by: str
 
 
@@ -95,6 +97,7 @@ def generate_news_with_minimax(
         summary=summary,
         key_points=key_points,
         content_json=content_json,
+        insight_json=_coerce_insight(parsed.get("insight")),
         generated_by=f"minimax:{model_name}"[:64],
     )
 
@@ -143,7 +146,14 @@ def _build_user_prompt(
                         ),
                         "valueAndImpact": "对应「价值和影响」，不少于 260 字，说明长期价值、应用潜力、风险和规划部判断",
                     },
+                    "insight": {
+                        "board": "技术洞察业务板块，必须从 insightBoardMustBeOneOf 里选择",
+                        "bulletPoints": "3-5 条要点短句数组，每条 30-80 字，覆盖事实、指标和主体",
+                        "takeaway": "一段 120-200 字总结，说明对规划部/技术预研的启示",
+                        "tagLine": "3-4 个标签数组：板块、主体（公司/项目）、方向、价值类型（如 性能提升/成本下降/生态变化）",
+                    },
                 },
+                "insightBoardMustBeOneOf": board_order(),
             },
             "source": {
                 "title": news_item.source_title,
@@ -317,6 +327,34 @@ def _coerce_content(
             content[key] = fallback
     content["recommendationReason"] = recommendation_reason
     return content
+
+
+def _coerce_insight(value: Any) -> dict[str, Any]:
+    """校验模型产出的技术洞察辅助字段；不合法则返回空 dict（成稿层规则降级）。"""
+    if not isinstance(value, dict):
+        return {}
+    board = _coerce_text(value.get("board"))
+    if board not in board_order():
+        board = fallback_board()
+    bullet_points = [
+        _coerce_text(point)
+        for point in (value.get("bulletPoints") or value.get("bullet_points") or [])
+        if _coerce_text(point)
+    ][:6]
+    takeaway = _coerce_text(value.get("takeaway"))
+    tag_line = [
+        _coerce_text(tag)
+        for tag in (value.get("tagLine") or value.get("tag_line") or [])
+        if _coerce_text(tag)
+    ][:5]
+    if not bullet_points and not takeaway:
+        return {}
+    return {
+        "board": board,
+        "bullet_points": bullet_points,
+        "takeaway": takeaway,
+        "tag_line": tag_line,
+    }
 
 
 def _passes_generation_quality(

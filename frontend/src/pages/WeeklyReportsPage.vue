@@ -24,6 +24,11 @@ import {
   type WeeklyReportItemRecord,
   type WeeklyReportRecord
 } from "../api/reports";
+import {
+  fetchReportFormats,
+  weeklyRenditionExportUrl,
+  type ReportFormatRecord
+} from "../api/renditions";
 import { useWorkspaceStore } from "../stores/workspace";
 
 const workspace = useWorkspaceStore();
@@ -55,6 +60,24 @@ const editorDraft = reactive({
   summary: "",
   contentJson: {} as Record<string, string>
 });
+
+const reportFormats = ref<ReportFormatRecord[]>([]);
+
+const exportableFormats = computed(() =>
+  reportFormats.value.filter((fmt) => fmt.enabled && fmt.export_targets.length > 0)
+);
+
+async function loadReportFormats() {
+  if (!workspace.currentCode) {
+    return;
+  }
+  reportFormats.value = await fetchReportFormats(workspace.currentCode).catch(() => []);
+}
+
+function weeklyExportHref(formatCode: string, target: "md" | "html") {
+  const report = selectedReport.value;
+  return report ? weeklyRenditionExportUrl(report.id, formatCode, target) : "#";
+}
 
 const selectedReport = computed(() => {
   return reports.value.find((report) => report.id === selectedReportId.value) ?? reports.value[0] ?? null;
@@ -346,10 +369,14 @@ watch(
     editingItemId.value = "";
     selectedBoard.value = "all";
     void loadReports();
+    void loadReportFormats();
   }
 );
 
-onMounted(loadReports);
+onMounted(() => {
+  void loadReports();
+  void loadReportFormats();
+});
 </script>
 
 <template>
@@ -452,6 +479,18 @@ onMounted(loadReports);
           </div>
           <div class="module-actions">
             <span class="metric-pill">{{ statusLabel(selectedReport.status) }}</span>
+            <template v-for="fmt in exportableFormats" :key="fmt.format_code">
+              <a
+                v-for="target in fmt.export_targets"
+                :key="`${fmt.format_code}-${target}`"
+                class="table-action"
+                :href="weeklyExportHref(fmt.format_code, target as 'md' | 'html')"
+                target="_blank"
+                :title="`${fmt.name} 导出 ${target.toUpperCase()}`"
+              >
+                {{ fmt.name }} {{ target.toUpperCase() }}
+              </a>
+            </template>
             <button
               v-if="selectedReport.status !== 'published'"
               type="button"

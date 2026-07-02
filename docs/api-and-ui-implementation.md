@@ -99,6 +99,16 @@ GET  /api/topic-tasks
 POST /api/topic-tasks
 PATCH /api/topic-tasks/{id}
 
+GET  /api/report-formats?workspace_code={workspace_code}
+POST /api/report-formats
+PATCH /api/report-formats/{id}
+DELETE /api/report-formats/{id}
+GET  /api/daily-reports/{id}/renditions
+POST /api/daily-reports/{id}/renditions/{format_code}/regenerate
+GET  /api/daily-reports/{id}/renditions/{format_code}/export?target=md|html
+POST /api/weekly-reports/{id}/renditions/{format_code}/regenerate
+GET  /api/weekly-reports/{id}/renditions/{format_code}/export?target=md|html
+
 POST /api/exports/company-sql/daily-reports/{daily_report_id}
 GET  /api/exports
 GET  /api/exports/{id}
@@ -123,6 +133,8 @@ GET  /api/audit-logs
 `POST /api/workspaces` 是工作台自助扩展入口（super_admin）：按 `code/name/description/workspace_type/default_domain_code` 创建新工作台，自动注册全部核心页面分区、默认标签策略（`ai_sql_categories`，可随后用 label-policy 接口改成工作台自己的口径）和超管 owner 成员。启动 seed 只维护内置 `planning_intel/ai_tools`，不会停用或覆盖自建工作台。契约见 `config/contracts/workspace_model.json` 的 `workspace_creation`。
 
 `POST /api/sources` 是自建信息源入口（super_admin）：`workspace_code + name + source_type(rss/paper_rss/page_manual/page_monitor) + url` 创建共享池源并自动在该工作台启用；同 URL 源默认复用而不是重复创建（`reuse_existing=false` 时返回 409），响应为 `{source, created}`。`PATCH /api/sources/{source_id}` 编辑源定义（名称/URL/启用/回溯天数）；给 `metadata_only/needs_entry` 治理记录补 URL 会清除待补入口标记并写 `fetch_entry_status=manual_entry_added`。契约见 `config/contracts/source_fields.json` 的 `custom_source_api`。早期文档中的 `/api/data-sources/*` 端点从未实现，已由上述端点取代。
+
+成稿多版（renditions）遵循「一次采信，多版成稿」：`report-formats` 是工作台级格式注册表（内置 `company_sql_v1` 锁定 + `tech_insight_v1`，可注册自定义格式），renditions 端点把已采信条目投影成对应格式并支持 MD/HTML 导出；`PATCH /api/daily-report-items/{id}` 支持 `is_headline` 头条勾选。设计与边界见 `docs/report-renditions-design.md` 和 `config/contracts/report_renditions.json`；公司 SQL 出口不受任何格式配置影响。
 
 `POST /api/sources/import-tech-insight-loop` 是第一轮融合入口，只导入 `config/seeds/tech_insight_loop/sources_full_zh.csv` 的源治理字段，不导入 Tech Insight Loop 的历史素材、报告或实体大事记。响应按 CSV 行返回 `total/fetchable/metadata_only`，按去重写入返回 `created/updated`；当前 seed 为 386 行、355 行有入口、31 行待补入口，去重后 363 个共享源。`GET /api/sources` 会额外返回 `source_tier/source_channel_type/expert_routes/metadata_only/needs_entry` 等治理字段。
 
