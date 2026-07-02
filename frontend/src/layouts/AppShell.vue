@@ -2,6 +2,7 @@
 import {
   Activity,
   Archive,
+  BarChart3,
   Bell,
   CalendarDays,
   ClipboardCheck,
@@ -86,6 +87,7 @@ async function submitWorkspaceForm() {
 const sectionIcons = {
   dashboard: Activity,
   source_management: Radio,
+  ingestion_coverage: BarChart3,
   candidate_pool: Layers,
   daily_reports: FileText,
   weekly_reports: CalendarDays,
@@ -105,25 +107,28 @@ const navItems = computed(() =>
     key: section.section_key,
     label: section.name,
     icon: sectionIcons[section.section_key as keyof typeof sectionIcons] ?? SquareStack,
-    path: section.route_path
+    path: section.route_path,
+    group: section.group || "system"
   }))
 );
 
-const primaryNavKeys = new Set([
-  "dashboard",
-  "source_management",
-  "candidate_pool",
-  "daily_reports",
-  "weekly_reports",
-  "historical_reports",
-  "entity_milestones",
-  "quality_archive",
-  "requirements",
-  "topic_tasks"
-]);
+const navGroupMeta = [
+  { key: "today", label: "今日" },
+  { key: "collect", label: "情报采集" },
+  { key: "curate", label: "编审工作流" },
+  { key: "library", label: "资料库" },
+  { key: "collab", label: "协作" },
+  { key: "system", label: "系统" }
+];
 
-const primaryNavItems = computed(() => navItems.value.filter((item) => primaryNavKeys.has(item.key)));
-const systemNavItems = computed(() => navItems.value.filter((item) => !primaryNavKeys.has(item.key)));
+const navGroups = computed(() =>
+  navGroupMeta
+    .map((group) => ({
+      ...group,
+      items: navItems.value.filter((item) => item.group === group.key)
+    }))
+    .filter((group) => group.items.length > 0)
+);
 
 onMounted(() => {
   void workspace.loadWorkspaces();
@@ -166,17 +171,15 @@ async function logout() {
           <span>新建工作台</span>
         </button>
 
-        <div class="nav-group">
-          <p class="nav-group-title">Menu</p>
-          <RouterLink v-for="item in primaryNavItems" :key="item.key" class="nav-item" :to="item.path">
-            <component :is="item.icon" :size="18" />
-            <span>{{ item.label }}</span>
-          </RouterLink>
-        </div>
-
-        <div class="nav-group">
-          <p class="nav-group-title">System</p>
-          <RouterLink v-for="item in systemNavItems" :key="item.key" class="nav-item" :to="item.path">
+        <div v-for="group in navGroups" :key="group.key" class="nav-group">
+          <p class="nav-group-title">{{ group.label }}</p>
+          <RouterLink
+            v-for="item in group.items"
+            :key="item.key"
+            class="nav-item"
+            :to="item.path"
+            :title="item.label"
+          >
             <component :is="item.icon" :size="18" />
             <span>{{ item.label }}</span>
           </RouterLink>
@@ -204,6 +207,16 @@ async function logout() {
         </div>
 
         <div class="topbar-tools">
+          <select
+            class="topbar-workspace-select"
+            :value="workspace.currentCode"
+            aria-label="切换工作台"
+            @change="workspace.setWorkspace(($event.target as HTMLSelectElement).value)"
+          >
+            <option v-for="item in workspace.options" :key="item.code" :value="item.code">
+              {{ item.name }}
+            </option>
+          </select>
           <label class="global-search" aria-label="搜索资源">
             <Search :size="16" />
             <input type="search" placeholder="搜索资源..." />

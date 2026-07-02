@@ -204,6 +204,7 @@ def _section_to_read(section: WorkspaceSection) -> WorkspaceSectionRead:
         section_type=section.section_type,
         route_path=section.route_path,
         sort_order=section.sort_order,
+        group=str((section.config_json or {}).get("group") or "system"),
     )
 
 

@@ -130,6 +130,7 @@ def test_authenticated_user_can_load_workspace_sections(monkeypatch, tmp_path):
     assert section_keys == [
         "dashboard",
         "source_management",
+        "ingestion_coverage",
         "candidate_pool",
         "daily_reports",
         "weekly_reports",
@@ -143,6 +144,12 @@ def test_authenticated_user_can_load_workspace_sections(monkeypatch, tmp_path):
         "users",
         "audit_logs",
     ]
+    section_groups = {item["section_key"]: item["group"] for item in sections.json()}
+    assert section_groups["dashboard"] == "today"
+    assert section_groups["ingestion_coverage"] == "collect"
+    assert section_groups["daily_reports"] == "curate"
+    assert section_groups["historical_reports"] == "library"
+    assert section_groups["audit_logs"] == "system"
     assert "topics" not in section_keys
     assert "tool_catalog" not in section_keys
     assert "tool_runs" not in section_keys

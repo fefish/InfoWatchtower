@@ -12,6 +12,7 @@ export interface WorkspaceSectionRecord {
   section_type: string;
   route_path: string;
   sort_order: number;
+  group: string;
 }
 
 export interface WorkspaceLabelPolicy {

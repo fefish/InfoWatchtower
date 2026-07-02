@@ -33,6 +33,7 @@ class WorkspaceSectionRead(BaseModel):
     section_type: str
     route_path: str
     sort_order: int
+    group: str = "system"
 
 
 class WorkspaceLabelPolicyRead(BaseModel):
