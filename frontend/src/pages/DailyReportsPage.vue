@@ -193,6 +193,14 @@ async function loadFormats() {
   if (!enabledFormats.value.some((fmt) => fmt.format_code === activeFormatCode.value)) {
     activeFormatCode.value = "company_sql_v1";
   }
+  // 对齐快报心智：默认打开成品阅读（技术洞察版），编审是其中一个视图
+  if (
+    activeFormatCode.value === "company_sql_v1" &&
+    enabledFormats.value.some((fmt) => fmt.format_code === "tech_insight_v1")
+  ) {
+    activeFormatCode.value = "tech_insight_v1";
+    void loadRendition();
+  }
 }
 
 async function switchFormat(code: string) {
@@ -828,7 +836,7 @@ onMounted(() => {
             :class="{ active: activeFormatCode === fmt.format_code }"
             @click="switchFormat(fmt.format_code)"
           >
-            {{ fmt.name }}
+            {{ fmt.format_code === "company_sql_v1" ? `${fmt.name} · 编审` : fmt.name }}
           </button>
         </div>
         <div class="rendition-actions">

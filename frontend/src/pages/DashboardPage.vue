@@ -55,7 +55,7 @@ const funnelStages = computed(() => {
     { label: "抓取成功", value: value ? value.source_succeeded : null },
     { label: "今日新增", value: value?.raw_in_target ?? null },
     { label: "去重代表", value: value?.dedupe_winners ?? null },
-    { label: "推荐候选", value: value?.recommendation_candidates ?? null },
+    { label: "入选推荐", value: value?.recommendation_selected ?? null },
     { label: "已采信", value: value?.daily_adopted ?? null }
   ];
 });
@@ -69,12 +69,25 @@ const dailyReportStatus = computed(() => {
     : { label: "草稿待编审", tone: "warn" };
 });
 
-const topCandidates = computed(() =>
-  candidates.value
-    .filter((group) => group.recommendation && group.winner_title)
-    .sort((left, right) => (right.recommendation?.final_score ?? 0) - (left.recommendation?.final_score ?? 0))
-    .slice(0, 6)
-);
+const topCandidates = computed(() => {
+  const qualified = candidates.value.filter((group) => {
+    if (!group.recommendation || !group.winner_title) {
+      return false;
+    }
+    const level = (group.recommendation.admission_level || "").toUpperCase();
+    return ["P0", "P1", "P2"].includes(level);
+  });
+  return qualified
+    .sort((left, right) => {
+      const leftToday = left.recommendation?.day_key === todayKey ? 1 : 0;
+      const rightToday = right.recommendation?.day_key === todayKey ? 1 : 0;
+      if (leftToday !== rightToday) {
+        return rightToday - leftToday;
+      }
+      return (right.recommendation?.final_score ?? 0) - (left.recommendation?.final_score ?? 0);
+    })
+    .slice(0, 6);
+});
 
 const latestDaily = computed(() => dailyReports.value[0] ?? null);
 const latestWeekly = computed(() => weeklyReports.value[0] ?? null);
@@ -192,10 +205,11 @@ async function loadBriefing(workspaceCode: string) {
           </div>
           <ChevronRight v-if="index < funnelStages.length - 1" class="funnel-arrow" :size="16" aria-hidden="true" />
         </template>
-        <div class="funnel-result" :data-tone="dailyReportStatus.tone">
+        <RouterLink class="funnel-result" :data-tone="dailyReportStatus.tone" to="/daily-reports">
           <FileText :size="15" />
           <span>今日日报 · {{ dailyReportStatus.label }}</span>
-        </div>
+          <ChevronRight :size="14" aria-hidden="true" />
+        </RouterLink>
       </div>
       <p v-if="error" class="form-error">{{ error }}</p>
     </section>
@@ -247,8 +261,8 @@ async function loadBriefing(workspaceCode: string) {
                 {{ category.name }} · {{ category.count }}
               </span>
             </div>
-            <RouterLink class="briefing-cta" :to="`/daily-reports/${latestDaily.id}`">
-              进入编审 <ArrowRight :size="14" />
+            <RouterLink class="briefing-cta" to="/daily-reports">
+              阅读日报 <ArrowRight :size="14" />
             </RouterLink>
           </template>
           <div v-else class="briefing-empty compact">
