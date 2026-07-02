@@ -2,6 +2,7 @@
 import {
   Activity,
   Archive,
+  BarChart3,
   Bell,
   CalendarDays,
   ClipboardCheck,
@@ -86,6 +87,7 @@ async function submitWorkspaceForm() {
 const sectionIcons = {
   dashboard: Activity,
   source_management: Radio,
+  ingestion_coverage: BarChart3,
   candidate_pool: Layers,
   daily_reports: FileText,
   weekly_reports: CalendarDays,
@@ -105,25 +107,28 @@ const navItems = computed(() =>
     key: section.section_key,
     label: section.name,
     icon: sectionIcons[section.section_key as keyof typeof sectionIcons] ?? SquareStack,
-    path: section.route_path
+    path: section.route_path,
+    group: section.group || "system"
   }))
 );
 
-const primaryNavKeys = new Set([
-  "dashboard",
-  "source_management",
-  "candidate_pool",
-  "daily_reports",
-  "weekly_reports",
-  "historical_reports",
-  "entity_milestones",
-  "quality_archive",
-  "requirements",
-  "topic_tasks"
-]);
+const navGroupMeta = [
+  { key: "today", label: "今日" },
+  { key: "collect", label: "情报采集" },
+  { key: "curate", label: "编审工作流" },
+  { key: "library", label: "资料库" },
+  { key: "collab", label: "协作" },
+  { key: "system", label: "系统" }
+];
 
-const primaryNavItems = computed(() => navItems.value.filter((item) => primaryNavKeys.has(item.key)));
-const systemNavItems = computed(() => navItems.value.filter((item) => !primaryNavKeys.has(item.key)));
+const navGroups = computed(() =>
+  navGroupMeta
+    .map((group) => ({
+      ...group,
+      items: navItems.value.filter((item) => item.group === group.key)
+    }))
+    .filter((group) => group.items.length > 0)
+);
 
 onMounted(() => {
   void workspace.loadWorkspaces();
@@ -166,17 +171,15 @@ async function logout() {
           <span>新建工作台</span>
         </button>
 
-        <div class="nav-group">
-          <p class="nav-group-title">Menu</p>
-          <RouterLink v-for="item in primaryNavItems" :key="item.key" class="nav-item" :to="item.path">
-            <component :is="item.icon" :size="18" />
-            <span>{{ item.label }}</span>
-          </RouterLink>
-        </div>
-
-        <div class="nav-group">
-          <p class="nav-group-title">System</p>
-          <RouterLink v-for="item in systemNavItems" :key="item.key" class="nav-item" :to="item.path">
+        <div v-for="group in navGroups" :key="group.key" class="nav-group">
+          <p class="nav-group-title">{{ group.label }}</p>
+          <RouterLink
+            v-for="item in group.items"
+            :key="item.key"
+            class="nav-item"
+            :to="item.path"
+            :title="item.label"
+          >
             <component :is="item.icon" :size="18" />
             <span>{{ item.label }}</span>
           </RouterLink>
@@ -197,13 +200,22 @@ async function logout() {
 
     <main class="main-panel">
       <header class="topbar">
-        <div>
-          <p class="eyebrow">产业情报操作系统</p>
+        <div class="topbar-title">
           <h1>{{ workspace.current?.name || "工作台" }}</h1>
-          <p class="topbar-subtitle">{{ workspace.error || workspace.current?.description || "正在加载工作台配置" }}</p>
+          <p class="topbar-subtitle">{{ workspace.error || workspace.current?.description || "" }}</p>
         </div>
 
         <div class="topbar-tools">
+          <select
+            class="topbar-workspace-select"
+            :value="workspace.currentCode"
+            aria-label="切换工作台"
+            @change="workspace.setWorkspace(($event.target as HTMLSelectElement).value)"
+          >
+            <option v-for="item in workspace.options" :key="item.code" :value="item.code">
+              {{ item.name }}
+            </option>
+          </select>
           <label class="global-search" aria-label="搜索资源">
             <Search :size="16" />
             <input type="search" placeholder="搜索资源..." />
@@ -212,9 +224,9 @@ async function logout() {
             <Bell :size="19" />
             <span aria-hidden="true"></span>
           </button>
-          <div class="user-chip">
-            <span>{{ session.user?.display_name }}</span>
-            <strong>{{ session.user?.roles[0] }}</strong>
+          <div class="user-pill" :title="`${session.user?.display_name} · ${session.user?.roles[0]}`">
+            <span class="user-pill-avatar">{{ session.user?.display_name?.slice(0, 1) || "U" }}</span>
+            <span class="user-pill-name">{{ session.user?.display_name }}</span>
           </div>
         </div>
       </header>

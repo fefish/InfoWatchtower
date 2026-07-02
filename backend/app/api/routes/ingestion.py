@@ -63,6 +63,7 @@ async def create_ingestion_run(
                 limit=payload.limit,
                 concurrency=payload.concurrency,
                 source_timeout_seconds=payload.source_timeout_seconds,
+                max_items_per_source=payload.max_items_per_source,
             ),
         )
     except WorkspaceNotFoundError as exc:

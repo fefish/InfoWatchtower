@@ -68,6 +68,7 @@
   "core_sections": [
     "dashboard",
     "source_management",
+    "ingestion_coverage",
     "candidate_pool",
     "daily_reports",
     "weekly_reports",
@@ -78,6 +79,15 @@
     "users",
     "audit_logs"
   ],
+  "section_groups": {
+    "notes": "Navigation is grouped vertically by editorial job. The group lives in workspace_sections.config_json.group and is returned by the sections API; the frontend renders groups dynamically.",
+    "today": ["dashboard"],
+    "collect": ["source_management", "ingestion_coverage"],
+    "curate": ["candidate_pool", "daily_reports", "weekly_reports"],
+    "library": ["historical_reports", "entity_milestones", "quality_archive"],
+    "collab": ["requirements", "topic_tasks"],
+    "system": ["sync", "exports", "users", "audit_logs"]
+  },
   "first_phase_disabled_sections": [
     "tool_catalog",
     "tool_runs",
@@ -101,7 +111,7 @@
       "route_path",
       "sort_order",
       "enabled",
-      "config_json"
+      "config_json.group (nav group: today/collect/curate/library/collab/system)"
     ],
     "workspace_memberships": [
       "workspace_id",

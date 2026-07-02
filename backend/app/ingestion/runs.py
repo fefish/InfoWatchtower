@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.adapters import AdapterRegistry, RawItemInput, create_default_registry
+from app.adapters.base import BROWSER_FETCH_HEADERS
 from app.adapters.page import _extract_links, _fetch_article
 from app.ingestion.fetch import fetch_source_raw_inputs, upsert_raw_inputs
 from app.models.common import utc_now
@@ -39,6 +40,7 @@ class WorkspaceIngestionRequest:
     limit: int | None = None
     concurrency: int = DEFAULT_INGESTION_CONCURRENCY
     source_timeout_seconds: float = DEFAULT_SOURCE_TIMEOUT_SECONDS
+    max_items_per_source: int | None = None
 
 
 @dataclass(frozen=True)
@@ -110,6 +112,7 @@ async def run_workspace_ingestion(
             "limit": request.limit,
             "concurrency": _normalize_concurrency(request.concurrency),
             "source_timeout_seconds": _normalize_timeout(request.source_timeout_seconds),
+            "max_items_per_source": request.max_items_per_source,
         },
     )
     session.add(run)
@@ -149,9 +152,13 @@ async def run_workspace_ingestion(
             )
             continue
 
-        created, updated = upsert_raw_inputs(session, source, outcome.raw_inputs, started_at)
+        raw_inputs = outcome.raw_inputs
+        if request.max_items_per_source is not None and request.max_items_per_source >= 0:
+            # RSS/页面条目按 feed 顺序（新在前）截断，对齐旧系统单源上限行为
+            raw_inputs = raw_inputs[: request.max_items_per_source]
+        created, updated = upsert_raw_inputs(session, source, raw_inputs, started_at)
         totals["source_succeeded"] += 1
-        totals["items_fetched"] += len(outcome.raw_inputs)
+        totals["items_fetched"] += len(raw_inputs)
         totals["raw_created"] += created
         totals["raw_updated"] += updated
         source_summaries.append(
@@ -453,7 +460,7 @@ async def _fetch_sitemap_source(source: DataSource) -> list[RawItemInput]:
     if not sitemap_url:
         return []
     max_links = int(config.get("max_links") or config.get("sitemap_max_links") or 100)
-    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, trust_env=False) as client:
+    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, trust_env=False, headers=BROWSER_FETCH_HEADERS) as client:
         response = await client.get(sitemap_url)
         response.raise_for_status()
     entries = _parse_sitemap_entries(response.text)[:max(0, max_links)]
@@ -484,7 +491,7 @@ async def _fetch_archive_source(source: DataSource) -> list[RawItemInput]:
     max_links = int(config.get("max_links") or 20)
     href_contains = list(config.get("href_contains") or [])
     exclude_exact = set(config.get("exclude_exact") or [])
-    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, trust_env=False) as client:
+    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, trust_env=False, headers=BROWSER_FETCH_HEADERS) as client:
         response = await client.get(archive_url)
         response.raise_for_status()
         links = _extract_links(

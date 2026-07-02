@@ -19,6 +19,7 @@ class IngestionRunCreate(BaseModel):
     limit: int | None = Field(default=None, ge=0)
     concurrency: int = Field(default=DEFAULT_INGESTION_CONCURRENCY, ge=1, le=32)
     source_timeout_seconds: float = Field(default=DEFAULT_SOURCE_TIMEOUT_SECONDS, ge=3, le=120)
+    max_items_per_source: int | None = Field(default=None, ge=0)
 
 
 class HistoricalBackfillCreate(BaseModel):

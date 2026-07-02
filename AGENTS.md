@@ -71,7 +71,8 @@ contracts 管字段、流程、映射和接口边界。
 改前端工作台样式或页面结构：
 
 - 更新 `docs/api-and-ui-implementation.md`
-- 保留 `frontend/src/layouts/AppShell.vue` 的浅色 indigo/slate 工作台壳
+- 视觉基线是用户审批过的 Apple 液态玻璃（Liquid Glass）：柔光渐变底、磨砂玻璃侧边栏/顶栏/浮层、半透明玻璃卡片 + 1px 白内描边、大圆角、#0A84FF 强调色、胶囊控件、iOS 式开关、150-250ms 缓动
+- 主题表面样式只允许在 `frontend/src/styles/base.css` 末尾的「Liquid Glass 主题层」统一覆盖；不要在页面区块里再散落定义背景/阴影/圆角
 - 保留 `frontend/src/pages/SourcesPage.vue` 的信息流式数据源列表和右侧标签策略面板
 - 清理冲突 CSS，避免同一页面布局在 `frontend/src/styles/base.css` 里被多处重复定义
 
@@ -87,6 +88,6 @@ contracts 管字段、流程、映射和接口边界。
 - 标准公司 SQL 必须通过 `scripts/validate_company_sql.py`；SQL 预览标题统一为 `InfoWatchtower Company SQL Preview`，0505 预览是字段校验基准。
 - `planning_intel` 成品新闻的一级标签必须是旧系统约定的 10 个 AI 标签，默认来自 `config/taxonomy/news_categories.json`；数据源侧可以使用 `config/taxonomy/source_tags.json` 的方向标签，但这些标签只是源管理、覆盖分析和评分先验，不能写入 `generated_news.category` 或公司 SQL category。
 - 一级/二级标签由工作台统一策略管理，不在单个数据源配置，因为一个数据源可能覆盖多个关注方向。
-- 前端数据源页的设计基线是浅色商务工作台、indigo 主色、slate 中性色、信息流式数据源列表、右侧 tab 化标签策略面板；不要回退成深色壳、宽表格、绿色/青色主调或单源标签配置。
+- 前端设计基线是 Apple 液态玻璃（Liquid Glass，用户 2026-07 审批）：浅色柔光渐变底、磨砂玻璃面板、#0A84FF 强调色；数据源页保持信息流式源列表、右侧 tab 化标签策略面板；不要回退成深色壳、宽表格、绿色/青色主调或单源标签配置。
 - 密钥、token、cookie 和 `.env` 不进入 Git，不进入同步包。
 - 私有参考仓 `InfoWatchtower-References` 是参考资料，不是新系统运行入口。

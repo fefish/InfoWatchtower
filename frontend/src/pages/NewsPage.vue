@@ -193,13 +193,14 @@ function dailyLabel(group: DedupeGroupRecord) {
 }
 
 function groupScore(group: DedupeGroupRecord) {
-  return group.recommendation?.final_score ?? winnerOf(group)?.rank_score ?? 0;
+  // 推荐分是 0-100；去重 rank_score 是无上限的内部排序权重，两者不可混显
+  return group.recommendation?.final_score ?? null;
 }
 
 function scoreParts(group: DedupeGroupRecord): [string, number][] {
   const recommendation = group.recommendation;
   if (!recommendation) {
-    return [["来源排序", winnerOf(group)?.rank_score ?? 0]];
+    return [];
   }
   return [
     ["质量", recommendation.quality_score],
@@ -313,8 +314,8 @@ onMounted(loadCandidatePool);
               </div>
               <aside class="candidate-judge">
                 <span class="score-badge">{{ group.recommendation ? "recommend" : "winner" }}</span>
-                <strong>{{ scoreText(groupScore(group)) }}</strong>
-                <small>{{ group.recommendation ? "最终推荐分" : "来源排序分" }}</small>
+                <strong>{{ groupScore(group) !== null ? scoreText(groupScore(group)!) : "—" }}</strong>
+                <small>{{ group.recommendation ? "推荐分（0-100）" : "待推荐评分" }}</small>
               </aside>
             </div>
 
@@ -379,7 +380,7 @@ onMounted(loadCandidatePool);
                     {{ item.is_winner ? "winner" : "重复" }}
                   </span>
                   <strong>{{ item.title }}</strong>
-                  <small>{{ item.source_name }} · 分数 {{ scoreText(item.rank_score) }}</small>
+                  <small>{{ item.source_name }} · 去重权重 {{ scoreText(item.rank_score) }}</small>
                   <a v-if="item.source_url" :href="item.source_url" target="_blank">打开</a>
                 </div>
               </div>

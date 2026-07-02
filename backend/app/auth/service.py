@@ -102,21 +102,24 @@ AI_TOOLS_LABEL_POLICY = {
     "tagging_stages": ["news_generation", "post_dedupe_labeling"],
 }
 
+# 导航垂直分组：today 今日速览 / collect 情报采集 / curate 编审工作流
+# / library 资料库 / collab 协作 / system 系统
 CORE_WORKSPACE_SECTIONS = [
-    ("dashboard", "工作台", "page", "/dashboard", 10),
-    ("source_management", "数据源管理", "page", "/sources", 20),
-    ("candidate_pool", "候选池", "page", "/news", 30),
-    ("daily_reports", "日报", "page", "/daily-reports", 40),
-    ("weekly_reports", "周报", "page", "/weekly-reports", 50),
-    ("historical_reports", "历史归档", "page", "/historical-reports", 52),
-    ("entity_milestones", "实体大事记", "page", "/entity-milestones", 53),
-    ("quality_archive", "质量归档", "page", "/quality-archive", 54),
-    ("requirements", "内部需求", "page", "/requirements", 55),
-    ("topic_tasks", "指派任务", "page", "/tasks", 60),
-    ("sync", "同步", "page", "/sync", 68),
-    ("exports", "SQL导出", "page", "/exports", 70),
-    ("users", "用户权限", "page", "/users", 80),
-    ("audit_logs", "审计", "page", "/audit-logs", 90),
+    ("dashboard", "今日速览", "page", "/dashboard", 10, "today"),
+    ("source_management", "数据源管理", "page", "/sources", 20, "collect"),
+    ("ingestion_coverage", "抓取与覆盖", "page", "/ingestion-runs", 25, "collect"),
+    ("candidate_pool", "候选池", "page", "/news", 30, "curate"),
+    ("daily_reports", "日报编审", "page", "/daily-reports", 40, "curate"),
+    ("weekly_reports", "周报编审", "page", "/weekly-reports", 50, "curate"),
+    ("historical_reports", "历史报告库", "page", "/historical-reports", 52, "library"),
+    ("entity_milestones", "实体大事记", "page", "/entity-milestones", 53, "library"),
+    ("quality_archive", "质量归档", "page", "/quality-archive", 54, "library"),
+    ("requirements", "内部需求", "page", "/requirements", 55, "collab"),
+    ("topic_tasks", "指派任务", "page", "/tasks", 60, "collab"),
+    ("sync", "同步", "page", "/sync", 68, "system"),
+    ("exports", "SQL导出", "page", "/exports", 70, "system"),
+    ("users", "用户权限", "page", "/users", 80, "system"),
+    ("audit_logs", "审计", "page", "/audit-logs", 90, "system"),
 ]
 
 
@@ -463,11 +466,11 @@ def _copy_policy(policy: dict) -> dict:
 def _ensure_workspace_sections(
     session: Session,
     workspace: Workspace,
-    section_definitions: list[tuple[str, str, str, str, int]],
+    section_definitions: list[tuple[str, str, str, str, int, str]],
 ) -> None:
     existing = {section.section_key: section for section in workspace.sections}
     desired_keys = {section_key for section_key, *_ in section_definitions}
-    for section_key, name, section_type, route_path, sort_order in section_definitions:
+    for section_key, name, section_type, route_path, sort_order, group in section_definitions:
         section = existing.get(section_key)
         if section is None:
             section = WorkspaceSection(
@@ -478,6 +481,7 @@ def _ensure_workspace_sections(
                 route_path=route_path,
                 sort_order=sort_order,
                 enabled=True,
+                config_json={"group": group},
             )
             session.add(section)
         else:
@@ -486,6 +490,7 @@ def _ensure_workspace_sections(
             section.route_path = route_path
             section.sort_order = sort_order
             section.enabled = True
+            section.config_json = {**(section.config_json or {}), "group": group}
 
     for section_key, section in existing.items():
         if section_key not in desired_keys:

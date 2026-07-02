@@ -118,7 +118,7 @@ PATCH /api/users/{id}/roles
 GET  /api/audit-logs
 ```
 
-`POST /api/ingestion/runs` 支持 `concurrency` 和 `source_timeout_seconds`，用于几百个源的并发抓取和慢源隔离；默认值来自 `INGESTION_CONCURRENCY=8`、`INGESTION_SOURCE_TIMEOUT_SECONDS=25`。`POST /api/ingestion/backfill-runs` 支持 `rss_window/paper_api/archive_page/sitemap/manual_import` 模式；第一版仍只承诺把补采结果先写入 `raw_items`，后续复用标准化、去重、推荐和日报链路。
+`POST /api/ingestion/runs` 支持 `concurrency`、`source_timeout_seconds` 和 `max_items_per_source`（单源条数上限，对齐 Tech Insight Loop 的单源上限行为，截断按 feed 新在前顺序）；默认值来自 `INGESTION_CONCURRENCY=8`、`INGESTION_SOURCE_TIMEOUT_SECONDS=25`。RSS/页面适配器统一使用浏览器 User-Agent（`app/adapters/base.py` 的 `BROWSER_FETCH_HEADERS`，与旧系统一致），降低站点反爬 403。`POST /api/ingestion/backfill-runs` 支持 `rss_window/paper_api/archive_page/sitemap/manual_import` 模式；第一版仍只承诺把补采结果先写入 `raw_items`，后续复用标准化、去重、推荐和日报链路。
 
 `POST /api/workspaces` 是工作台自助扩展入口（super_admin）：按 `code/name/description/workspace_type/default_domain_code` 创建新工作台，自动注册全部核心页面分区、默认标签策略（`ai_sql_categories`，可随后用 label-policy 接口改成工作台自己的口径）和超管 owner 成员。启动 seed 只维护内置 `planning_intel/ai_tools`，不会停用或覆盖自建工作台。契约见 `config/contracts/workspace_model.json` 的 `workspace_creation`。
 
@@ -169,6 +169,17 @@ workspace_sections     当前工作台启用的页面
 /audit-logs
 ```
 
+导航按「工作角色的动作垂直」分为六组，组信息来自 `workspace_sections.config_json.group`，前端不做硬编码分组：
+
+| 组 | 分区 | 回答的问题 |
+|---|---|---|
+| today 今日 | 今日速览 | 系统今天跑得怎么样、有什么等我处理 |
+| collect 情报采集 | 数据源管理、抓取与覆盖 | 信息从哪来、抓没抓到 |
+| curate 编审工作流 | 候选池、日报编审、周报编审 | 读什么、采信什么、发布什么 |
+| library 资料库 | 历史报告库、实体大事记、质量归档 | 过去沉淀了什么（只读） |
+| collab 协作 | 内部需求、指派任务 | 团队协作事项 |
+| system 系统 | 同步、SQL导出、用户权限、审计 | 管理与运维 |
+
 当前前端设计准则：
 
 - 使用浅色工作台壳和分组导航；导航数据来自 `workspace_sections`，不要在前端默认写死插件页。
@@ -179,18 +190,20 @@ workspace_sections     当前工作台启用的页面
 
 ### 3.1 前端高保真基线
 
-当前前端视觉基线来自用户确认过的高保真方案，后续不要在没有明确设计变更的情况下覆盖：
+当前视觉基线是用户 2026-07 审批的 Apple 液态玻璃（Liquid Glass）方案，元素清单如下，后续不要在没有明确设计变更的情况下覆盖：
 
-- 整体：`#f8fafc` 背景、白色侧边栏、白色主内容、slate 中性色、indigo 主色。
-- 侧边栏：`IW` 方形 logo、工作台选择器、`Menu/System` 分组导航、active 项使用 indigo 浅底。
-- 顶栏：紧凑白色顶栏，包含工作台名称、说明、搜索入口、通知按钮和当前用户。
-- 数据源页：上方为 compact stats/action bar；主体是左侧信息流式数据源列表 + 右侧 `380px` 标签策略面板。
-- 数据源列表：每个源是一行信息流卡片，显示图标、名称、URL、类型、domain、最近成功/错误；操作按钮只做配置、抓取等源级动作。
-- 标签策略：右侧 panel 使用 `一级标签 / 二级标签 / 新闻结构` tab；一级/二级新闻标签属于工作台策略。`planning_intel` 的成品新闻一级标签默认来自 `config/taxonomy/news_categories.json` 的 AI 十分类；`config/taxonomy/source_tags.json` 是数据源侧方向标签，只在数据源列表和后续覆盖分析/评分先验中使用。
-- 颜色：业务主按钮使用 indigo；启用状态可以使用绿色，但页面主调不能变成绿色、青色或深色。
-- CSS 维护：同一页面布局只允许在一个位置定义最终样式；改 `/sources` 时要清理旧的重复选择器，避免后写规则覆盖高保真。
+- 底色：多层柔光渐变（白→淡蓝灰，带蓝/紫/青彩色光晕，`background-attachment: fixed`），内容区透出底色。
+- 材质：侧边栏、顶栏、滑出面板、弹窗为磨砂玻璃（`backdrop-filter: blur(28px) saturate(1.7)`）；内容卡片为半透明白（不加 blur，控制性能），统一 1px 半透明白内描边高光 + 多层柔和阴影。
+- 圆角：卡片 `--radius-card: 18px`，控件 `--radius-control: 11px`，导航项/按钮/徽章胶囊化（999px）。
+- 色彩：灰白中性底 + 单一强调蓝 `#0A84FF`（`--color-primary`），文本 `#1d1d1f`/`#6e6e73` 苹果灰阶；开关激活用 iOS 绿 `#34c759`；状态色克制。
+- 字体：`-apple-system/SF Pro` 优先字体栈，大标题重字重 + 负字距，正文细，靠字重分层。
+- 控件：胶囊按钮（主按钮蓝渐变+蓝色投影）、iOS 式开关（appearance:none 自绘）、焦点 3px 蓝色光环。
+- 动效：150-250ms 缓动；卡片/按钮悬停上浮 1px + 阴影加深。
+- 实现约束：主题表面样式集中在 `frontend/src/styles/base.css` 末尾的「Liquid Glass 主题层」，该层只覆盖表面属性（背景/边框/圆角/阴影/滤镜/过渡），不改布局；设计 token 全部定义在 `:root`。
+- 数据源页结构保持：上方 compact stats/action bar，左侧信息流式源列表 + 右侧标签策略面板（`一级标签 / 二级标签 / 新闻结构` tab）。
+- CSS 维护：同一页面布局只允许在一个位置定义最终样式；表面主题只允许在主题层覆盖一次。
 
-如果后续要重做视觉风格，必须同时更新本节、`AGENTS.md`、`frontend/src/layouts/AppShell.vue`、`frontend/src/pages/SourcesPage.vue` 和 `frontend/src/styles/base.css`，不要只改 CSS。
+如果后续要重做视觉风格，必须同时更新本节、`AGENTS.md` 和 `frontend/src/styles/base.css` 的 token 与主题层，不要只改零散 CSS。
 
 ### 3.2 当前页面实现快照
 
@@ -200,13 +213,20 @@ workspace_sections     当前工作台启用的页面
 - 侧边栏工作台切换器下方提供“新建工作台”入口（仅 super_admin 可见）：填 code/name/描述/默认主题域即创建，自动带全部核心页面和默认标签策略，创建后切换到新工作台并跳转数据源管理页配置信息源。
 - `/recommendations` 和 `/news` 已展示 `ContentScorer` 结构化准入结果：`admission_level`、`admission_score`、`admission_pool`、噪声标签、限制原因和专家路由。
 - 仍是 v1 能力：周报只管理采信项和板块，不自动生成整篇周报；历史归档页只读展示 `historical_reports` 和导入验收摘要，导入验收摘要覆盖历史 raw、报告、实体、事件、历史反馈和旧任务记录，不编辑、不采信、不导出 SQL、不执行导入脚本；实体大事记页只读展示旧实体和事件时间线，不触发导入、推荐或采信；质量归档页只读展示旧反馈、质量反馈和旧任务统计，不创建当前评论/评分/抓取任务；同步页只记录同步 run，不生成同步包；SQL 导出页可生成/预览/下载，但条目级追溯和导出前字段校验还要补。
-- 设计保护线：不要把已确认的浅色 indigo/slate 工作台壳、信息流式数据源列表和右侧 tab 化标签策略面板回退成深色壳、宽表格、绿色/青色主调或单源标签配置。
+- `/dashboard` 已重做为晨报式「今日速览」：流水线漏斗 hero、头条候选、报告/趋势侧栏、源健康和快捷入口；导航按 today/collect/curate/library/collab/system 六组垂直分组渲染。
+- 响应式基线：≥1440 舒适布局；≤1120 侧栏坍缩为 76px 图标栏（图标带 title 提示），顶栏出现工作台切换下拉；≤860 主内容单列堆叠、隐藏全局搜索。字号与间距用 clamp 流式收缩。
+- 设计保护线：不要把已确认的液态玻璃壳、信息流式数据源列表和右侧 tab 化标签策略面板回退成深色壳、宽表格、绿色/青色主调或单源标签配置。
 
 ## 4. 页面职责
 
-`/dashboard`：
+`/dashboard`（今日速览，晨报式首页）：
 
-- 展示今日抓取、推荐、待采信、已发布、异常源、热门板块。
+- 只读速览页，不做任何写操作；10 秒内回答「系统今天跑得怎么样、有什么等我处理、最近产出了什么」。
+- Hero 区：日期 + 今日情报流水线漏斗（启用源 → 抓取成功 → 今日新增 → 去重代表 → 推荐候选 → 已采信 → 日报状态），数据来自 `GET /api/ingestion/coverage?day_key=今天`。
+- 主区左：今日头条候选 Top6（去重代表 + 准入等级彩色徽章 + 推荐分 + 多源报道数），来自 `GET /api/dedupe-groups` 按 `final_score` 排序；点击去候选池。
+- 主区右：最新日报卡（日期、状态、采信数、分类分布、进入编审）、最新周报卡、近七日采信趋势条（来自日报列表逐日条目数，已发布高亮）。
+- 底部：源健康（失败源 Top3 + 待补入口提醒，链接数据源管理）与快捷入口（抓取与覆盖 / 新增信息源 / SQL 导出）。
+- 空状态给动作引导（例如「先跑一次抓取 →」），不出现无信息的大数字卡。
 
 `/sources`：
 
