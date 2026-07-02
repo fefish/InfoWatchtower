@@ -7,7 +7,7 @@ from urllib.parse import urljoin
 
 import httpx
 
-from app.adapters.base import RawItemInput
+from app.adapters.base import BROWSER_FETCH_HEADERS, RawItemInput
 from app.models.content import DataSource
 
 
@@ -19,7 +19,11 @@ class PageListingAdapter:
         page_url = str(config.get("page_url") or data_source.url or "").strip()
         if not page_url:
             return []
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(
+            timeout=15.0,
+            follow_redirects=True,
+            headers=BROWSER_FETCH_HEADERS,
+        ) as client:
             response = await client.get(page_url)
             response.raise_for_status()
             links = _extract_links(
@@ -40,7 +44,11 @@ class ManualPageAdapter:
         articles = list(config.get("articles") or [])
         if not articles and data_source.url:
             articles = [{"url": data_source.url}]
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(
+            timeout=15.0,
+            follow_redirects=True,
+            headers=BROWSER_FETCH_HEADERS,
+        ) as client:
             return [
                 await _fetch_article(
                     client,

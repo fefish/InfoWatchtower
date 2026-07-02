@@ -10,7 +10,7 @@ from typing import Any
 import feedparser
 import httpx
 
-from app.adapters.base import RawItemInput
+from app.adapters.base import BROWSER_FETCH_HEADERS, RawItemInput
 from app.models.content import DataSource
 
 
@@ -20,7 +20,11 @@ class RssFeedAdapter:
     async def fetch(self, data_source: DataSource) -> list[RawItemInput]:
         if not data_source.url:
             return []
-        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(
+            timeout=20.0,
+            follow_redirects=True,
+            headers=BROWSER_FETCH_HEADERS,
+        ) as client:
             response = await client.get(data_source.url)
             response.raise_for_status()
 

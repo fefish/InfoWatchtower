@@ -200,10 +200,9 @@ async function logout() {
 
     <main class="main-panel">
       <header class="topbar">
-        <div>
-          <p class="eyebrow">产业情报操作系统</p>
+        <div class="topbar-title">
           <h1>{{ workspace.current?.name || "工作台" }}</h1>
-          <p class="topbar-subtitle">{{ workspace.error || workspace.current?.description || "正在加载工作台配置" }}</p>
+          <p class="topbar-subtitle">{{ workspace.error || workspace.current?.description || "" }}</p>
         </div>
 
         <div class="topbar-tools">
@@ -225,9 +224,9 @@ async function logout() {
             <Bell :size="19" />
             <span aria-hidden="true"></span>
           </button>
-          <div class="user-chip">
-            <span>{{ session.user?.display_name }}</span>
-            <strong>{{ session.user?.roles[0] }}</strong>
+          <div class="user-pill" :title="`${session.user?.display_name} · ${session.user?.roles[0]}`">
+            <span class="user-pill-avatar">{{ session.user?.display_name?.slice(0, 1) || "U" }}</span>
+            <span class="user-pill-name">{{ session.user?.display_name }}</span>
           </div>
         </div>
       </header>

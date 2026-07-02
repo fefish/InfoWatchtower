@@ -51,7 +51,38 @@ const selectedRun = computed(() => {
 
 const latestRun = computed(() => runs.value[0] ?? null);
 const selectedSources = computed(() => (selectedRun.value ? sourceSummaries(selectedRun.value) : []));
-const topCoverageSources = computed(() => coverage.value?.sources.slice(0, 36) ?? []);
+const sourceFilter = ref<"all" | "failed" | "productive">("all");
+
+const topCoverageSources = computed(() => {
+  const all = coverage.value?.sources ?? [];
+  if (sourceFilter.value === "failed") {
+    return all.filter((source) => source.run_status === "failed").slice(0, 60);
+  }
+  if (sourceFilter.value === "productive") {
+    return all
+      .filter((source) => source.run_status !== "failed" && (source.run_fetched > 0 || source.raw_in_target > 0))
+      .slice(0, 60);
+  }
+  return all.slice(0, 36);
+});
+
+const failedSourceCount = computed(
+  () => (coverage.value?.sources ?? []).filter((source) => source.run_status === "failed").length
+);
+
+function shortError(error: string) {
+  const first = (error || "").split("\n")[0];
+  return first
+    .replace(/^HTTPStatusError:\s*Client error\s*/i, "")
+    .replace(/^HTTPStatusError:\s*/i, "")
+    .replace(/^ConnectError:\s*$/i, "连接失败")
+    .replace(/^ConnectError:\s*/i, "连接失败：")
+    .replace(/^ReadTimeout:.*$/i, "读取超时")
+    .replace(/^TimeoutError:.*$/i, "抓取超时")
+    .replace(/^RemoteProtocolError:.*$/i, "对端断开连接")
+    .replace(/\s*for url\s+'([^']+)'.*$/i, "")
+    .slice(0, 80);
+}
 const coverageFunnel = computed(() => {
   const funnel = coverage.value?.funnel;
   if (!funnel) {
@@ -517,11 +548,22 @@ onMounted(loadRuns);
             <span>缺日期 {{ summaryNumber(selectedRun, "items_missing_published_at") }}</span>
           </div>
 
+          <div class="coverage-filter" role="tablist" aria-label="源明细筛选">
+            <button type="button" :class="{ active: sourceFilter === 'all' }" @click="sourceFilter = 'all'">全部</button>
+            <button type="button" :class="{ active: sourceFilter === 'productive' }" @click="sourceFilter = 'productive'">
+              有产出
+            </button>
+            <button type="button" :class="{ active: sourceFilter === 'failed' }" @click="sourceFilter = 'failed'">
+              失败 {{ failedSourceCount }}
+            </button>
+          </div>
+
           <div class="source-coverage-list">
             <article
               v-for="source in topCoverageSources"
               :key="source.data_source_id"
               class="source-coverage-row"
+              :class="{ failed: source.run_status === 'failed' }"
             >
               <div class="feed-icon" :class="{ indigo: source.run_status === 'succeeded' || source.run_status === 'completed' }">
                 <Rss v-if="source.source_type === 'rss' || source.source_type === 'paper_rss'" :size="18" />
@@ -537,21 +579,22 @@ onMounted(loadRuns);
                     {{ sourceStatusLabel(source.run_status) }}
                   </span>
                 </div>
-                <div class="coverage-metrics">
+                <div v-if="source.run_status !== 'failed'" class="coverage-metrics">
                   <span>抓取 {{ coverageNumber(source, "run_fetched") }}</span>
                   <span>新建 {{ coverageNumber(source, "run_created") }}</span>
-                  <span>更新 {{ coverageNumber(source, "run_updated") }}</span>
                   <span>入窗 {{ coverageNumber(source, "in_target_range") || coverageNumber(source, "raw_in_target") }}</span>
-                  <span>缺日期 {{ coverageNumber(source, "missing_published_at") }}</span>
                   <span>新闻 {{ coverageNumber(source, "news_items") }}</span>
                   <span>winner {{ coverageNumber(source, "dedupe_winners") }}</span>
                   <span>推荐 {{ coverageNumber(source, "recommendation_selected") }}/{{ coverageNumber(source, "recommendation_candidates") }}</span>
                   <span>采信 {{ coverageNumber(source, "daily_adopted") }}</span>
                 </div>
-                <p v-if="source.error" class="source-error">
-                  <AlertCircle :size="14" />
-                  <span>{{ source.error }}</span>
-                </p>
+                <details v-if="source.error" class="source-error-fold">
+                  <summary>
+                    <AlertCircle :size="13" />
+                    <span>{{ shortError(source.error) }}</span>
+                  </summary>
+                  <p>{{ source.error }}</p>
+                </details>
               </div>
               <CheckCircle2 v-if="source.run_status === 'succeeded' || source.run_status === 'completed'" :size="18" />
             </article>
