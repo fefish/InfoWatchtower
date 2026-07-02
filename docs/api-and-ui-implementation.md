@@ -179,18 +179,20 @@ workspace_sections     当前工作台启用的页面
 
 ### 3.1 前端高保真基线
 
-当前前端视觉基线来自用户确认过的高保真方案，后续不要在没有明确设计变更的情况下覆盖：
+当前视觉基线是用户 2026-07 审批的 Apple 液态玻璃（Liquid Glass）方案，元素清单如下，后续不要在没有明确设计变更的情况下覆盖：
 
-- 整体：`#f8fafc` 背景、白色侧边栏、白色主内容、slate 中性色、indigo 主色。
-- 侧边栏：`IW` 方形 logo、工作台选择器、`Menu/System` 分组导航、active 项使用 indigo 浅底。
-- 顶栏：紧凑白色顶栏，包含工作台名称、说明、搜索入口、通知按钮和当前用户。
-- 数据源页：上方为 compact stats/action bar；主体是左侧信息流式数据源列表 + 右侧 `380px` 标签策略面板。
-- 数据源列表：每个源是一行信息流卡片，显示图标、名称、URL、类型、domain、最近成功/错误；操作按钮只做配置、抓取等源级动作。
-- 标签策略：右侧 panel 使用 `一级标签 / 二级标签 / 新闻结构` tab；一级/二级新闻标签属于工作台策略。`planning_intel` 的成品新闻一级标签默认来自 `config/taxonomy/news_categories.json` 的 AI 十分类；`config/taxonomy/source_tags.json` 是数据源侧方向标签，只在数据源列表和后续覆盖分析/评分先验中使用。
-- 颜色：业务主按钮使用 indigo；启用状态可以使用绿色，但页面主调不能变成绿色、青色或深色。
-- CSS 维护：同一页面布局只允许在一个位置定义最终样式；改 `/sources` 时要清理旧的重复选择器，避免后写规则覆盖高保真。
+- 底色：多层柔光渐变（白→淡蓝灰，带蓝/紫/青彩色光晕，`background-attachment: fixed`），内容区透出底色。
+- 材质：侧边栏、顶栏、滑出面板、弹窗为磨砂玻璃（`backdrop-filter: blur(28px) saturate(1.7)`）；内容卡片为半透明白（不加 blur，控制性能），统一 1px 半透明白内描边高光 + 多层柔和阴影。
+- 圆角：卡片 `--radius-card: 18px`，控件 `--radius-control: 11px`，导航项/按钮/徽章胶囊化（999px）。
+- 色彩：灰白中性底 + 单一强调蓝 `#0A84FF`（`--color-primary`），文本 `#1d1d1f`/`#6e6e73` 苹果灰阶；开关激活用 iOS 绿 `#34c759`；状态色克制。
+- 字体：`-apple-system/SF Pro` 优先字体栈，大标题重字重 + 负字距，正文细，靠字重分层。
+- 控件：胶囊按钮（主按钮蓝渐变+蓝色投影）、iOS 式开关（appearance:none 自绘）、焦点 3px 蓝色光环。
+- 动效：150-250ms 缓动；卡片/按钮悬停上浮 1px + 阴影加深。
+- 实现约束：主题表面样式集中在 `frontend/src/styles/base.css` 末尾的「Liquid Glass 主题层」，该层只覆盖表面属性（背景/边框/圆角/阴影/滤镜/过渡），不改布局；设计 token 全部定义在 `:root`。
+- 数据源页结构保持：上方 compact stats/action bar，左侧信息流式源列表 + 右侧标签策略面板（`一级标签 / 二级标签 / 新闻结构` tab）。
+- CSS 维护：同一页面布局只允许在一个位置定义最终样式；表面主题只允许在主题层覆盖一次。
 
-如果后续要重做视觉风格，必须同时更新本节、`AGENTS.md`、`frontend/src/layouts/AppShell.vue`、`frontend/src/pages/SourcesPage.vue` 和 `frontend/src/styles/base.css`，不要只改 CSS。
+如果后续要重做视觉风格，必须同时更新本节、`AGENTS.md` 和 `frontend/src/styles/base.css` 的 token 与主题层，不要只改零散 CSS。
 
 ### 3.2 当前页面实现快照
 
