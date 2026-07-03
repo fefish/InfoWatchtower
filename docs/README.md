@@ -8,12 +8,13 @@
 
 1. 先读 `AGENTS.md`。
 2. 再读 `docs/00-system-design.md`。
-3. 再读 `docs/implementation-handoff.md`。
-4. 再读 `docs/01-implementation-plan.md`。
-5. 先读 `config/contracts/README.md`，理解 contracts 是什么。
-6. 写代码时查相关 `config/contracts/*.json` 和 `config/taxonomy/*.json`。
-7. 只在需要模块细节时阅读对应专题附录。
-8. 旧系统事实从私有参考仓查询；主仓说明见 `references/README.md`，不从旧代码直接继承新架构。
+3. 想快速掌握"有哪些能力、分布在哪、还差什么"，读 `docs/architecture-capability-map.md`。
+4. 再读 `docs/implementation-handoff.md`。
+5. 再读 `docs/01-implementation-plan.md`。
+6. 先读 `config/contracts/README.md`，理解 contracts 是什么。
+7. 写代码时查相关 `config/contracts/*.json` 和 `config/taxonomy/*.json`。
+8. 只在需要模块细节时阅读对应专题附录。
+9. 旧系统事实从私有参考仓查询；主仓说明见 `references/README.md`，不从旧代码直接继承新架构。
 
 当前进度：阶段 0-6 标准日报链路已完成可回填闭环。阶段 3 已完成旧种子源导入、共享数据源池、默认工作台源链接、工作台统一标签/新闻结构策略、adapter 框架、RSS/paper RSS/页面源抓取到 `raw_items`、工作台级 ingestion run API 和 Redis/RQ worker + scheduler 调度入口；规划部工作台 v1 默认 294 个共享源全部启用，CSV 状态/纳入建议只作为评分先验。阶段 4 已完成 raw 到 news 标准化、canonical URL、dedupe key、工作台隔离硬去重、winner/loser 回写和查询 API；阶段 5 已完成完整流水线 API、按 `day_key` 推荐 run、可解释推荐分、可选 MiniMax 中国区 OpenAI-compatible `generated_news`、日报草稿、发布、条目编辑和点赞/评分/评论最小 API；阶段 6 已实现已发布日报的公司 SQL 标准导出，`POST /api/exports/company-sql/daily-reports/{daily_report_id}` 只导出 `adoption_status = 2`、`generated_news.generation_status = ready` 且 `generated_by` 非 `rule_v1` 的采信项；`GET /api/exports/{export_job_id}/trace` 可按 SQL 语句追到日报条目、生成稿、news、raw 和数据源；MiniMax 未启用、超时或失败时只生成 `fallback_needs_review` 草稿，不直接写入标准 SQL。`planning_intel` 的成品新闻一级分类使用 `config/taxonomy/news_categories.json` 里的 AI 十分类，SQL category 默认使用同一个 `generated_news.category`；`config/taxonomy/source_tags.json` 是数据源侧方向标签，只用于源管理、覆盖分析和评分先验。`planning_intel/company_sql_v1` 生成稿必须带 `background/effects/eventSummary/technologyAndInnovation/valueAndImpact`；导出时 `content_json` 只保留这五个旧内网字段，`created_at` 必须严格对齐旧脚本和已验证合集 SQL 的列顺序与字面量样式，使用 `'YYYY-MM-DD HH:MM:SS'`，来源缺失发布时间时兜底为日报 `day_key 09:00:00`。所有 SQL 预览统一 `InfoWatchtower Company SQL Preview` 标题，且导入内网前必须通过 `python3 scripts/validate_company_sql.py` 逐字段校验。scheduler 开启后可按固定北京时间执行每日完整流水线：抓取、标准化/去重、推荐和日报草稿；生产推荐 `INGESTION_SCHEDULER_DAILY_TIME=09:00`、`INGESTION_SCHEDULER_TIMEZONE=Asia/Shanghai`、`DAILY_PIPELINE_DAY_OFFSET_DAYS=-1`，每天早上生成昨天日报。前端首页必须显示动态工作台状态；工作台壳和导航必须来自后端工作台配置；数据源页采用信息流式共享源列表和右侧标签/新闻结构 tab 面板；候选池页已接入 `dedupe_groups/news_items` 展示 winner/loser、重复来源、推荐分、日报采信状态和追溯 ID；推荐运行页已接入 recommendation runs 和分数拆解；抓取覆盖率页已接入 ingestion runs、RSS 窗口补采、sitemap/归档页/手工导入补采模式、目标日覆盖漏斗和每源链路详情；周报页已接入周报草稿、按一级标签形成板块、条目采信/剔除、板块内排序、编辑和发布；SQL 导出页已接入已发布日报、导出历史和条目追溯；日报页可按日期生成日报草稿，支持生成超时兜底、ready/fallback 状态展示和草稿生成稿重跑，并通过 brief 列表 + 详情弹窗完成正文查看、采信、编辑、点赞、评分、评论和追溯；本地恢复和演示补齐可用 `scripts/import_company_sql_preview_to_reports.py` 把已校验单日 SQL 预览回填为日报/周报工作台数据，且不改变公司 SQL 导出契约；需求、任务、同步、审计页已从路线图占位升级为真实 API 页面，同步页支持导出 zip 同步包、下载、导入到 `sync_inbox` 做幂等记录和审计。`2026-05-21` 到 `2026-05-27` 的规划部日报已发布并导出 SQL；其中 5/27 通过当天 RSS/paper RSS 窗口补采新增 72 条 raw/news 后生成 6 条采信项。`planning_intel` 与 `ai_tools` 的默认标签策略必须保持后端隔离。
 
@@ -34,6 +35,8 @@ Tech Insight Loop 历史反馈和旧任务归档模型已实现：`historical_fe
 Tech Insight Loop 质量归档只读 API/UI 已实现：`GET /api/quality-archive/summary`、`GET /api/historical-feedback-items`、`GET /api/historical-job-runs` 和前端 `/quality-archive` 可查看旧反馈、旧质量反馈、旧任务记录、失败源统计和反馈引用缺口。该页面只读，不触发导入，不创建当前评论/评分/抓取任务，不进入推荐、采信或公司 SQL。
 
 Tech Insight Loop 导入验收 API/UI 已实现：`GET /api/legacy-import/summary` 和 `GET /api/legacy-import/gaps` 可按当前主库统计历史素材 raw、历史日报/周报、实体、实体大事记、历史反馈和旧任务导入覆盖率，并集中查看报告、实体事件和历史反馈的未解析引用。前端 `/historical-reports` 顶部展示导入验收面板。该入口只读，不执行导入脚本，不触发推荐、采信或公司 SQL。命令行执行验收脚本已补齐：`scripts/tech_insight_loop_import_verify.py --check-only` 只读核对当前库；小批量执行使用 `--execute --article-limit 20 --report-limit 5 --entity-limit 5 --milestone-limit 20`；如需同时导入历史反馈和旧任务归档，加 `--include-quality-archive --feedback-limit 4 --quality-feedback-limit 4 --job-limit 10`；全量执行必须显式加 `--confirm-full-import`。报告输出到 `outputs/tech_insight_loop/tech_insight_loop_import_execution_report.{json,md}`。
+
+第三轮平台化与成稿融合补充（2026-07-02）：工作台自助扩展（`POST /api/workspaces` 自动配齐核心分区/标签策略/内置格式/成员，seed 不覆盖自建台）、自建信息源（`POST /api/sources` 入共享池并自动启用、同 URL 复用、`PATCH` 补入口）、抓取对齐旧系统（浏览器 UA + `max_items_per_source`）、「一次采信，多版成稿」P1-P4（`report_formats` 注册表、`report_renditions` 投影、`insight_json`、头条 Top6 可调、日报/周报双版视图与 MD/HTML 导出、日报页默认技术洞察版成品）、Apple Liquid Glass 视觉基线、六组垂直导航与晨报式今日速览。能力分块、分布架构与差距清单见 `docs/architecture-capability-map.md`。
 
 SQL 时间口径补充：`created_at` 字面量按北京时间 `Asia/Shanghai` 渲染，和日报 `day_key` 的归属判断一致；字段格式仍为内网兼容的 `'YYYY-MM-DD HH:MM:SS'`，不得改成函数表达式或空值。
 

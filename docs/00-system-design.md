@@ -53,6 +53,8 @@ Tech Insight Loop 导入验收摘要和引用缺口入口已实现：`GET /api/l
 
 工作台级抓取已经支持并发池和单源超时：默认 `INGESTION_CONCURRENCY=8`、`INGESTION_SOURCE_TIMEOUT_SECONDS=25`，API 可用 `concurrency` 和 `source_timeout_seconds` 覆盖。这样几百个数据源不会因为少数慢源被串行阻塞，抓取结果仍按源顺序串行入库，保留幂等写入和运行摘要。
 
+第三轮平台化与成稿融合已完成（2026-07-02）：工作台可自助扩展——`POST /api/workspaces` 在界面上创建新工作台并自动配齐核心分区、默认标签策略、内置成稿格式和超管成员，启动 seed 只维护内置 `planning_intel/ai_tools`、不会覆盖自建工作台；信息源可自建——`POST /api/sources` 把 rss/paper_rss/page_manual/page_monitor 源写入共享池并自动在发起工作台启用，同 URL 复用不重复建源，`PATCH /api/sources/{id}` 可编辑源定义并给 `metadata_only/needs_entry` 治理记录补入口（重复导入种子不会抹掉手工修复）；抓取行为与旧系统对齐——adapter 统一浏览器 UA（大幅降低 403 失败）、`max_items_per_source` 单源上限参数化。报告层完成「一次采信，多版成稿」P1-P4：`report_formats` 格式注册表（`company_sql_v1` locked 内置 + `tech_insight_v1` 技术洞察版 + 界面注册的自定义格式）、`report_renditions` 投影快照、`generated_news.insight_json`（板块/要点/总结/标签行，模型产出+规则降级）、`daily_report_items.is_headline` 自动 Top6+编辑可调、日报/周报双版视图与 Markdown/HTML 导出（版式对齐技术洞察快报）；日报页默认打开技术洞察版成品，内网版即编审视图。前端完成 Apple Liquid Glass 视觉基线、按 today/collect/curate/library/collab/system 六组的数据库驱动垂直导航、晨报式今日速览（流水线漏斗/头条候选/报告卡/源健康）和 ≤1120px 图标栏响应式。能力分块、分布架构与差距清单见 `docs/architecture-capability-map.md`。
+
 文档维护规则见 `docs/README.md`。修改设计时必须同步总纲、对应模块文档和相关 `config/contracts/*.json`，不要形成两套实现口径。
 
 仓库分层：
@@ -105,13 +107,13 @@ references/
 
 因此，如果某天只有少量候选，首先要排查抓取覆盖率、失败源、源本身是否当天发布、RSS 是否保留历史条目，以及历史补采是否可用，而不是直接归因于推荐器漏选。
 
-下一阶段必须继续补齐，按优先级推进：
+持续维护的差距清单（按能力块、含判定标准）以 `docs/architecture-capability-map.md` §4 为准；下面是与第一版施工计划对应的历史视角清单：
 
 1. P0 SQL 导出增强：当前已支持选择已发布日报、查看导出历史、预览和下载 SQL，并通过 trace API 从 SQL 语句追溯到 daily item、generated news、news item、raw item 和 source；下一步补导出前字段长度、URL 长度和 HTML 污染校验摘要。
 2. P0 公网/内网部署与登录安全：当前已有生产 Compose、Caddy 反向代理、生产 env 模板和部署检查脚本；下一步补真实服务器备份恢复演练、登录限流、默认密码治理、Google OIDC 预留和公司 IDaaS code flow adapter 预留。
 3. P0 同步包能力：当前 `/sync` 已能导出同步包、下载 zip、导入到 `sync_inbox` 做幂等记录并写审计；后续补业务表 apply handler、冲突检查和同步审计细化；继续坚持公网公开信号向内网同步，内网用户反馈默认不回流公网。
 4. P1 历史补采深化：当前已支持 `rss_window/paper_api/archive_page/sitemap/manual_import` 运行模式和覆盖率统计；后续要把论文 provider、归档页分页、sitemap 深挖、失败源重试和手工 CSV 上传做成完整可验收体验。`rss_window` 仍只代表当前 feed 窗口恢复，不等同全站历史归档抓取。
-5. P1 周报增强：当前周报 v1 管理采信项和按一级标签分板块；下一步补热度/反馈排序、自动周报正文、周报导出，以及必要时增加不影响公司 SQL category 的 weekly section 映射层。
+5. P1 周报增强：周报双版成稿（技术洞察版按业务板块分组 + MD/HTML 导出）已随 rendition P4 落地；剩余为热度/反馈排序和周报开头摘要段（板块分布/关键亮点）的模型生成。
 6. P1 战略闭环深化：当前 requirement/task 有真实 API 页面和审计；下一步从已发布日报/周报条目沉淀 insight、requirement 和 task，并让任一内部需求可追溯到外部原始信号。
 7. P2 候选池运营增强：当前已展示去重 winner、loser、来源覆盖、推荐分、日报采信状态和追溯 ID；下一步补筛选、采信入口、批量操作和更清晰的质量治理字段。
 8. P2 抓取覆盖率深化：当前已具备 ingestion/backfill run 摘要、每源明细和 raw/news/winner/recommendation/daily 目标日覆盖漏斗；下一步补失败源重试、长期覆盖趋势和异常告警。
@@ -269,11 +271,12 @@ data_sources 共享源池
 -> dedupe_groups / dedupe_group_items
 -> candidate pool
 -> recommendation_runs / recommendation_items
--> generated_news
--> daily_reports / daily_report_items
+-> generated_news（content_json 五段 + insight_json 板块/要点/总结辅助字段）
+-> daily_reports / daily_report_items（adoption_status + is_headline）
+-> report_renditions（按 report_formats 注册表投影：company_sql_v1 / tech_insight_v1 / 自定义）
 -> feedback / comments / ratings
 -> insights / requirements / tasks
--> company SQL export
+-> company SQL export（只走 company_sql_v1 口径）/ Markdown / HTML 导出
 ```
 
 关键原则：
@@ -642,6 +645,10 @@ requirements/tasks/sync/audit v1
 
 ## 15. 附录索引
 
+- `docs/architecture-capability-map.md`：能力分块、每块分布架构与目标态差距清单。
+- `docs/workspace-module-model.md`：工作台、数据源共享与标签模型，含自助建台与自建源。
+- `docs/report-renditions-design.md`：一次采信多版成稿与格式注册表设计（P1-P4 已实施）。
+- `docs/tech-insight-loop-fusion-plan.md`：Tech Insight Loop 融合方案与各轮完成范围。
 - `docs/implementation-handoff.md`：开发任务书和验收标准。
 - `docs/01-implementation-plan.md`：第一版施工顺序、阶段交付物和验收命令。
 - `docs/README.md`：文档地图、单一事实源和修改规则。
