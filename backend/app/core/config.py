@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     auth_mode: str = Field(default="public_password", alias="AUTH_MODE")
     auth_session_secret: str = Field(default="", alias="AUTH_SESSION_SECRET")
     auth_session_cookie: str = Field(default="infowatchtower_session", alias="AUTH_SESSION_COOKIE")
+    auth_session_cookie_secure: bool | None = Field(default=None, alias="AUTH_SESSION_COOKIE_SECURE")
     auth_session_ttl_seconds: int = Field(default=60 * 60 * 12, alias="AUTH_SESSION_TTL_SECONDS")
     auth_auto_provision: bool = Field(default=False, alias="AUTH_AUTO_PROVISION")
     auth_default_role: str = Field(default="viewer", alias="AUTH_DEFAULT_ROLE")

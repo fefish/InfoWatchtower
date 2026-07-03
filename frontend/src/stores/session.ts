@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 
-import { fetchMe, login, logout, type SessionUser } from "../api/auth";
+import { changePassword, fetchMe, login, logout, type SessionUser } from "../api/auth";
 
 export const useSessionStore = defineStore("session", {
   state: () => ({
@@ -37,6 +37,16 @@ export const useSessionStore = defineStore("session", {
     async logout() {
       await logout();
       this.clear();
+    },
+    async changePassword(currentPassword: string, newPassword: string) {
+      this.loading = true;
+      try {
+        const response = await changePassword(currentPassword, newPassword);
+        this.user = response.user;
+        this.checked = true;
+      } finally {
+        this.loading = false;
+      }
     },
     clear() {
       this.user = null;

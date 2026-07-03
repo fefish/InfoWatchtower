@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from "vue-router";
 
+import AccountPage from "../pages/AccountPage.vue";
 import AppShell from "../layouts/AppShell.vue";
 import AuditLogsPage from "../pages/AuditLogsPage.vue";
 import DailyReportsPage from "../pages/DailyReportsPage.vue";
@@ -9,6 +10,7 @@ import EntityMilestonesPage from "../pages/EntityMilestonesPage.vue";
 import ExportsPage from "../pages/ExportsPage.vue";
 import HistoricalReportsPage from "../pages/HistoricalReportsPage.vue";
 import IngestionRunsPage from "../pages/IngestionRunsPage.vue";
+import InvitePage from "../pages/InvitePage.vue";
 import LoginPage from "../pages/LoginPage.vue";
 import NewsPage from "../pages/NewsPage.vue";
 import QualityArchivePage from "../pages/QualityArchivePage.vue";
@@ -31,6 +33,11 @@ export const router = createRouter({
       component: LoginPage
     },
     {
+      path: "/invite/:code",
+      name: "invite",
+      component: InvitePage
+    },
+    {
       path: "/",
       component: AppShell,
       children: [
@@ -47,6 +54,11 @@ export const router = createRouter({
           path: "users",
           name: "users",
           component: UsersPage
+        },
+        {
+          path: "account",
+          name: "account",
+          component: AccountPage
         },
         {
           path: "sources",
@@ -148,11 +160,18 @@ router.beforeEach(async (to) => {
     return session.isAuthenticated ? "/dashboard" : true;
   }
 
+  if (to.path.startsWith("/invite/")) {
+    return true;
+  }
+
   if (!session.isAuthenticated) {
     return {
       path: "/login",
       query: { redirect: to.fullPath }
     };
+  }
+  if (session.user?.status === "must_change_password" && to.path !== "/account") {
+    return "/account";
   }
   return true;
 });

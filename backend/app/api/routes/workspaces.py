@@ -7,11 +7,11 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.routes.auth import get_current_user, require_super_admin
+from app.api.routes.auth import assert_workspace_member, get_current_user, require_super_admin
 from app.auth.service import provision_workspace, write_audit
 from app.core.database import get_db_session
 from app.models.identity import User
-from app.models.workspace import Workspace, WorkspaceSection
+from app.models.workspace import Workspace, WorkspaceMembership, WorkspaceSection
 from app.schemas.workspaces import (
     DEFAULT_REQUIRED_CONTENT_FIELDS,
     WorkspaceCreate,
@@ -27,13 +27,19 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 
 @router.get("", response_model=list[WorkspaceRead])
 def list_workspaces(
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> list[WorkspaceRead]:
-    workspaces = session.scalars(
-        select(Workspace)
-        .where(Workspace.enabled.is_(True))
-    ).all()
+    statement = select(Workspace).where(Workspace.enabled.is_(True))
+    if "super_admin" not in {role.code for role in current_user.roles}:
+        statement = (
+            statement.join(WorkspaceMembership, WorkspaceMembership.workspace_id == Workspace.id)
+            .where(
+                WorkspaceMembership.user_id == current_user.id,
+                WorkspaceMembership.enabled.is_(True),
+            )
+        )
+    workspaces = session.scalars(statement).all()
     workspaces = sorted(
         workspaces,
         key=lambda workspace: (
@@ -86,9 +92,10 @@ def create_workspace(
 @router.get("/{workspace_code}/sections", response_model=list[WorkspaceSectionRead])
 def list_workspace_sections(
     workspace_code: str,
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> list[WorkspaceSectionRead]:
+    assert_workspace_member(session, current_user, workspace_code, min_role="viewer")
     workspace = session.scalar(
         select(Workspace).where(
             Workspace.code == workspace_code,
@@ -112,9 +119,10 @@ def list_workspace_sections(
 @router.get("/{workspace_code}/label-policy", response_model=WorkspaceLabelPolicyRead)
 def get_workspace_label_policy(
     workspace_code: str,
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> WorkspaceLabelPolicyRead:
+    assert_workspace_member(session, current_user, workspace_code, min_role="viewer")
     workspace = _get_enabled_workspace(session, workspace_code)
     return _workspace_label_policy_to_read(workspace)
 
@@ -123,9 +131,10 @@ def get_workspace_label_policy(
 def update_workspace_label_policy(
     workspace_code: str,
     payload: WorkspaceLabelPolicyUpdate,
-    _: User = Depends(require_super_admin),
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> WorkspaceLabelPolicyRead:
+    assert_workspace_member(session, current_user, workspace_code, min_role="admin")
     workspace = _get_enabled_workspace(session, workspace_code)
     allowed_categories = _normalize_policy_categories(payload.allowed_primary_categories)
     if not allowed_categories:

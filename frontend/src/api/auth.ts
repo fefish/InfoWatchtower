@@ -10,11 +10,39 @@ export interface SessionUser {
   department: string | null;
   email: string | null;
   status: string;
+  is_active: boolean;
   roles: UserRole[];
 }
 
 export interface AuthResponse {
   user: SessionUser;
+}
+
+export interface InviteWorkspaceTarget {
+  code: string;
+  workspace_role: string;
+}
+
+export interface InviteRecord {
+  id: string;
+  code: string;
+  email: string | null;
+  role_code: UserRole;
+  workspaces: InviteWorkspaceTarget[];
+  invite_url: string;
+  status: string;
+  expires_at: string;
+  accepted_at: string | null;
+  revoked_at: string | null;
+}
+
+export interface InvitePublicRecord {
+  code: string;
+  email_hint: string | null;
+  role_code: UserRole;
+  workspaces: InviteWorkspaceTarget[];
+  status: string;
+  expires_at: string;
 }
 
 async function requestAuth(path: string, init?: RequestInit): Promise<AuthResponse> {
@@ -38,6 +66,39 @@ export async function login(username: string, password: string): Promise<AuthRes
   return requestAuth("/api/auth/login", {
     method: "POST",
     body: JSON.stringify({ username, password })
+  });
+}
+
+export async function forgotPassword(username: string): Promise<void> {
+  await requestAuth("/api/auth/password/forgot", {
+    method: "POST",
+    body: JSON.stringify({ username })
+  });
+}
+
+export async function changePassword(currentPassword: string, newPassword: string): Promise<AuthResponse> {
+  return requestAuth("/api/auth/password/change", {
+    method: "POST",
+    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword })
+  });
+}
+
+export async function fetchInvite(code: string): Promise<InvitePublicRecord> {
+  const response = await fetch(`/api/auth/invites/${code}`, { credentials: "same-origin" });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(typeof body.detail === "string" ? body.detail : `HTTP ${response.status}`);
+  }
+  return response.json() as Promise<InvitePublicRecord>;
+}
+
+export async function acceptInvite(
+  code: string,
+  payload: { username: string; display_name: string; password: string }
+): Promise<AuthResponse> {
+  return requestAuth(`/api/auth/invites/${code}/accept`, {
+    method: "POST",
+    body: JSON.stringify(payload)
   });
 }
 

@@ -155,10 +155,8 @@ NUL byte 会转义为 `\u0000` 标记并写入 `legacy_import.nul_sanitized_fiel
 | 部署 | `deploy/docker-compose.{local,prod}.yml`（PG+Redis+API+worker+scheduler+Caddy） |
 | 设计系统 | Apple Liquid Glass（`base.css` :root token + 唯一主题层）、晨报式今日速览、≤1120px 图标栏响应式 |
 
-现状：✅ 工作台可自助扩展且 seed 不覆盖自建台；导航/分区/格式全部数据库驱动。
-**Gap**：① workspace membership 级权限执行（模型已有，检查未启用，P1）② 登录限流/
-默认密码治理/OIDC 预留落地（P0 安全）③ 长期覆盖趋势与异常告警（P2）④ 硬件/半导体
-domain pack 样例（P2，证明扩展性）。
+现状：✅ 工作台模型、导航/分区/格式数据库驱动；✅ 登录限流、邀请建号、改密/重置、会话密钥自检、OIDC Protocol 预留和主要业务 API membership gate 已落地。
+**Gap**：① 真实备份恢复演练和首次运行 Setup（P0/WP3）② membership 管理界面（P1/WP2）③ 长期覆盖趋势与异常告警（P2）④ 硬件/半导体 domain pack 样例（P2，证明扩展性）。
 
 ## 4. 差距汇总（按优先级）
 
@@ -166,13 +164,13 @@ domain pack 样例（P2，证明扩展性）。
 |---|---|---|---|
 | P0 | 生产库执行 Tech 历史资产全量导入验收 | G | 本地隔离 PostgreSQL 全量证据已通过；生产库仍需 `--check-only` 覆盖率对齐冻结基线，`validate_tech_import_acceptance.py` 通过，缺口清零或用 accepted-gaps JSON 归档 |
 | P1 | 更多同步 object_type 与冲突解决 UI | F | `data_sources/raw_items/news_items` 已落业务表；后续扩展 generated_news/report 等对象并提供人工冲突处理 |
-| P0 | 生产登录安全（限流/密码治理）+ 备份恢复演练 | H/F | 演练记录入 docs/deployment-ops.md |
+| P0 | 备份恢复演练 + 首次运行 Setup | H/F | 演练记录入 docs/deployment-ops.md；干净环境首访可创建首个管理员 |
 | P0 | MiniMax key 配置后模型版 insight/成稿验收 | D | ✅ `validate_minimax_generation_acceptance.py` live 通过，技术洞察版结构、五段 content_json、短关键词和无编造数值门禁已归档；后续保留生产日报抽检 |
 | P1 | wx:// 公众号 adapter 或替代入口 | A | 31 个待补源可抓取或明确豁免 |
 | P1 | 深度历史补采（归档页/sitemap 深挖） | A | 指定历史日期可恢复候选 |
 | P1 | 周报摘要段模型生成 | D | 周报 rendition 头部自动产出板块分布+亮点 |
 | P1 | 实体大事记从新报告持续沉淀 | G | 采信条目可一键登记实体事件并追溯 |
-| P1 | membership 级权限执行 | H | 非成员访问工作台被拒并审计 |
+| P1 | membership 管理界面 | H | 工作台 admin/owner 可增删成员且不依赖 super_admin |
 | P1 | 流水线计算移出事件循环 | E | 导入期间 API P99 不劣化 |
 | P2 | 评分器运营页 / 观察池复核 | C | 管理员可解释"谁被拒、为什么" |
 | P2 | 候选池批量操作、失败源重试告警、覆盖趋势 | A/E/H | 页面可批量采信；失败源有重试记录 |

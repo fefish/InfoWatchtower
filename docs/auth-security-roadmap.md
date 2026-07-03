@@ -4,14 +4,20 @@
 
 ## 1. 当前实现状态
 
-阶段 2 已实现最小闭环：
+阶段 2 + WP1 已实现：
 
 - `local/public_password`：账号密码登录。
 - `intranet_header`：可信网关传工号和姓名，允许自动开通本地用户。
 - 统一本地身份：所有外部身份都映射到 `users.external_provider + users.external_id`。
 - 统一本地权限：业务授权只看 `users`、`roles`、`permissions`。
 - 会话：后端签发 HttpOnly signed cookie。
+- 会话过期：`AUTH_SESSION_TTL_SECONDS` 控制 cookie max-age。
+- 会话失效：session payload 带 `users.updated_at` 版本，改密或管理员代重置后旧 cookie 失效。
 - 密码：PBKDF2 hash，不存明文。
+- 账户生命周期：管理员邀请建号、撤销邀请、改密、忘记密码恒定响应、管理员代重置临时密码。
+- 登录限流：`login_attempts` 记录同一账号+IP 成功/失败，15 分钟 5 次失败后返回 429。
+- 启动自检：`AUTH_MODE=public_password` 且缺 `AUTH_SESSION_SECRET` 时 API 启动失败。
+- OIDC 预留：`app/auth/oidc.py` 已定义 adapter Protocol，`AUTH_MODE=oidc` 未配置 provider 时返回 501。
 - 审计：登录、登出、角色变更写入 `audit_logs`。
 
 本地 Docker 开发账号：
@@ -32,12 +38,11 @@ POSTGRES_PASSWORD
 
 当前实现可以支撑本地开发和受保护内网试用，但还不是最终公网安全版。
 
-公网部署前必须补强：
+公网继续补强：
 
-- 登录限流：按 IP、用户名、失败次数限制爆破。
 - CSRF：cookie session 下，所有非 GET 请求需要 CSRF token。
 - 服务端 session：signed cookie 无法主动踢下线，建议改成 Redis/DB session。
-- session 轮换：登录、权限变更后重新签发 session。
+- session 管理：补 session 列表和主动踢下线。
 - 密钥轮换：支持 `AUTH_SESSION_SECRET` 多版本轮换。
 - HTTPS：生产必须使用 HTTPS，cookie 必须 `Secure`，反代开启 HSTS。
 - CORS：只允许正式域名。
@@ -152,8 +157,8 @@ email             = email
 
 - Redis/DB session。
 - CSRF token。
-- 登录失败限流。
-- 生产环境强校验密钥。
+- Redis/DB session 与踢下线。
+- `AUTH_SESSION_SECRET` 多版本密钥轮换。
 - 禁止生产默认密码。
 
 ### 5.2 OAuth/OIDC 抽象
@@ -180,8 +185,6 @@ class AuthAdapter:
 
 继续补：
 
-- 用户启停。
-- 管理员改密。
 - session 列表和踢下线。
 - 角色变更后强制刷新 session。
 - 审计页展示登录和角色变更记录。

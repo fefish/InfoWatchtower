@@ -3,23 +3,25 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.api.routes.auth import require_super_admin
+from app.api.routes.auth import assert_workspace_member, get_current_user
 from app.core.database import get_db_session
+from app.models.identity import User
 from app.pipeline.daily import DailyPipelineRequest, daily_pipeline_payload, run_daily_pipeline
 from app.recommendations.service import PublishedDailyReportError
 from app.schemas.pipeline import DailyPipelineRunCreate, DailyPipelineRunRead
 
 router = APIRouter(prefix="/api/pipeline", tags=["pipeline"])
-SUPER_ADMIN = Depends(require_super_admin)
+CURRENT_USER = Depends(get_current_user)
 DB_SESSION = Depends(get_db_session)
 
 
 @router.post("/daily-runs", response_model=DailyPipelineRunRead)
 async def create_daily_pipeline_run(
     payload: DailyPipelineRunCreate,
-    _: object = SUPER_ADMIN,
+    current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> DailyPipelineRunRead:
+    assert_workspace_member(session, current_user, payload.workspace_code, min_role="admin")
     try:
         result = await run_daily_pipeline(
             session,

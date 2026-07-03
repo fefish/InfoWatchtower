@@ -130,8 +130,18 @@ postgres 不映射宿主机 5432
 
 ```text
 AUTH_MODE=public_password
+AUTH_SESSION_SECRET=<long random value>
+AUTH_SESSION_COOKIE_SECURE=true
+AUTH_SESSION_TTL_SECONDS=43200
 AUTH_AUTO_PROVISION=false
+AUTH_DEFAULT_ROLE=viewer
 ```
+
+`AUTH_MODE=public_password` 时，API 启动会检查 `AUTH_SESSION_SECRET`；为空会直接退出并给出
+修复指引。建议由 `openssl rand -hex 32` 生成。公网建号默认走管理员邀请：超级管理员登录
+`/users` 生成邀请链接；用户接受邀请后会写入本地用户、全局角色和工作台 membership。
+用户忘记密码且未接 SMTP 时，管理员可在 `/users` 对该用户执行重置，系统只返回一次性临时
+密码，并强制用户下次登录后先到 `/account` 修改密码。
 
 公网服务器安全组建议只开放：
 

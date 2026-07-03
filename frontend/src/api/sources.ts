@@ -117,8 +117,9 @@ export async function importTechInsightLoopSources(): Promise<TechInsightLoopImp
   });
 }
 
-export async function fetchSource(sourceId: string): Promise<SourceFetchResult> {
-  return requestJson<SourceFetchResult>(`/api/sources/${sourceId}/fetch`, {
+export async function fetchSource(sourceId: string, workspaceCode?: string): Promise<SourceFetchResult> {
+  const params = workspaceCode ? `?${new URLSearchParams({ workspace_code: workspaceCode }).toString()}` : "";
+  return requestJson<SourceFetchResult>(`/api/sources/${sourceId}/fetch${params}`, {
     method: "POST"
   });
 }

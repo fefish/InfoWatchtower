@@ -6,7 +6,7 @@ from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, Table, Tex
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
-from app.models.common import IdMixin, SyncMixin, TimestampMixin
+from app.models.common import IdMixin, JsonColumn, JsonDict, SyncMixin, TimestampMixin
 
 user_roles = Table(
     "user_roles",
@@ -75,3 +75,39 @@ class Permission(IdMixin, TimestampMixin, Base):
         secondary=role_permissions,
         back_populates="permissions",
     )
+
+
+class UserInvite(IdMixin, SyncMixin, TimestampMixin, Base):
+    __tablename__ = "user_invites"
+
+    code: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    role_code: Mapped[str] = mapped_column(String(64), index=True)
+    workspace_codes: Mapped[JsonDict] = mapped_column(JsonColumn, default=dict)
+    invited_by_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    accepted_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    invited_by: Mapped[User] = relationship(foreign_keys=[invited_by_id])
+    accepted_by: Mapped[User | None] = relationship(foreign_keys=[accepted_by_id])
+
+
+class PasswordResetToken(IdMixin, TimestampMixin, Base):
+    __tablename__ = "password_reset_tokens"
+
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    user: Mapped[User] = relationship()
+
+
+class LoginAttempt(IdMixin, TimestampMixin, Base):
+    __tablename__ = "login_attempts"
+
+    username: Mapped[str] = mapped_column(String(128), index=True)
+    ip: Mapped[str] = mapped_column(String(64), index=True)
+    success: Mapped[bool] = mapped_column(Boolean, default=False, index=True)

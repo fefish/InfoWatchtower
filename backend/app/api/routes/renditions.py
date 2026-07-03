@@ -4,11 +4,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.routes.auth import get_current_user, require_super_admin
+from app.api.routes.auth import assert_workspace_member, get_current_user
 from app.core.database import get_db_session
 from app.models.identity import User
 from app.models.reports import ReportFormat, ReportRendition
 from app.models.workspace import Workspace
+from app.reports.rendition_html import render_html
 from app.reports.renditions import (
     build_daily_rendition,
     build_weekly_rendition,
@@ -17,7 +18,6 @@ from app.reports.renditions import (
     load_weekly_report,
     render_markdown,
 )
-from app.reports.rendition_html import render_html
 from app.schemas.renditions import (
     REPORT_FORMAT_EXPORT_TARGETS,
     REPORT_FORMAT_GROUP_BY,
@@ -34,9 +34,10 @@ router = APIRouter(prefix="/api", tags=["renditions"])
 @router.get("/report-formats", response_model=list[ReportFormatRead])
 def list_report_formats(
     workspace_code: str = Query(...),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> list[ReportFormatRead]:
+    assert_workspace_member(session, current_user, workspace_code, min_role="viewer")
     _require_workspace(session, workspace_code)
     ensure_report_formats(session, workspace_code)
     session.commit()
@@ -51,9 +52,10 @@ def list_report_formats(
 @router.post("/report-formats", response_model=ReportFormatRead, status_code=status.HTTP_201_CREATED)
 def create_report_format(
     payload: ReportFormatCreate,
-    _: User = Depends(require_super_admin),
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> ReportFormatRead:
+    assert_workspace_member(session, current_user, payload.workspace_code, min_role="admin")
     _require_workspace(session, payload.workspace_code)
     _validate_format_options(payload.group_by, payload.item_fields, payload.export_targets)
     existing = session.scalar(
@@ -101,12 +103,13 @@ def create_report_format(
 def update_report_format(
     format_id: str,
     payload: ReportFormatUpdate,
-    _: User = Depends(require_super_admin),
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> ReportFormatRead:
     fmt = session.get(ReportFormat, format_id)
     if fmt is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report format not found")
+    assert_workspace_member(session, current_user, fmt.workspace_code, min_role="admin")
 
     if fmt.locked:
         # locked 内置格式（公司 SQL 口径）只允许启停
@@ -162,12 +165,13 @@ def update_report_format(
 @router.delete("/report-formats/{format_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_report_format(
     format_id: str,
-    _: User = Depends(require_super_admin),
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> Response:
     fmt = session.get(ReportFormat, format_id)
     if fmt is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report format not found")
+    assert_workspace_member(session, current_user, fmt.workspace_code, min_role="admin")
     if fmt.builtin:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Builtin formats cannot be deleted")
     session.query(ReportRendition).filter(ReportRendition.format_code == fmt.format_code).delete()
@@ -179,12 +183,13 @@ def delete_report_format(
 @router.get("/daily-reports/{report_id}/renditions", response_model=list[ReportRenditionRead])
 def list_daily_renditions(
     report_id: str,
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> list[ReportRenditionRead]:
     report = load_daily_report_for_rendition(session, report_id)
     if report is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Daily report not found")
+    assert_workspace_member(session, current_user, report.workspace_code, min_role="viewer")
     renditions = session.scalars(
         select(ReportRendition).where(
             ReportRendition.report_type == "daily",
@@ -201,12 +206,13 @@ def list_daily_renditions(
 def regenerate_daily_rendition(
     report_id: str,
     format_code: str,
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> ReportRenditionRead:
     report = load_daily_report_for_rendition(session, report_id)
     if report is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Daily report not found")
+    assert_workspace_member(session, current_user, report.workspace_code, min_role="member")
     fmt = _get_enabled_format(session, report.workspace_code, format_code)
     workspace_name = _workspace_name(session, report.workspace_code)
     rendition = build_daily_rendition(session, report, fmt, workspace_name)
@@ -220,7 +226,7 @@ def export_daily_rendition(
     report_id: str,
     format_code: str,
     target: str = Query(default="md"),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> Response:
     if target not in REPORT_FORMAT_EXPORT_TARGETS:
@@ -228,6 +234,7 @@ def export_daily_rendition(
     report = load_daily_report_for_rendition(session, report_id)
     if report is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Daily report not found")
+    assert_workspace_member(session, current_user, report.workspace_code, min_role="viewer")
     fmt = _get_enabled_format(session, report.workspace_code, format_code)
     allowed_targets = list((fmt.export_targets or {}).get("targets") or [])
     if target not in allowed_targets:
@@ -260,12 +267,13 @@ def export_daily_rendition(
 def regenerate_weekly_rendition(
     report_id: str,
     format_code: str,
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> ReportRenditionRead:
     report = load_weekly_report(session, report_id)
     if report is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Weekly report not found")
+    assert_workspace_member(session, current_user, report.workspace_code, min_role="member")
     fmt = _get_enabled_format(session, report.workspace_code, format_code)
     workspace_name = _workspace_name(session, report.workspace_code)
     rendition = build_weekly_rendition(session, report, fmt, workspace_name)
@@ -279,7 +287,7 @@ def export_weekly_rendition(
     report_id: str,
     format_code: str,
     target: str = Query(default="md"),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> Response:
     if target not in REPORT_FORMAT_EXPORT_TARGETS:
@@ -287,6 +295,7 @@ def export_weekly_rendition(
     report = load_weekly_report(session, report_id)
     if report is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Weekly report not found")
+    assert_workspace_member(session, current_user, report.workspace_code, min_role="viewer")
     fmt = _get_enabled_format(session, report.workspace_code, format_code)
     allowed_targets = list((fmt.export_targets or {}).get("targets") or [])
     if target not in allowed_targets:
