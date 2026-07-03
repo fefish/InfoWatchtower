@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from app.schemas.auth import UserRead
+
 DEFAULT_REQUIRED_CONTENT_FIELDS = [
     "background",
     "effects",
@@ -17,6 +19,7 @@ class WorkspaceRead(BaseModel):
     description: str
     workspace_type: str
     default_domain_code: str
+    enabled: bool = True
 
 
 class WorkspaceCreate(BaseModel):
@@ -25,6 +28,24 @@ class WorkspaceCreate(BaseModel):
     description: str = ""
     workspace_type: str = Field(default="intelligence_workspace", min_length=1, max_length=64)
     default_domain_code: str = Field(default="ai", min_length=1, max_length=64)
+
+
+class WorkspaceUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    description: str | None = None
+    enabled: bool | None = None
+    default_domain_code: str | None = Field(default=None, min_length=1, max_length=64)
+
+
+class WorkspaceMemberUpsert(BaseModel):
+    user_id: str = Field(min_length=1)
+    workspace_role: str = Field(default="member", pattern=r"^(viewer|member|admin|owner)$")
+
+
+class WorkspaceMemberRead(BaseModel):
+    user: UserRead
+    workspace_role: str
+    enabled: bool
 
 
 class WorkspaceSectionRead(BaseModel):

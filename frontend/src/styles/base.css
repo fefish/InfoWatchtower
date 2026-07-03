@@ -1838,6 +1838,10 @@ button {
   background: #ffffff;
 }
 
+.setup-panel {
+  width: min(520px, 100%);
+}
+
 .login-form {
   display: grid;
   gap: 16px;
@@ -1856,6 +1860,27 @@ button {
   border: 1px solid #ccd7e6;
   border-radius: 8px;
   padding: 0 12px;
+}
+
+.setup-option {
+  grid-template-columns: auto auto 1fr;
+  align-items: center;
+  gap: 8px;
+  color: #334155;
+  font-weight: 700;
+}
+
+.setup-option input {
+  min-height: auto;
+}
+
+.setup-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .login-form button {
@@ -3390,6 +3415,7 @@ button {
 
 .config-grid input,
 .config-grid select,
+.config-grid textarea,
 .config-field select {
   min-height: 38px;
   min-width: 0;
@@ -3398,6 +3424,16 @@ button {
   padding: 0 10px;
   background: #ffffff;
   color: #111827;
+}
+
+.config-grid textarea {
+  min-height: 108px;
+  padding: 10px;
+  resize: vertical;
+}
+
+.config-grid-wide {
+  grid-column: 1 / -1;
 }
 
 .config-url-field {
@@ -3431,6 +3467,148 @@ button {
 .config-section-divider small {
   color: var(--color-muted);
   font-weight: 500;
+}
+
+.workspace-wizard {
+  display: grid;
+  gap: 14px;
+}
+
+.wizard-steps {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.wizard-steps span {
+  display: grid;
+  min-height: 30px;
+  place-items: center;
+  border: 1px solid rgba(148, 163, 184, 0.5);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.62);
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.wizard-steps span.active,
+.wizard-steps span.done {
+  border-color: rgba(10, 132, 255, 0.36);
+  background: rgba(10, 132, 255, 0.1);
+  color: #0a84ff;
+}
+
+.wizard-page {
+  display: grid;
+  min-height: 360px;
+  align-content: start;
+  gap: 14px;
+}
+
+.wizard-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #334155;
+  font-size: 13px;
+}
+
+.wizard-section-title strong {
+  color: #0f172a;
+}
+
+.wizard-section-title span {
+  color: #64748b;
+}
+
+.wizard-source-list {
+  display: grid;
+  gap: 8px;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.wizard-source-row,
+.wizard-policy-options label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(226, 232, 240, 0.86);
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.wizard-source-row span,
+.wizard-policy-options span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.wizard-source-row strong {
+  overflow: hidden;
+  color: #0f172a;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wizard-source-row small {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.wizard-policy-options {
+  display: grid;
+  gap: 10px;
+}
+
+.wizard-textarea-label {
+  display: grid;
+  gap: 8px;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.wizard-textarea-label textarea {
+  min-height: 138px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  padding: 10px;
+  background: #ffffff;
+  color: #111827;
+  resize: vertical;
+}
+
+.wizard-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.workspace-wizard-done {
+  display: grid;
+  min-height: 300px;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  color: #0f172a;
+  text-align: center;
+}
+
+.workspace-wizard-done svg {
+  color: #0a84ff;
+}
+
+.workspace-wizard-done span {
+  color: #64748b;
+  font-size: 13px;
 }
 
 .config-save {

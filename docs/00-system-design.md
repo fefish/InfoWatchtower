@@ -119,7 +119,7 @@ references/
 6. P1 战略闭环深化：当前 requirement/task 有真实 API 页面和审计；下一步从已发布日报/周报条目沉淀 insight、requirement 和 task，并让任一内部需求可追溯到外部原始信号。
 7. P2 候选池运营增强：当前已展示去重 winner、loser、来源覆盖、推荐分、日报采信状态和追溯 ID；下一步补筛选、采信入口、批量操作和更清晰的质量治理字段。
 8. P2 抓取覆盖率深化：当前已具备 ingestion/backfill run 摘要、每源明细和 raw/news/winner/recommendation/daily 目标日覆盖漏斗；下一步补失败源重试、长期覆盖趋势和异常告警。
-9. P2 新板块/domain pack 样例：以硬件、半导体、云基础设施等方向补一个 domain pack 样例，证明新增板块不需要改主链路。
+9. P2 新板块/domain pack 样例：已补 `config/domain_packs/hardware.json`、启动注册逻辑和 `docs/extension-recipes.md`，证明新增板块不需要改主链路；后续可继续补半导体、云基础设施等更多样例。
 10. P2 Tech Insight Loop 历史资产导入：历史素材/报告导入脚本、实体大事记导入脚本、历史反馈/质量反馈/旧任务归档脚本、历史报告只读归档页、实体大事记只读页、质量归档只读页、导入验收摘要、引用缺口入口和命令行执行验收脚本已完成；下一步在配置 `DATABASE_URL` 的真实数据库上跑小批量/全量导入验收。所有历史资产默认归档状态，必须保留旧行追溯，不自动进入当前推荐、日报和公司 SQL。
 
 ## 3. 第一版范围

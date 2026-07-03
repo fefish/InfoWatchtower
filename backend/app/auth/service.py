@@ -812,6 +812,7 @@ def _ensure_default_label_sets(session: Session) -> None:
         categories=AI_TOOLS_PRIMARY_CATEGORIES,
         secondary_labels_by_primary=AI_TOOLS_LABEL_POLICY["secondary_labels_by_primary"],
     )
+    _ensure_domain_pack_label_sets(session)
 
 
 def _news_taxonomy() -> dict[str, object]:
@@ -841,6 +842,7 @@ def _ensure_label_set(
     categories: list[str],
     secondary_labels_by_primary: dict[str, list[str]],
     target_types: list[str] | None = None,
+    config_json: dict | None = None,
 ) -> None:
     label_targets = target_types or [
         "data_source",
@@ -867,6 +869,7 @@ def _ensure_label_set(
             scope_type="domain",
             target_types={"target_types": label_targets},
             enabled=True,
+            config_json=dict(config_json or {}),
         )
         session.add(label_set)
         session.flush()
@@ -878,6 +881,7 @@ def _ensure_label_set(
         label_set.scope_type = "domain"
         label_set.target_types = {"target_types": label_targets}
         label_set.enabled = True
+        label_set.config_json = dict(config_json or {})
 
     existing_labels = {label.code: label for label in label_set.labels}
     primary_labels: dict[str, Label] = {}
@@ -926,3 +930,43 @@ def _ensure_label_set(
                 label.parent_label = parent_label
                 label.sort_order = secondary_sort_base + primary_index * 100 + secondary_index
                 label.enabled = True
+
+
+def _ensure_domain_pack_label_sets(session: Session) -> None:
+    pack_dir = REPO_ROOT / "config" / "domain_packs"
+    if not pack_dir.exists():
+        return
+    for pack_path in sorted(pack_dir.glob("*.json")):
+        pack = json.loads(pack_path.read_text(encoding="utf-8"))
+        domain_code = str(pack.get("domain_code") or pack_path.stem).strip()
+        if not domain_code:
+            continue
+        boards = list(pack.get("boards") or [])
+        scoring = dict(pack.get("scoring") or {})
+        for label_set in pack.get("label_sets") or []:
+            if not isinstance(label_set, dict):
+                continue
+            categories = [
+                str(category).strip()
+                for category in label_set.get("categories") or []
+                if str(category).strip()
+            ]
+            code = str(label_set.get("code") or f"{domain_code}_categories").strip()
+            if not categories or not code:
+                continue
+            _ensure_label_set(
+                session=session,
+                workspace_code=str(label_set.get("workspace_code") or "shared"),
+                domain_code=str(label_set.get("domain_code") or domain_code),
+                code=code,
+                name=str(label_set.get("name") or code),
+                description=str(label_set.get("description") or ""),
+                categories=categories,
+                secondary_labels_by_primary=dict(label_set.get("secondary_labels_by_primary") or {}),
+                target_types=list(label_set.get("target_types") or []),
+                config_json={
+                    "domain_pack": domain_code,
+                    "boards": boards,
+                    "scoring": scoring,
+                },
+            )

@@ -118,13 +118,17 @@
       ],
       "admin": [
         "workspace label policy update",
+        "workspace member list/add/remove in that workspace",
         "user candidate list with workspace_code",
         "custom source create/update/link in that workspace",
         "news normalization, ingestion, backfill, recommendation and daily pipeline runs",
         "custom report format create/update/delete"
       ],
+      "editor_admin_or_super_admin": [
+        "workspace creation"
+      ],
       "super_admin_only": [
-        "workspace creation",
+        "workspace update/disable",
         "legacy seed import",
         "Tech Insight Loop seed import",
         "global ingestion/recommendation/export lists without workspace_code",
