@@ -646,6 +646,7 @@ requirements/tasks/sync/audit v1
 ## 15. 附录索引
 
 - `docs/architecture-capability-map.md`：能力分块、每块分布架构与目标态差距清单。
+- `docs/target-state-spec.md`：可部署/可扩展/账户完整的目标态实现规格（WP1-WP3，实现级）。
 - `docs/workspace-module-model.md`：工作台、数据源共享与标签模型，含自助建台与自建源。
 - `docs/report-renditions-design.md`：一次采信多版成稿与格式注册表设计（P1-P4 已实施）。
 - `docs/tech-insight-loop-fusion-plan.md`：Tech Insight Loop 融合方案与各轮完成范围。
