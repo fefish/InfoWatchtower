@@ -360,8 +360,10 @@ infowatchtower_sync_{source}_{target}_{timestamp}.zip
 
 - `POST /api/sync/packages/import` 接收 manifest 和 records，先校验 `records_sha256`。
 - 用 `event_id` 写入 `sync_inbox`，重复导入会跳过，不重复写。
-- 导入动作写 `sync_runs` 和审计日志。
-- 当前导入侧只做 inbox 幂等和审计，不直接 upsert 业务表；后续按 `object_type` 增加 apply handler 和冲突处理。
+- 对 `data_sources`、`raw_items`、`news_items` 执行 `object_global_id/global_id` 幂等 upsert。
+- 如果本地 revision 更新，或同 revision 的 `content_hash` 不一致，写 `sync_conflicts`，不静默覆盖本地对象。
+- `restricted` 或带 token/password/secret/cookie/.env 等疑似密钥字段的 payload 不落业务表。
+- 导入动作写 `sync_runs`、`sync_inbox.status`、冲突摘要和审计日志；暂不支持的 `object_type` 会在本次 run 的 errors 中显式失败。
 
 ### 5.6 API 形态
 

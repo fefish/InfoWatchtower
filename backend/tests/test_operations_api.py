@@ -3,6 +3,7 @@ import json
 import zipfile
 from datetime import datetime, timezone
 
+from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from app.models import (
@@ -12,6 +13,8 @@ from app.models import (
     HistoricalJobRun,
     HistoricalReport,
     RawItem,
+    SyncConflict,
+    SyncInbox,
     SyncOutbox,
     TrackedEntity,
 )
@@ -124,15 +127,47 @@ def test_sync_package_export_download_and_import_are_auditable(monkeypatch, tmp_
             },
             "records": [
                 {
-                    **records[0],
                     "event_id": "evt-sync-import-001",
-                    "object_global_id": "global-news-import-001",
+                    "object_type": "data_sources",
+                    "object_id": "remote-source-001",
+                    "object_global_id": "global-source-import-001",
+                    "operation": "upsert",
+                    "revision": 2,
+                    "content_hash": "hash-source-v2",
+                    "visibility_scope": "public",
+                    "sync_policy": "public_to_intranet",
+                    "workspace_code": "shared",
+                    "domain_code": "ai",
+                    "payload": {
+                        "global_id": "global-source-import-001",
+                        "workspace_code": "shared",
+                        "domain_code": "ai",
+                        "visibility_scope": "public",
+                        "sync_policy": "public_to_intranet",
+                        "source_type": "rss",
+                        "name": "同步源",
+                        "url": "https://example.com/feed.xml",
+                        "enabled": True,
+                        "default_focus_id": 1,
+                        "backfill_days": 7,
+                        "metadata_json": {"origin": "sync"},
+                    },
                 },
             ],
         },
     )
     assert imported.status_code == 200
     assert imported.json()["applied"] == 1
+    assert imported.json()["conflicts"] == 0
+    with Session() as session:
+        source = session.scalar(select(DataSource).where(DataSource.global_id == "global-source-import-001"))
+        assert source is not None
+        assert source.name == "同步源"
+        assert source.url == "https://example.com/feed.xml"
+        inbox = session.scalar(select(SyncInbox).where(SyncInbox.event_id == "evt-sync-import-001"))
+        assert inbox is not None
+        assert inbox.status == "applied"
+
     repeated = client.post(
         "/api/sync/packages/import",
         json={
@@ -144,15 +179,73 @@ def test_sync_package_export_download_and_import_are_auditable(monkeypatch, tmp_
             },
             "records": [
                 {
-                    **records[0],
                     "event_id": "evt-sync-import-001",
-                    "object_global_id": "global-news-import-001",
+                    "object_type": "data_sources",
+                    "object_id": "remote-source-001",
+                    "object_global_id": "global-source-import-001",
+                    "operation": "upsert",
+                    "revision": 2,
+                    "content_hash": "hash-source-v2",
+                    "visibility_scope": "public",
+                    "sync_policy": "public_to_intranet",
+                    "workspace_code": "shared",
+                    "domain_code": "ai",
+                    "payload": {
+                        "global_id": "global-source-import-001",
+                        "source_type": "rss",
+                        "name": "同步源",
+                    },
                 },
             ],
         },
     )
     assert repeated.status_code == 200
     assert repeated.json()["skipped"] == 1
+
+    conflict = client.post(
+        "/api/sync/packages/import",
+        json={
+            "package_manifest": {
+                **manifest,
+                "package_id": "external-package-002",
+                "source_instance_id": "public-other",
+                "records_sha256": "",
+            },
+            "records": [
+                {
+                    "event_id": "evt-sync-conflict-001",
+                    "object_type": "data_sources",
+                    "object_id": "remote-source-001",
+                    "object_global_id": "global-source-import-001",
+                    "operation": "upsert",
+                    "revision": 2,
+                    "content_hash": "hash-source-v2-conflicting",
+                    "visibility_scope": "public",
+                    "sync_policy": "public_to_intranet",
+                    "workspace_code": "shared",
+                    "domain_code": "ai",
+                    "payload": {
+                        "global_id": "global-source-import-001",
+                        "source_type": "rss",
+                        "name": "冲突源",
+                        "url": "https://example.com/other.xml",
+                    },
+                },
+            ],
+        },
+    )
+    assert conflict.status_code == 200
+    assert conflict.json()["status"] == "completed_with_conflicts"
+    assert conflict.json()["conflicts"] == 1
+    with Session() as session:
+        source = session.scalar(select(DataSource).where(DataSource.global_id == "global-source-import-001"))
+        assert source is not None
+        assert source.name == "同步源"
+        conflict_row = session.scalar(
+            select(SyncConflict).where(SyncConflict.object_id == "global-source-import-001"),
+        )
+        assert conflict_row is not None
+        assert conflict_row.status == "open"
 
 
 def test_historical_reports_are_listed_and_read_only(monkeypatch, tmp_path):
