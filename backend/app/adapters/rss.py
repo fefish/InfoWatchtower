@@ -24,6 +24,7 @@ class RssFeedAdapter:
             timeout=20.0,
             follow_redirects=True,
             headers=BROWSER_FETCH_HEADERS,
+            trust_env=False,
         ) as client:
             response = await client.get(data_source.url)
             response.raise_for_status()

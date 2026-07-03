@@ -145,6 +145,7 @@ def test_scheduler_defaults_to_daily_pipeline_job():
             "ingestion_scheduler_limit": 10,
             "ingestion_concurrency": 8,
             "ingestion_source_timeout_seconds": 25,
+            "ingestion_max_items_per_source": 3,
             "daily_pipeline_recommendation_limit": 15,
             "daily_pipeline_source_daily_limit": 2,
             "daily_pipeline_create_daily_draft": True,
@@ -157,7 +158,7 @@ def test_scheduler_defaults_to_daily_pipeline_job():
     assert job.id == "job-1"
     function, args, kwargs = queue.calls[0]
     assert function is run_daily_pipeline_job
-    assert args == ("planning_intel", ["rss"], 10, 8, 25, 15, 2, True, True)
+    assert args == ("planning_intel", ["rss"], 10, 8, 25, 3, 15, 2, 45.0, True, True)
     assert kwargs["job_timeout"] == 60 * 60 * 3
 
 
@@ -173,6 +174,7 @@ def test_scheduler_passes_offset_day_key_to_daily_pipeline_job():
             "ingestion_scheduler_limit": None,
             "ingestion_concurrency": 16,
             "ingestion_source_timeout_seconds": 20,
+            "ingestion_max_items_per_source": None,
             "daily_pipeline_recommendation_limit": 10,
             "daily_pipeline_source_daily_limit": 2,
             "daily_pipeline_create_daily_draft": True,
@@ -196,8 +198,10 @@ def test_scheduler_passes_offset_day_key_to_daily_pipeline_job():
         None,
         16,
         20,
+        None,
         10,
         2,
+        45.0,
         True,
         True,
         "2026-05-20",

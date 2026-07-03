@@ -378,6 +378,13 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+function requireWorkspaceCode(workspaceCode: string | undefined): string {
+  if (!workspaceCode) {
+    throw new Error("workspace_code is required");
+  }
+  return workspaceCode;
+}
+
 export async function fetchRequirements(workspaceCode: string): Promise<RequirementRecord[]> {
   const params = new URLSearchParams({ workspace_code: workspaceCode });
   return requestJson<RequirementRecord[]>(`/api/requirements?${params.toString()}`);
@@ -447,9 +454,7 @@ export async function fetchAuditLogs(): Promise<AuditLogRecord[]> {
   return requestJson<AuditLogRecord[]>("/api/audit-logs");
 }
 
-export async function fetchHistoricalReportSummary(
-  workspaceCode = "legacy_tech_insight_loop"
-): Promise<HistoricalReportSummaryRecord> {
+export async function fetchHistoricalReportSummary(workspaceCode: string): Promise<HistoricalReportSummaryRecord> {
   const params = new URLSearchParams({ workspace_code: workspaceCode });
   return requestJson<HistoricalReportSummaryRecord>(`/api/historical-reports/summary?${params.toString()}`);
 }
@@ -458,7 +463,7 @@ export async function fetchHistoricalReports(
   filters: HistoricalReportFilters = {}
 ): Promise<HistoricalReportListItem[]> {
   const params = new URLSearchParams({
-    workspace_code: filters.workspaceCode ?? "legacy_tech_insight_loop",
+    workspace_code: requireWorkspaceCode(filters.workspaceCode),
     limit: String(filters.limit ?? 80)
   });
   if (filters.reportType) params.set("report_type", filters.reportType);
@@ -476,9 +481,7 @@ export async function fetchHistoricalReportDetail(id: string): Promise<Historica
   return requestJson<HistoricalReportDetailRecord>(`/api/historical-reports/${id}`);
 }
 
-export async function fetchLegacyImportSummary(
-  workspaceCode = "legacy_tech_insight_loop"
-): Promise<LegacyImportSummaryRecord> {
+export async function fetchLegacyImportSummary(workspaceCode: string): Promise<LegacyImportSummaryRecord> {
   const params = new URLSearchParams({ workspace_code: workspaceCode });
   return requestJson<LegacyImportSummaryRecord>(`/api/legacy-import/summary?${params.toString()}`);
 }
@@ -487,16 +490,14 @@ export async function fetchLegacyImportGaps(
   filters: LegacyImportGapFilters = {}
 ): Promise<LegacyImportGapItemRecord[]> {
   const params = new URLSearchParams({
-    workspace_code: filters.workspaceCode ?? "legacy_tech_insight_loop",
+    workspace_code: requireWorkspaceCode(filters.workspaceCode),
     kind: filters.kind ?? "all",
     limit: String(filters.limit ?? 20)
   });
   return requestJson<LegacyImportGapItemRecord[]>(`/api/legacy-import/gaps?${params.toString()}`);
 }
 
-export async function fetchEntityTimelineSummary(
-  workspaceCode = "legacy_tech_insight_loop"
-): Promise<EntityTimelineSummaryRecord> {
+export async function fetchEntityTimelineSummary(workspaceCode: string): Promise<EntityTimelineSummaryRecord> {
   const params = new URLSearchParams({ workspace_code: workspaceCode });
   return requestJson<EntityTimelineSummaryRecord>(`/api/entity-timeline/summary?${params.toString()}`);
 }
@@ -505,7 +506,7 @@ export async function fetchTrackedEntities(
   filters: TrackedEntityFilters = {}
 ): Promise<TrackedEntityListItem[]> {
   const params = new URLSearchParams({
-    workspace_code: filters.workspaceCode ?? "legacy_tech_insight_loop",
+    workspace_code: requireWorkspaceCode(filters.workspaceCode),
     limit: String(filters.limit ?? 120)
   });
   if (filters.entityType) params.set("entity_type", filters.entityType);
@@ -518,7 +519,7 @@ export async function fetchEntityMilestones(
   filters: EntityMilestoneFilters = {}
 ): Promise<EntityMilestoneListItem[]> {
   const params = new URLSearchParams({
-    workspace_code: filters.workspaceCode ?? "legacy_tech_insight_loop",
+    workspace_code: requireWorkspaceCode(filters.workspaceCode),
     limit: String(filters.limit ?? 120)
   });
   if (filters.trackedEntityId) params.set("tracked_entity_id", filters.trackedEntityId);
@@ -539,9 +540,7 @@ export async function fetchEntityMilestoneDetail(id: string): Promise<EntityMile
   return requestJson<EntityMilestoneDetailRecord>(`/api/entity-milestones/${id}`);
 }
 
-export async function fetchQualityArchiveSummary(
-  workspaceCode = "legacy_tech_insight_loop"
-): Promise<QualityArchiveSummaryRecord> {
+export async function fetchQualityArchiveSummary(workspaceCode: string): Promise<QualityArchiveSummaryRecord> {
   const params = new URLSearchParams({ workspace_code: workspaceCode });
   return requestJson<QualityArchiveSummaryRecord>(`/api/quality-archive/summary?${params.toString()}`);
 }
@@ -550,7 +549,7 @@ export async function fetchHistoricalFeedbackItems(
   filters: HistoricalFeedbackFilters = {}
 ): Promise<HistoricalFeedbackItemRecord[]> {
   const params = new URLSearchParams({
-    workspace_code: filters.workspaceCode ?? "legacy_tech_insight_loop",
+    workspace_code: requireWorkspaceCode(filters.workspaceCode),
     limit: String(filters.limit ?? 80)
   });
   if (filters.feedbackKind) params.set("feedback_kind", filters.feedbackKind);
@@ -566,7 +565,7 @@ export async function fetchHistoricalJobRuns(
   filters: HistoricalJobRunFilters = {}
 ): Promise<HistoricalJobRunRecord[]> {
   const params = new URLSearchParams({
-    workspace_code: filters.workspaceCode ?? "legacy_tech_insight_loop",
+    workspace_code: requireWorkspaceCode(filters.workspaceCode),
     limit: String(filters.limit ?? 80)
   });
   if (filters.jobType) params.set("job_type", filters.jobType);

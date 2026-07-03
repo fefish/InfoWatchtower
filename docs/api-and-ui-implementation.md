@@ -140,6 +140,11 @@ GET  /api/audit-logs
 
 `GET /api/ingestion/coverage` 按 `workspace_code + day_key + 可选 run_id` 返回目标日覆盖漏斗：启用源、本次运行源、成功/失败源、目标日 raw、news、dedupe winner、recommendation candidate/selected、generated ready 和日报采信项；每源明细同时返回 fetched、created/updated、in/out target、missing published_at、news、winner、推荐和采信计数。
 
+业务页面和 API 客户端必须从当前工作台状态显式传递 `workspace_code`；候选池、日报/周报、
+抓取覆盖、历史报告库、实体大事记、质量归档、需求、任务和导出等页面不得依赖后端或前端
+默认租户。`backend/tests/test_blueprint_page_audit.py` 会检查工作台页面在
+`workspace.currentCode` 变化时重载，并拒绝裸“暂无”式空态。
+
 同步包 v1 已实现导出、zip 下载和导入幂等骨架：`POST /api/sync/packages/export` 读取
 `sync_outbox` 并写入 `sync_runs` 审计，`GET /api/sync/packages/{package_id}/download` 返回
 包含 `manifest.json` 和 `records.jsonl` 的 zip，`POST /api/sync/packages/import` 写入

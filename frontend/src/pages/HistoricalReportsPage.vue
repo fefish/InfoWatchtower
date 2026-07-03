@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Archive, Database, FileText, GitBranch, RefreshCw, Search, TriangleAlert } from "lucide-vue-next";
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 
 import {
   fetchHistoricalReportDetail,
@@ -15,7 +15,9 @@ import {
   type LegacyImportMetricRecord,
   type LegacyImportSummaryRecord
 } from "../api/operations";
+import { useWorkspaceStore } from "../stores/workspace";
 
+const workspace = useWorkspaceStore();
 const summary = ref<HistoricalReportSummaryRecord | null>(null);
 const legacySummary = ref<LegacyImportSummaryRecord | null>(null);
 const legacyGaps = ref<LegacyImportGapItemRecord[]>([]);
@@ -42,12 +44,16 @@ const selectedRefs = computed(() => {
 });
 
 async function loadReports() {
+  if (!workspace.currentCode) {
+    return;
+  }
   loading.value = true;
   error.value = "";
   try {
     const [nextSummary, nextReports, nextLegacySummary, nextLegacyGaps] = await Promise.all([
-      fetchHistoricalReportSummary(),
+      fetchHistoricalReportSummary(workspace.currentCode),
       fetchHistoricalReports({
+        workspaceCode: workspace.currentCode,
         reportType: filters.value.reportType || undefined,
         status: filters.value.status || undefined,
         startDate: filters.value.startDate || undefined,
@@ -55,8 +61,8 @@ async function loadReports() {
         query: filters.value.query || undefined,
         hasUnresolvedRefs: filters.value.unresolvedOnly ? true : null
       }),
-      fetchLegacyImportSummary(),
-      fetchLegacyImportGaps({ limit: 8 })
+      fetchLegacyImportSummary(workspace.currentCode),
+      fetchLegacyImportGaps({ workspaceCode: workspace.currentCode, limit: 8 })
     ]);
     summary.value = nextSummary;
     legacySummary.value = nextLegacySummary;
@@ -118,6 +124,7 @@ function gapKindLabel(item: LegacyImportGapItemRecord) {
   return "历史报告";
 }
 
+watch(() => workspace.currentCode, loadReports);
 onMounted(loadReports);
 </script>
 

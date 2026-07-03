@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 
@@ -20,7 +22,13 @@ class UserRead(BaseModel):
     department: str | None
     email: str | None
     status: str
+    is_active: bool
     roles: list[str]
+
+
+class WorkspaceInviteTarget(BaseModel):
+    code: str = Field(min_length=1, max_length=64)
+    workspace_role: str = Field(default="member", max_length=64)
 
 
 class LoginRequest(BaseModel):
@@ -34,3 +42,63 @@ class AuthResponse(BaseModel):
 
 class UpdateUserRolesRequest(BaseModel):
     role_codes: list[str] = Field(default_factory=list)
+
+
+class InviteCreateRequest(BaseModel):
+    email: str | None = Field(default=None, max_length=255)
+    role_code: str = Field(default="viewer", min_length=1, max_length=64)
+    workspaces: list[WorkspaceInviteTarget] = Field(default_factory=list)
+    expires_in_days: int = Field(default=7, ge=1, le=30)
+
+
+class InviteRead(BaseModel):
+    id: str
+    code: str
+    email: str | None
+    role_code: str
+    workspaces: list[WorkspaceInviteTarget]
+    invite_url: str
+    status: str
+    expires_at: datetime
+    accepted_at: datetime | None
+    revoked_at: datetime | None
+
+
+class InvitePublicRead(BaseModel):
+    code: str
+    email_hint: str | None
+    role_code: str
+    workspaces: list[WorkspaceInviteTarget]
+    status: str
+    expires_at: datetime
+
+
+class InviteAcceptRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=128)
+    display_name: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=8, max_length=256)
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=8, max_length=256)
+
+
+class PasswordForgotRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=128)
+
+
+class PasswordResetRequest(BaseModel):
+    token: str = Field(min_length=16, max_length=256)
+    new_password: str = Field(min_length=8, max_length=256)
+
+
+class AdminResetPasswordRead(BaseModel):
+    temporary_password: str
+
+
+class UserPatchRequest(BaseModel):
+    is_active: bool | None = None
+    display_name: str | None = Field(default=None, min_length=1, max_length=128)
+    department: str | None = Field(default=None, max_length=128)
+    email: str | None = Field(default=None, max_length=255)

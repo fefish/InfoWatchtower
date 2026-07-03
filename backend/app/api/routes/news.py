@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.api.routes.auth import get_current_user, require_super_admin
+from app.api.routes.auth import assert_workspace_member, get_current_user
 from app.core.database import get_db_session
 from app.models.content import (
     DedupeGroup,
@@ -24,15 +24,14 @@ from app.normalization.news import (
 from app.schemas.news import (
     DedupeGroupDailyReportRead,
     DedupeGroupItemRead,
-    DedupeGroupRecommendationRead,
     DedupeGroupRead,
+    DedupeGroupRecommendationRead,
     NewsItemRead,
     NewsNormalizeCreate,
     NewsNormalizeRead,
 )
 
 router = APIRouter(prefix="/api", tags=["news"])
-SUPER_ADMIN = Depends(require_super_admin)
 CURRENT_USER = Depends(get_current_user)
 DB_SESSION = Depends(get_db_session)
 
@@ -40,9 +39,10 @@ DB_SESSION = Depends(get_db_session)
 @router.post("/news-items/normalize", response_model=NewsNormalizeRead)
 def normalize_news_items(
     payload: NewsNormalizeCreate,
-    _: User = SUPER_ADMIN,
+    current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> NewsNormalizeRead:
+    assert_workspace_member(session, current_user, payload.workspace_code, min_role="admin")
     try:
         result = normalize_workspace_raw_items(
             session,
@@ -61,12 +61,13 @@ def normalize_news_items(
 
 @router.get("/news-items", response_model=list[NewsItemRead])
 def list_news_items(
-    workspace_code: str = Query(default="planning_intel"),
+    workspace_code: str = Query(...),
     active: bool | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
-    _: User = CURRENT_USER,
+    current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> list[NewsItemRead]:
+    assert_workspace_member(session, current_user, workspace_code, min_role="viewer")
     statement = (
         select(NewsItem)
         .where(NewsItem.workspace_code == workspace_code)
@@ -80,11 +81,12 @@ def list_news_items(
 
 @router.get("/dedupe-groups", response_model=list[DedupeGroupRead])
 def list_dedupe_groups(
-    workspace_code: str = Query(default="planning_intel"),
+    workspace_code: str = Query(...),
     limit: int = Query(default=50, ge=1, le=200),
-    _: User = CURRENT_USER,
+    current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> list[DedupeGroupRead]:
+    assert_workspace_member(session, current_user, workspace_code, min_role="viewer")
     groups = session.scalars(
         select(DedupeGroup)
         .options(

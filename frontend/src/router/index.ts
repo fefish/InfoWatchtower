@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from "vue-router";
 
+import AccountPage from "../pages/AccountPage.vue";
 import AppShell from "../layouts/AppShell.vue";
 import AuditLogsPage from "../pages/AuditLogsPage.vue";
 import DailyReportsPage from "../pages/DailyReportsPage.vue";
@@ -9,6 +10,7 @@ import EntityMilestonesPage from "../pages/EntityMilestonesPage.vue";
 import ExportsPage from "../pages/ExportsPage.vue";
 import HistoricalReportsPage from "../pages/HistoricalReportsPage.vue";
 import IngestionRunsPage from "../pages/IngestionRunsPage.vue";
+import InvitePage from "../pages/InvitePage.vue";
 import LoginPage from "../pages/LoginPage.vue";
 import NewsPage from "../pages/NewsPage.vue";
 import QualityArchivePage from "../pages/QualityArchivePage.vue";
@@ -17,10 +19,12 @@ import RequirementsPage from "../pages/RequirementsPage.vue";
 import SourceDetailPage from "../pages/SourceDetailPage.vue";
 import SourcesPage from "../pages/SourcesPage.vue";
 import SyncRunsPage from "../pages/SyncRunsPage.vue";
+import SetupPage from "../pages/SetupPage.vue";
 import TopicTasksPage from "../pages/TopicTasksPage.vue";
 import UsersPage from "../pages/UsersPage.vue";
 import WeeklyReportsPage from "../pages/WeeklyReportsPage.vue";
 import { useSessionStore } from "../stores/session";
+import { useSetupStore } from "../stores/setup";
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -29,6 +33,16 @@ export const router = createRouter({
       path: "/login",
       name: "login",
       component: LoginPage
+    },
+    {
+      path: "/invite/:code",
+      name: "invite",
+      component: InvitePage
+    },
+    {
+      path: "/setup",
+      name: "setup",
+      component: SetupPage
     },
     {
       path: "/",
@@ -47,6 +61,11 @@ export const router = createRouter({
           path: "users",
           name: "users",
           component: UsersPage
+        },
+        {
+          path: "account",
+          name: "account",
+          component: AccountPage
         },
         {
           path: "sources",
@@ -139,6 +158,17 @@ export const router = createRouter({
 });
 
 router.beforeEach(async (to) => {
+  const setup = useSetupStore();
+  if (!setup.checked) {
+    await setup.loadStatus();
+  }
+  if (setup.needsSetup) {
+    return to.path === "/setup" ? true : "/setup";
+  }
+  if (to.path === "/setup") {
+    return "/login";
+  }
+
   const session = useSessionStore();
   if (!session.checked) {
     await session.loadCurrentUser();
@@ -148,11 +178,18 @@ router.beforeEach(async (to) => {
     return session.isAuthenticated ? "/dashboard" : true;
   }
 
+  if (to.path.startsWith("/invite/")) {
+    return true;
+  }
+
   if (!session.isAuthenticated) {
     return {
       path: "/login",
       query: { redirect: to.fullPath }
     };
+  }
+  if (session.user?.status === "must_change_password" && to.path !== "/account") {
+    return "/account";
   }
   return true;
 });

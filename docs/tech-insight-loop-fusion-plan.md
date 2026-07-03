@@ -70,13 +70,15 @@
 
 ### 第三轮已完成范围：历史素材和报告归档脚本
 
-当前第三轮已完成真实归档导入脚本和模型迁移，但执行真实数据库导入仍需显式运维动作：
+当前第三轮已完成真实归档导入脚本和模型迁移。本地隔离 PostgreSQL 已完成一次全量导入验收，
+生产主库执行仍需显式运维动作：
 
 - 新增 `historical_reports` 档案表，用于无损保存旧 `reports` 正文、周期、状态、引用映射和旧行 metadata。
 - 新增 `scripts/tech_insight_loop_legacy_import.py`，默认 no-write；只有传入 `--execute` 且配置目标 `DATABASE_URL` 时才写入 InfoWatchtower 主库。
 - 旧 `articles` 写入禁用的 `legacy_tech_insight_loop` 档案源和 `raw_items.raw_payload_json.legacy_tech_insight_loop`，用 metadata 标记 `recommendation_eligible=false` 和 `company_sql_eligible=false`，不进入当前推荐和日报。
 - 旧 `reports` 写入 `historical_reports`，记录 `source_article_ids_json` 的 resolved/unresolved 映射；30 个未解析引用保留为缺口。
 - 真实导入幂等键为 `raw_items(data_source_id, entry_key)` 和 `historical_reports(legacy_system, legacy_table, legacy_id)`。
+- 本地隔离 PostgreSQL 全量证据位于 `outputs/tech_insight_loop/postgres_full_import_20260703T050653Z/`：14834 条素材、58 份 importable 报告、23 个实体、275 条大事记、4 条反馈、4 条质量反馈和 257 条旧任务记录覆盖率均为 complete；30 个旧库断链 source_article_ids 已写入 `outputs/tech_insight_loop/tech_insight_loop_import_accepted_gaps.json` 并通过 validator；旧 PDF/二进制文本中的 NUL byte 会转义为 `\u0000` 标记并记录到 `legacy_import.nul_sanitized_fields`。
 
 ### 第四轮已完成范围：作业界面融合与工作台自助扩展
 
@@ -340,7 +342,7 @@ Tech Insight Loop 迁入资产
 
 ## 11. 下一步建议
 
-阶段 0 只读盘点、第一轮源/评分融合、历史素材/报告 dry-run、真实归档导入脚本、实体大事记导入脚本、历史反馈/旧任务归档脚本、历史报告/实体大事记/质量归档只读查看入口、导入验收入口和执行验收脚本已经完成。下一步进入真实数据库执行验收：
+阶段 0 只读盘点、第一轮源/评分融合、历史素材/报告 dry-run、真实归档导入脚本、实体大事记导入脚本、历史反馈/旧任务归档脚本、历史报告/实体大事记/质量归档只读查看入口、导入验收入口、执行验收脚本和验收报告断言器已经完成。本地隔离 PostgreSQL 全量验收已通过；下一步是在生产数据库复跑并留存同口径证据：
 
 ```text
 读取 outputs/tech_insight_loop/tech_insight_loop_inventory.json
@@ -357,6 +359,9 @@ Tech Insight Loop 迁入资产
 -> 可选加 --include-quality-archive --feedback-limit 4 --quality-feedback-limit 4 --job-limit 10
 -> --execute 写 legacy_table + legacy_id 到 historical_feedback_items / historical_job_runs
 -> 输出历史反馈未解析素材引用和旧任务统计摘要
+-> 全量后再运行 python3 scripts/tech_insight_loop_import_verify.py --check-only
+-> 运行 python3 scripts/validate_tech_import_acceptance.py outputs/tech_insight_loop/tech_insight_loop_import_execution_report.json
+-> unresolved refs 未清零时，用 --accepted-gaps-json 归档缺口原因
 -> 使用 /quality-archive 核对旧反馈类型、质量原因、任务状态和失败源
 -> 人工确认
 -> 在 /historical-reports 顶部导入验收面板核对覆盖率和 unresolved refs

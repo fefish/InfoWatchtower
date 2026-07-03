@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from app.api.routes.auth import get_current_user, require_super_admin
+from app.api.routes.auth import assert_workspace_member, get_current_user, require_super_admin
 from app.core.database import get_db_session
 from app.models.content import NewsItem, RecommendationItem, RecommendationRun
 from app.models.identity import User
@@ -30,9 +30,10 @@ DB_SESSION = Depends(get_db_session)
 @router.post("/runs", response_model=RecommendationRunCreateRead)
 def create_recommendation_run(
     payload: RecommendationRunCreate,
-    _: User = SUPER_ADMIN,
+    current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> RecommendationRunCreateRead:
+    assert_workspace_member(session, current_user, payload.workspace_code, min_role="admin")
     try:
         result = run_daily_recommendation(
             session,
@@ -65,9 +66,13 @@ def create_recommendation_run(
 def list_recommendation_runs(
     workspace_code: str | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
-    _: User = CURRENT_USER,
+    current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> list[RecommendationRunRead]:
+    if workspace_code:
+        assert_workspace_member(session, current_user, workspace_code, min_role="viewer")
+    else:
+        require_super_admin(current_user)
     statement = select(RecommendationRun).order_by(RecommendationRun.created_at.desc()).limit(limit)
     if workspace_code:
         statement = statement.where(RecommendationRun.workspace_code == workspace_code)
@@ -78,10 +83,12 @@ def list_recommendation_runs(
 @router.get("/runs/{run_id}", response_model=RecommendationRunRead)
 def get_recommendation_run(
     run_id: str,
-    _: User = CURRENT_USER,
+    current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> RecommendationRunRead:
-    return _run_to_read(_load_run(session, run_id))
+    run = _load_run(session, run_id)
+    assert_workspace_member(session, current_user, run.workspace_code, min_role="viewer")
+    return _run_to_read(run)
 
 
 def _load_run(session: Session, run_id: str) -> RecommendationRun:

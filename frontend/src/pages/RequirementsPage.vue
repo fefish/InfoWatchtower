@@ -96,7 +96,7 @@ onMounted(loadRequirements);
       <div>
         <p class="eyebrow">Strategic Loop</p>
         <h2>内部需求</h2>
-        <p>把日报里的外部信号沉淀为规划部可跟踪的需求入口。</p>
+        <p>把日报里的外部信号沉淀为当前工作台可跟踪的需求入口。</p>
       </div>
       <button type="button" class="icon-button secondary" :disabled="loading" @click="loadRequirements">
         <RefreshCw :size="17" />
@@ -155,7 +155,7 @@ onMounted(loadRequirements);
             <span>{{ item.status === "done" ? "重开" : "完成" }}</span>
           </button>
         </article>
-        <p v-if="!loading && requirements.length === 0" class="empty-state">暂无内部需求。</p>
+        <p v-if="!loading && requirements.length === 0" class="empty-state">暂无内部需求，可从日报/周报复盘中新增需要跟进的问题。</p>
       </article>
     </section>
   </section>

@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 
 class RecommendationRunCreate(BaseModel):
-    workspace_code: str = "planning_intel"
+    workspace_code: str
     day_key: str | None = None
     limit: int = Field(default=15, ge=0, le=100)
     source_daily_limit: int = Field(default=2, ge=1, le=20)

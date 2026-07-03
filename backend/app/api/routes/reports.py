@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from app.api.routes.auth import get_current_user, require_super_admin
+from app.api.routes.auth import assert_workspace_member, get_current_user, require_super_admin
 from app.auth.service import write_audit
 from app.core.database import get_db_session
 from app.models.common import utc_now
@@ -12,18 +12,20 @@ from app.models.content import GeneratedNews
 from app.models.feedback import Comment, EditorialAction, Rating, Reaction
 from app.models.identity import User
 from app.models.reports import DailyReport, DailyReportItem, WeeklyReport, WeeklyReportItem
+from app.recommendations.service import (
+    DailyReportGenerationRerunRequest,
+    DailyReportNotFoundError,
+    regenerate_daily_report_generated_news,
+)
+from app.recommendations.service import (
+    PublishedDailyReportError as GenerationPublishedDailyReportError,
+)
 from app.reports.weekly import (
     InvalidWeekKeyError,
     PublishedWeeklyReportError,
     WeeklyReportDraftRequest,
     WorkspaceNotFoundError,
     create_weekly_report_draft,
-)
-from app.recommendations.service import (
-    DailyReportGenerationRerunRequest,
-    DailyReportNotFoundError,
-    PublishedDailyReportError as GenerationPublishedDailyReportError,
-    regenerate_daily_report_generated_news,
 )
 from app.schemas.reports import (
     CommentCreate,
@@ -51,11 +53,12 @@ DB_SESSION = Depends(get_db_session)
 
 @router.get("/daily-reports", response_model=list[DailyReportRead])
 def list_daily_reports(
-    workspace_code: str = Query(default="planning_intel"),
+    workspace_code: str = Query(...),
     limit: int = Query(default=20, ge=1, le=100),
-    _: User = CURRENT_USER,
+    current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> list[DailyReportRead]:
+    assert_workspace_member(session, current_user, workspace_code, min_role="viewer")
     reports = session.scalars(
         select(DailyReport)
         .options(_daily_report_options())
@@ -69,19 +72,22 @@ def list_daily_reports(
 @router.get("/daily-reports/{report_id}", response_model=DailyReportRead)
 def get_daily_report(
     report_id: str,
-    _: User = CURRENT_USER,
+    current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> DailyReportRead:
-    return _daily_report_to_read(_load_daily_report(session, report_id))
+    report = _load_daily_report(session, report_id)
+    assert_workspace_member(session, current_user, report.workspace_code, min_role="viewer")
+    return _daily_report_to_read(report)
 
 
 @router.post("/daily-reports/{report_id}/publish", response_model=DailyReportRead)
 def publish_daily_report(
     report_id: str,
-    current_user: User = SUPER_ADMIN,
+    current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> DailyReportRead:
     report = _load_daily_report(session, report_id)
+    assert_workspace_member(session, current_user, report.workspace_code, min_role="member")
     report.status = "published"
     report.published_at = utc_now()
     write_audit(
@@ -103,9 +109,11 @@ def publish_daily_report(
 def regenerate_daily_report_news(
     report_id: str,
     payload: DailyReportGenerationRerunCreate,
-    current_user: User = SUPER_ADMIN,
+    current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> DailyReportGenerationRerunRead:
+    report = _load_daily_report(session, report_id)
+    assert_workspace_member(session, current_user, report.workspace_code, min_role="member")
     try:
         result = regenerate_daily_report_generated_news(
             session,
@@ -147,11 +155,12 @@ def regenerate_daily_report_news(
 
 @router.get("/weekly-reports", response_model=list[WeeklyReportRead])
 def list_weekly_reports(
-    workspace_code: str = Query(default="planning_intel"),
+    workspace_code: str = Query(...),
     limit: int = Query(default=20, ge=1, le=100),
-    _: User = CURRENT_USER,
+    current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> list[WeeklyReportRead]:
+    assert_workspace_member(session, current_user, workspace_code, min_role="viewer")
     reports = session.scalars(
         select(WeeklyReport)
         .options(*_weekly_report_options())
@@ -165,9 +174,10 @@ def list_weekly_reports(
 @router.post("/weekly-reports", response_model=WeeklyReportRead)
 def create_weekly_report(
     payload: WeeklyReportCreate,
-    current_user: User = SUPER_ADMIN,
+    current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> WeeklyReportRead:
+    assert_workspace_member(session, current_user, payload.workspace_code, min_role="member")
     try:
         report = create_weekly_report_draft(
             session,
@@ -200,19 +210,22 @@ def create_weekly_report(
 @router.get("/weekly-reports/{report_id}", response_model=WeeklyReportRead)
 def get_weekly_report(
     report_id: str,
-    _: User = CURRENT_USER,
+    current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> WeeklyReportRead:
-    return _weekly_report_to_read(_load_weekly_report(session, report_id))
+    report = _load_weekly_report(session, report_id)
+    assert_workspace_member(session, current_user, report.workspace_code, min_role="viewer")
+    return _weekly_report_to_read(report)
 
 
 @router.post("/weekly-reports/{report_id}/publish", response_model=WeeklyReportRead)
 def publish_weekly_report(
     report_id: str,
-    current_user: User = SUPER_ADMIN,
+    current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> WeeklyReportRead:
     report = _load_weekly_report(session, report_id)
+    assert_workspace_member(session, current_user, report.workspace_code, min_role="member")
     report.status = "published"
     report.published_at = utc_now()
     write_audit(
@@ -231,10 +244,11 @@ def publish_weekly_report(
 def update_weekly_report_item(
     item_id: str,
     payload: WeeklyReportItemUpdate,
-    current_user: User = SUPER_ADMIN,
+    current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> WeeklyReportItemRead:
     item = _load_weekly_report_item(session, item_id)
+    assert_workspace_member(session, current_user, item.weekly_report.workspace_code, min_role="member")
     before = _weekly_item_editor_snapshot(item)
     if payload.adoption_status is not None:
         item.adoption_status = payload.adoption_status
@@ -265,10 +279,11 @@ def update_weekly_report_item(
 def update_daily_report_item(
     item_id: str,
     payload: DailyReportItemUpdate,
-    current_user: User = SUPER_ADMIN,
+    current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> DailyReportItemRead:
     item = _load_daily_report_item(session, item_id)
+    assert_workspace_member(session, current_user, item.daily_report.workspace_code, min_role="member")
     before = _item_editor_snapshot(item)
     if payload.adoption_status is not None:
         item.adoption_status = payload.adoption_status
@@ -309,6 +324,7 @@ def react_to_daily_report_item(
     session: Session = DB_SESSION,
 ) -> dict[str, str | bool]:
     item = _load_daily_report_item(session, item_id)
+    assert_workspace_member(session, current_user, item.daily_report.workspace_code, min_role="member")
     reaction = session.scalar(
         select(Reaction).where(
             Reaction.user_id == current_user.id,
@@ -337,6 +353,7 @@ def rate_daily_report_item(
     session: Session = DB_SESSION,
 ) -> RatingRead:
     item = _load_daily_report_item(session, item_id)
+    assert_workspace_member(session, current_user, item.daily_report.workspace_code, min_role="member")
     rating = session.scalar(
         select(Rating).where(
             Rating.user_id == current_user.id,
@@ -369,10 +386,11 @@ def rate_daily_report_item(
 @router.get("/daily-report-items/{item_id}/comments", response_model=list[CommentRead])
 def list_daily_report_item_comments(
     item_id: str,
-    _: User = CURRENT_USER,
+    current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> list[CommentRead]:
-    _load_daily_report_item(session, item_id)
+    item = _load_daily_report_item(session, item_id)
+    assert_workspace_member(session, current_user, item.daily_report.workspace_code, min_role="viewer")
     comments = session.scalars(
         select(Comment)
         .where(
@@ -392,6 +410,7 @@ def create_daily_report_item_comment(
     session: Session = DB_SESSION,
 ) -> CommentRead:
     item = _load_daily_report_item(session, item_id)
+    assert_workspace_member(session, current_user, item.daily_report.workspace_code, min_role="member")
     parent = None
     if payload.parent_id:
         parent = session.get(Comment, payload.parent_id)
@@ -457,7 +476,10 @@ def _load_weekly_report(session: Session, report_id: str) -> WeeklyReport:
 def _load_daily_report_item(session: Session, item_id: str) -> DailyReportItem:
     item = session.scalar(
         select(DailyReportItem)
-        .options(selectinload(DailyReportItem.generated_news).selectinload(GeneratedNews.news_item))
+        .options(
+            selectinload(DailyReportItem.daily_report),
+            selectinload(DailyReportItem.generated_news).selectinload(GeneratedNews.news_item),
+        )
         .where(DailyReportItem.id == item_id),
     )
     if item is None:
@@ -472,6 +494,7 @@ def _load_weekly_report_item(session: Session, item_id: str) -> WeeklyReportItem
     item = session.scalar(
         select(WeeklyReportItem)
         .options(
+            selectinload(WeeklyReportItem.weekly_report),
             selectinload(WeeklyReportItem.generated_news).selectinload(
                 GeneratedNews.recommendation_item,
             ),

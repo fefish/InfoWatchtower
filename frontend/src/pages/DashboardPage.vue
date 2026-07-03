@@ -303,7 +303,7 @@ async function loadBriefing(workspaceCode: string) {
               <span class="trend-day">{{ bar.day }}</span>
             </div>
           </div>
-          <p v-else class="briefing-empty compact">暂无日报数据</p>
+          <p v-else class="briefing-empty compact">暂无日报数据，先跑一次日报流水线或导入已校验日报。</p>
         </article>
       </aside>
     </section>

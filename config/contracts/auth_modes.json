@@ -18,6 +18,12 @@
       "identity_source": "OIDC claims",
       "auto_provision": true
     },
+    "oidc": {
+      "purpose": "Reserved generic OIDC mode.",
+      "identity_source": "OIDC claims",
+      "auto_provision": true,
+      "status": "adapter protocol only; login returns 501 until provider config is added"
+    },
     "intranet_header": {
       "purpose": "Company intranet deployment behind trusted gateway/portal.",
       "identity_source": "trusted request headers",
@@ -50,8 +56,87 @@
     "display_name",
     "department",
     "status",
+    "is_active",
     "last_login_at"
   ],
+  "account_lifecycle_tables": {
+    "user_invites": "Admin-created invite codes with role_code, workspace targets, expiry, revoke and acceptance state.",
+    "password_reset_tokens": "Hashed reset tokens only; plaintext token is never stored.",
+    "login_attempts": "Username + IP success/failure events for local rate limiting and audit support."
+  },
+  "password_flows": {
+    "invite_accept": "Anonymous users can accept a pending invite code, create a local password account, receive the configured global role and explicit workspace memberships, and get a session cookie.",
+    "change_password": "Local users can change password with current_password; must_change_password users may only call /api/auth/me, /api/auth/logout and /api/auth/password/change until complete.",
+    "forgot_password": "Always returns 200; without SMTP it writes audit only and does not create a token.",
+    "admin_reset": "Super admins can issue one temporary password and set users.status=must_change_password."
+  },
+  "login_rate_limit": {
+    "window_minutes": 15,
+    "max_failures_per_username_ip": 5,
+    "blocked_status": 429,
+    "success_clears_window": true
+  },
+  "session_hardening": {
+    "cookie_max_age_seconds_env": "AUTH_SESSION_TTL_SECONDS",
+    "cookie_secure_env": "AUTH_SESSION_COOKIE_SECURE; defaults to true when APP_ENV=production, but local HTTP Docker acceptance may set false",
+    "payload_nonce": "users.updated_at serialized as sv; changing password or admin reset invalidates old cookies",
+    "startup_self_check": "APP_ENV=production requires DATABASE_URL; AUTH_MODE=public_password requires AUTH_SESSION_SECRET at API startup"
+  },
+  "setup_flow": {
+    "status_endpoint": "GET /api/setup/status -> {needs_setup}",
+    "create_endpoint": "POST /api/setup -> first local super_admin; only allowed while users table is empty",
+    "completed_status": "410 Setup already completed",
+    "frontend_route": "/setup",
+    "bootstrap_compatibility": "AUTH_BOOTSTRAP_ADMIN_PASSWORD still creates the first admin for unattended deployments; when present, setup status is false"
+  },
+  "workspace_membership_rule": {
+    "global_super_admin_bypass": true,
+    "role_rank": ["viewer", "member", "admin", "owner"],
+    "read_min_role": "viewer",
+    "editor_min_role": "member",
+    "admin_min_role": "admin",
+    "non_member_error": "403 not a workspace member",
+    "insufficient_role_error": "403 insufficient workspace role",
+    "explicit_workspace_code_rule": "Business list and mutation APIs that operate on workspace content must receive workspace_code from the caller; they must not silently fall back to a tenant-specific workspace.",
+    "route_min_roles": {
+      "viewer": [
+        "workspace sections and label policy read",
+        "sources list for a workspace",
+        "news items and dedupe groups",
+        "ingestion and recommendation run reads when workspace_code is provided",
+        "daily and weekly report reads",
+        "report format list and rendition export",
+        "export job list/detail/trace when workspace_code or job workspace is known"
+      ],
+      "member": [
+        "daily and weekly report publish",
+        "daily and weekly report item edit",
+        "daily report item reactions, ratings and comments",
+        "daily generated-news rerun",
+        "weekly report creation",
+        "rendition regeneration",
+        "company SQL export creation"
+      ],
+      "admin": [
+        "workspace label policy update",
+        "workspace member list/add/remove in that workspace",
+        "user candidate list with workspace_code",
+        "custom source create/update/link in that workspace",
+        "news normalization, ingestion, backfill, recommendation and daily pipeline runs",
+        "custom report format create/update/delete"
+      ],
+      "editor_admin_or_super_admin": [
+        "workspace creation"
+      ],
+      "super_admin_only": [
+        "workspace update/disable",
+        "legacy seed import",
+        "Tech Insight Loop seed import",
+        "global recommendation/export lists without workspace_code",
+        "global user list without workspace_code, role and invite administration"
+      ]
+    }
+  },
   "audit_snapshot_fields": [
     "user_id",
     "external_provider",

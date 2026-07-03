@@ -217,7 +217,7 @@ onMounted(loadSource);
     </div>
 
     <section v-else class="module-card">
-      <p class="empty-state">{{ loading ? "加载中..." : "没有找到这个数据源。" }}</p>
+      <p class="empty-state">{{ loading ? "加载中..." : "没有找到这个数据源，请回到数据源列表选择或新建信息源。" }}</p>
     </section>
   </section>
 </template>

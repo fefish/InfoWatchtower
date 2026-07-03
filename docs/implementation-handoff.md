@@ -207,6 +207,7 @@ daily_report_items
 - `public_password`
 - `local`
 - `intranet_header`
+- `oidc` 预留 Protocol（未配置 provider 时返回 501）
 
 统一流程：
 
@@ -216,9 +217,15 @@ AuthAdapter -> ExternalIdentity -> IdentityResolver -> users -> session/JWT -> R
 
 验收：
 
-- 公网账号密码能登录。
+- 公网账号密码能登录；登录失败同一账号+IP 15 分钟内 5 次后返回 429。
+- 超级管理员可创建/撤销邀请，邀请必须显式指定工作台目标；匿名用户可通过 `/invite/:code` 建号并获得角色和工作台 membership。
+- 本地用户可在 `/account` 改密；管理员代重置会返回一次性临时密码并强制 `must_change_password`。
+- 改密或代重置后旧 cookie 失效；`AUTH_MODE=public_password` 且缺 `AUTH_SESSION_SECRET` 时启动失败，`APP_ENV=production` 且缺 `DATABASE_URL` 时启动失败。
+- 空 `users` 表且无 bootstrap 密码时，`GET /api/setup/status` 返回 `needs_setup=true`，`POST /api/setup` 创建首个 `super_admin` 并签发 session；已有任意用户后再次调用返回 410。
 - 内网模式下，可信 header 能自动创建用户。
 - 业务接口只认本地 `user_id` 和本地角色。
+- 带 `workspace_code` 的业务 API 需执行 membership 校验；当前已接入 workspace sections/label policy、members、sources、ingestion、news、recommendation、daily/weekly reports、renditions 和 exports。viewer 只读，member 可采信/编辑/发布/导出，admin/owner 可管理成员、源、标签策略、格式和流水线 run；业务列表/写入接口必须由调用方显式传入 `workspace_code`，不能静默回退到某个租户；无 `workspace_code` 的全局列表仍限 super_admin，`GET /api/users?workspace_code=...` 只给该工作台 admin/owner 提供用户候选列表。
+- `super_admin/editor_admin` 可通过三步向导自助创建工作台；`PATCH /api/workspaces/{code}` 仅 `super_admin` 可用，`planning_intel` 不可停用；`config/domain_packs/hardware.json` 已作为 domain pack 样例注册 label set。
 - 修改认证模式不需要改日报、数据源、评论等业务代码。
 
 ### 5.4 数据源导入
@@ -488,7 +495,8 @@ API 与页面细节见 `docs/api-and-ui-implementation.md`。
 
 第一版页面：
 
-- 登录页。
+- 登录页、邀请接受页 `/invite/:code`、账号改密页 `/account`。
+- 首次运行设置页 `/setup`：空库创建首个管理员，可选导入内置种子源。
 - 数据源列表页：已实现共享源信息流、工作台统一标签/新闻结构、单源启停/权重/日限。
 - 数据源详情页：已实现配置、启停、最近抓取、来源评分。
 - 候选池页：已实现 winner/loser、重复来源、候选搜索、推荐分、日报采信状态和追溯入口。
@@ -497,7 +505,7 @@ API 与页面细节见 `docs/api-and-ui-implementation.md`。
 - 日报时间线页：已实现展示、点赞、评分、评论、采信和编辑弹窗。
 - 日报详情/编辑路由：已实现独立详情与轻编辑入口。
 - SQL 导出页：已实现已发布日报选择、导出历史、SQL 生成、预览和下载。
-- 用户和角色管理页：已实现。
+- 用户和角色管理页：已实现角色管理、邀请管理、邀请链接复制、用户启停、管理员代重置密码和工作台成员管理。
 - 周报、需求、任务、同步、审计：已从模块路线页升级为真实 API 页面；同步页当前记录同步 run，完整同步包导出/导入仍按 `docs/multi-environment-sync.md` 继续实现。
 
 当前前端/后端下一步边界：
@@ -508,6 +516,7 @@ API 与页面细节见 `docs/api-and-ui-implementation.md`。
 - 周报页下一步补热度/反馈排序、自动周报正文和周报导出；板块 v1 继续来自成品新闻一级标签，若需要业务化板块名，新增映射层而不是改 `generated_news.category`。
 - 补采页下一步补论文 provider、分页归档、sitemap 深挖、失败源重试和手工 CSV 上传；`rss_window` 的语义继续是当前 feed 窗口恢复，不能宣传成全站历史归档抓取。
 - 需求/任务页下一步从已发布日报/周报条目一键沉淀 insight、requirement 和 task，并补完整追溯。
+- 扩展侧已补三步建台向导、工作台更新/停用、成员管理、`hardware` domain pack 样例和 `docs/extension-recipes.md`；部署侧已补 `deploy/install.sh`、`deploy/upgrade.sh`、API 容器启动自动迁移、`scripts/backup_db.sh`、`scripts/restore_db.sh` 和生产配置 healthcheck 检查；最终 §9 走查已脚本化为 `scripts/run_full_acceptance.py`，并由 `backend/tests/test_full_acceptance_script.py` 覆盖 Setup/邀请/建台/共享源+自建源/标签策略/自定义周报格式/流水线/日报周报导出/公司 SQL 校验/备份入口。
 
 前端不要做营销首页，打开后就是工作台。
 

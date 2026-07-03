@@ -90,8 +90,11 @@ P2/P3 观察池的复核工作流（P2）。
 | 配置 | `taxonomy/business_boards.json`（14 板块，辅助维度）、`contracts/report_renditions.json` |
 
 现状：✅ P1-P4 已实施：双内置格式、头条自动 Top6+可调、板块分组、MD/HTML 导出对齐快报
-样式、自定义格式注册表、周报双版；未配 MiniMax key 时 insight 走规则降级并标注。
-**Gap**：① 生产配置 MiniMax key 后验证模型版 insight 质量（P0，运维+验收动作）
+样式、自定义格式注册表、周报双版；未配 MiniMax key 时 insight 走规则降级并标注；
+`scripts/validate_minimax_generation_acceptance.py` 已提供真实 key 结构验收和 fixture pytest。
+真实 MiniMax 验收已通过并归档到 `outputs/minimax/minimax_generation_acceptance.json`；
+validator 会拒绝来源未给出的百分比、P95/P99、倍数、延迟/显存数值，避免模型成稿编造指标。
+**Gap**：① 模型版 insight/成稿在真实生产日报流水线中持续抽检（P0 运维动作）
 ② 周报开头摘要段（板块分布/关键亮点）的模型生成（P1）③ 快报 PPT 导出（旧系统能力，
 可选插件，P2）。
 
@@ -118,9 +121,10 @@ P2/P3 观察池的复核工作流（P2）。
 | 数据 | `export_jobs/items`、`sync_outbox/inbox/runs` |
 | 校验 | `scripts/validate_company_sql.py`（0505 基准） |
 
-现状：✅ 4 表合同+逐字段校验+语句级追溯；同步包骨架可导出/导入。
-**Gap**：① 同步导入侧业务 apply handler 与冲突处理（P0，多环境真正打通的关键）
-② 导出前字段长度/URL/HTML 污染校验摘要（P1）③ 生产备份恢复演练（P0 运维）。
+现状：✅ 4 表合同+逐字段校验+语句级追溯；同步包可导出/下载/导入，`data_sources/raw_items/news_items`
+已按 `object_global_id/global_id` 幂等 apply，revision/hash 冲突写 `sync_conflicts`。
+**Gap**：① 更多同步 object_type 与冲突解决 UI（P1）② 导出前字段长度/URL/HTML 污染校验摘要（P1）
+③ 生产备份恢复演练（P0 运维）。
 
 ### G. 资料库与知识沉淀
 
@@ -132,8 +136,12 @@ P2/P3 观察池的复核工作流（P2）。
 | 数据 | `historical_reports`、`tracked_entities/entity_milestones`、`historical_feedback_items/historical_job_runs`、`insights/requirements/topic_tasks` |
 
 现状：✅ 旧库 14834 素材/66 报告/275 大事记的导入脚本、只读页、验收摘要、引用缺口全链
-就绪（默认 no-write）。
-**Gap**：① 生产主库执行全量导入验收（P0，一条命令级动作+人工核对）② 从新日报/周报持
+就绪（默认 no-write）；`scripts/validate_tech_import_acceptance.py` 可对生产 `--check-only`
+报告做机器验收，覆盖率、只读边界和已归档缺口不满足时直接失败。本地隔离 PostgreSQL 全量导入
+证据已归档到 `outputs/tech_insight_loop/postgres_full_import_20260703T050653Z/`，7 项覆盖率 complete，
+30 个旧库断链引用已通过 `tech_insight_loop_import_accepted_gaps.json` 归档；旧 PDF/二进制文本中的
+NUL byte 会转义为 `\u0000` 标记并写入 `legacy_import.nul_sanitized_fields` 审计。
+**Gap**：① 生产主库执行同一套全量导入验收（P0，一条命令级动作+机器验收+缺口人工复核）② 从新日报/周报持
 续沉淀实体大事记（编辑入口，P1）③ insight→requirement→task 与外部信号的完整追溯闭环
 （P1）。
 
@@ -147,28 +155,25 @@ P2/P3 观察池的复核工作流（P2）。
 | 部署 | `deploy/docker-compose.{local,prod}.yml`（PG+Redis+API+worker+scheduler+Caddy） |
 | 设计系统 | Apple Liquid Glass（`base.css` :root token + 唯一主题层）、晨报式今日速览、≤1120px 图标栏响应式 |
 
-现状：✅ 工作台可自助扩展且 seed 不覆盖自建台；导航/分区/格式全部数据库驱动。
-**Gap**：① workspace membership 级权限执行（模型已有，检查未启用，P1）② 登录限流/
-默认密码治理/OIDC 预留落地（P0 安全）③ 长期覆盖趋势与异常告警（P2）④ 硬件/半导体
-domain pack 样例（P2，证明扩展性）。
+现状：✅ 工作台模型、三步建台向导、成员管理、导航/分区/格式数据库驱动和 hardware domain pack 样例已落地；✅ 登录限流、邀请建号、改密/重置、会话密钥自检、OIDC Protocol 预留和主要业务 API membership gate 已落地；✅ `install.sh`、启动自动迁移、`/setup`、生产自检、备份/恢复脚本和 §9 全量业务验收脚本已落地。干净 Docker 证据已归档到 `outputs/acceptance/20260703T062259Z/`。
+**Gap**：① 长期覆盖趋势与异常告警（P2）② 快报 PPT 插件（P2）③ 更多 domain pack 样例（P2，可选扩展）。
 
 ## 4. 差距汇总（按优先级）
 
 | 级 | 差距 | 所属块 | 判定标准 |
 |---|---|---|---|
-| P0 | 生产库执行 Tech 历史资产全量导入验收 | G | `--check-only` 覆盖率对齐冻结基线，缺口清零或归档 |
-| P0 | 同步包业务 apply handler + 冲突处理 | F | 公网→内网一次真实同步，对象落库幂等 |
-| P0 | 生产登录安全（限流/密码治理）+ 备份恢复演练 | H/F | 演练记录入 docs/deployment-ops.md |
-| P0 | MiniMax key 配置后模型版 insight/成稿验收 | D | 技术洞察版要点/总结与快报样例人工对齐 |
+| P0 | 生产库执行 Tech 历史资产全量导入验收 | G | 本地隔离 PostgreSQL 全量证据已通过；生产库仍需 `--check-only` 覆盖率对齐冻结基线，`validate_tech_import_acceptance.py` 通过，缺口清零或用 accepted-gaps JSON 归档 |
+| P1 | 更多同步 object_type 与冲突解决 UI | F | `data_sources/raw_items/news_items` 已落业务表；后续扩展 generated_news/report 等对象并提供人工冲突处理 |
+| P0 | 干净环境 §9 全量业务验收证据 | H/F | ✅ 已通过；`scripts/run_full_acceptance.py` 输出归档到 `outputs/acceptance/20260703T062259Z/`，覆盖 Setup、邀请、建台、共享源+自建源、标签策略、周报格式、流水线、日报/周报 MD/HTML、公司 SQL 校验和备份 |
+| P0 | MiniMax key 配置后模型版 insight/成稿验收 | D | ✅ `validate_minimax_generation_acceptance.py` live 通过，技术洞察版结构、五段 content_json、短关键词和无编造数值门禁已归档；后续保留生产日报抽检 |
 | P1 | wx:// 公众号 adapter 或替代入口 | A | 31 个待补源可抓取或明确豁免 |
 | P1 | 深度历史补采（归档页/sitemap 深挖） | A | 指定历史日期可恢复候选 |
 | P1 | 周报摘要段模型生成 | D | 周报 rendition 头部自动产出板块分布+亮点 |
 | P1 | 实体大事记从新报告持续沉淀 | G | 采信条目可一键登记实体事件并追溯 |
-| P1 | membership 级权限执行 | H | 非成员访问工作台被拒并审计 |
 | P1 | 流水线计算移出事件循环 | E | 导入期间 API P99 不劣化 |
 | P2 | 评分器运营页 / 观察池复核 | C | 管理员可解释"谁被拒、为什么" |
 | P2 | 候选池批量操作、失败源重试告警、覆盖趋势 | A/E/H | 页面可批量采信；失败源有重试记录 |
-| P2 | domain pack 样例（硬件/半导体）、快报 PPT 插件 | H/D | 不改主链路完成一个新板块端到端 |
+| P2 | 快报 PPT 插件 / 更多 domain pack 样例 | D/H | 不改主链路扩展新输出或新板块 |
 
 ## 5. 能力块 ↔ 专题文档映射
 

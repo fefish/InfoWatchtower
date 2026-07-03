@@ -17,6 +17,7 @@
   ],
   "ingestion_run_rule": "A workspace ingestion run selects enabled workspace_source_links, executes the registered adapters, persists raw_items idempotently, and records run-level source success/failure plus raw created/updated counts. Schedulers and workers must call this same service layer instead of bypassing adapters.",
   "adapter_rule": "Each source type may have its own input structure, but every adapter must persist the full raw payload and emit canonical raw_items. Normalization enriches and maps fields; it must not discard the original payload.",
+  "adapter_network_rule": "HTTP adapters that fetch RSS, paper RSS, archive pages or sitemaps must not inherit host proxy environment variables by default; local, intranet and container-internal sources must be fetched directly unless a source-specific proxy is explicitly configured.",
   "raw_item_identity_rule": "raw_items are idempotent by data_source_id + entry_key. entry_key must fit raw_items.entry_key length 255. If an upstream feed id or redirect URL is longer, the ingestion layer must deterministically shorten it with a stable hash suffix while preserving the original value inside raw_payload_json.",
   "source_type_to_adapter": {
     "wiseflow": "WiseflowReadInfoAdapter",
@@ -191,6 +192,12 @@
     "provider_rule": "Model output must be strict JSON, must be Simplified Chinese except for proper nouns, and category must be one of the workspace label policy primary labels. Source trace IDs are forced by backend after generation.",
     "news_format_rule": "For planning_intel/company_sql_v1, generated_news.content_json must contain background, effects, eventSummary, technologyAndInnovation and valueAndImpact so later SQL export can map without guessing.",
     "fallback_rule": "LLM timeout or failure must not abort the daily pipeline; selected recommendations still generate rule_v1:fallback drafts with the same required content_json fields, but generation_status must be fallback_needs_review and standard Company SQL export must reject them until an LLM-ready or edited-ready version exists.",
+    "live_acceptance_command": "MINIMAX_GENERATION_ENABLED=true MINIMAX_API_KEY=<secret> python3 scripts/validate_minimax_generation_acceptance.py",
+    "latest_live_acceptance": {
+      "output_json": "outputs/minimax/minimax_generation_acceptance.json",
+      "response_text": "outputs/minimax/minimax_live_acceptance_20260703.response.txt",
+      "status": "passed with MiniMax-M2.7-highspeed; unsupported numeric claims not present in source are rejected by the validator"
+    },
     "rerun_api": "POST /api/daily-reports/{report_id}/regenerate-generated-news can rerun non-ready or selected generated_news rows for a draft daily report."
   },
   "scheduled_daily_pipeline": {
@@ -206,6 +213,7 @@
       "INGESTION_SCHEDULER_LIMIT",
       "INGESTION_CONCURRENCY",
       "INGESTION_SOURCE_TIMEOUT_SECONDS",
+      "INGESTION_MAX_ITEMS_PER_SOURCE",
       "INGESTION_SCHEDULER_DAILY_TIME",
       "INGESTION_SCHEDULER_TIMEZONE",
       "DAILY_PIPELINE_DAY_OFFSET_DAYS"

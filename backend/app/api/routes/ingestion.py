@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.api.routes.auth import get_current_user, require_super_admin
+from app.api.routes.auth import assert_workspace_member, get_current_user, require_super_admin
 from app.core.database import get_db_session
 from app.ingestion.runs import (
     HistoricalBackfillRequest,
@@ -51,9 +51,10 @@ BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 @router.post("/runs", response_model=IngestionRunRead)
 async def create_ingestion_run(
     payload: IngestionRunCreate,
-    _: User = SUPER_ADMIN,
+    current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> IngestionRunRead:
+    assert_workspace_member(session, current_user, payload.workspace_code, min_role="admin")
     try:
         run = await run_workspace_ingestion(
             session,
@@ -77,9 +78,10 @@ async def create_ingestion_run(
 @router.post("/backfill-runs", response_model=IngestionRunRead)
 async def create_historical_backfill_run(
     payload: HistoricalBackfillCreate,
-    _: User = SUPER_ADMIN,
+    current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> IngestionRunRead:
+    assert_workspace_member(session, current_user, payload.workspace_code, min_role="admin")
     try:
         run = await run_historical_backfill(
             session,
@@ -113,9 +115,13 @@ def list_ingestion_runs(
     workspace_code: str | None = Query(default=None),
     run_type: str | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
-    _: User = CURRENT_USER,
+    current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> list[IngestionRunRead]:
+    if workspace_code:
+        assert_workspace_member(session, current_user, workspace_code, min_role="viewer")
+    else:
+        require_super_admin(current_user)
     statement = select(IngestionRun).order_by(IngestionRun.created_at.desc())
     if workspace_code:
         statement = statement.where(IngestionRun.workspace_code == workspace_code)
@@ -128,23 +134,25 @@ def list_ingestion_runs(
 @router.get("/runs/{run_id}", response_model=IngestionRunRead)
 def get_ingestion_run(
     run_id: str,
-    _: User = CURRENT_USER,
+    current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> IngestionRunRead:
     run = session.get(IngestionRun, run_id)
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ingestion run not found")
+    assert_workspace_member(session, current_user, run.workspace_code, min_role="viewer")
     return _run_to_read(run)
 
 
 @router.get("/coverage", response_model=IngestionCoverageRead)
 def get_ingestion_coverage(
-    workspace_code: str = Query(default="planning_intel"),
+    workspace_code: str = Query(...),
     day_key: str | None = Query(default=None),
     run_id: str | None = Query(default=None),
-    _: User = CURRENT_USER,
+    current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> IngestionCoverageRead:
+    assert_workspace_member(session, current_user, workspace_code, min_role="viewer")
     workspace = session.scalar(
         select(Workspace).where(
             Workspace.code == workspace_code,

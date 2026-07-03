@@ -5,6 +5,7 @@ import io
 import json
 import zipfile
 from datetime import date, datetime, time, timezone
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
@@ -25,11 +26,18 @@ from app.ingestion.tech_insight_loop_import_audit import (
 )
 from app.ingestion.tech_insight_loop_legacy import LEGACY_WORKSPACE_CODE
 from app.models.common import utc_now
+from app.models.content import DataSource, NewsItem, RawItem
 from app.models.feedback import AuditLog
 from app.models.identity import User
-from app.models.legacy import EntityMilestone, HistoricalFeedbackItem, HistoricalJobRun, HistoricalReport, TrackedEntity
+from app.models.legacy import (
+    EntityMilestone,
+    HistoricalFeedbackItem,
+    HistoricalJobRun,
+    HistoricalReport,
+    TrackedEntity,
+)
 from app.models.strategy import Requirement, TopicTask
-from app.models.sync import SyncInbox, SyncOutbox, SyncRun
+from app.models.sync import SyncConflict, SyncInbox, SyncOutbox, SyncRun
 from app.schemas.operations import (
     AuditLogRead,
     EntityMilestoneDetailRead,
@@ -63,11 +71,13 @@ SUPER_ADMIN = Depends(require_super_admin)
 CURRENT_USER = Depends(get_current_user)
 DB_SESSION = Depends(get_db_session)
 EXPORTABLE_SYNC_POLICIES = {"public_to_intranet", "manual_only", "two_way_config"}
+SYNC_APPLY_OBJECT_TYPES = {"data_sources", "raw_items", "news_items"}
+SYNC_SECRET_KEY_PARTS = ("secret", "token", "password", "cookie", ".env")
 
 
 @router.get("/requirements", response_model=list[RequirementRead])
 def list_requirements(
-    workspace_code: str = Query(default="planning_intel"),
+    workspace_code: str = Query(...),
     status_filter: str | None = Query(default=None, alias="status"),
     limit: int = Query(default=50, ge=1, le=200),
     _: User = CURRENT_USER,
@@ -148,7 +158,7 @@ def update_requirement(
 
 @router.get("/topic-tasks", response_model=list[TopicTaskRead])
 def list_topic_tasks(
-    workspace_code: str = Query(default="planning_intel"),
+    workspace_code: str = Query(...),
     status_filter: str | None = Query(default=None, alias="status"),
     limit: int = Query(default=50, ge=1, le=200),
     _: User = CURRENT_USER,
@@ -302,9 +312,23 @@ def import_sync_package(
     if expected_hash and expected_hash != _hash_json(payload.records):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="records_sha256 does not match records")
 
+    now = utc_now()
+    run = SyncRun(
+        package_id=f"{package_id}_import_{now.strftime('%Y%m%d%H%M%S%f')}",
+        source_instance_id=str(payload.package_manifest.get("source_instance_id") or ""),
+        target_instance_id=str(payload.package_manifest.get("target_instance_id") or ""),
+        direction="import",
+        status="running",
+        counts_json={},
+        started_at=now,
+    )
+    session.add(run)
+    session.flush()
+
     applied = 0
     skipped = 0
     failed = 0
+    conflicts = 0
     errors: list[str] = []
     for record in payload.records:
         event_id = str(record.get("event_id") or "")
@@ -318,45 +342,66 @@ def import_sync_package(
             skipped += 1
             continue
 
+        object_type = str(record.get("object_type") or "")
+        object_id = str(record.get("object_global_id") or record.get("object_id") or "")
+        record_payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+        try:
+            apply_status, error_message = _apply_sync_record(session, run, record)
+        except ValueError as exc:
+            apply_status = "failed"
+            error_message = str(exc)
+
+        if apply_status == "applied":
+            applied += 1
+        elif apply_status == "conflict":
+            conflicts += 1
+            errors.append(error_message or f"conflict applying {event_id}")
+        elif apply_status == "skipped":
+            skipped += 1
+        else:
+            failed += 1
+            errors.append(error_message or f"failed applying {event_id}")
+
         session.add(
             SyncInbox(
                 event_id=event_id,
                 source_instance_id=str(payload.package_manifest.get("source_instance_id") or ""),
-                object_type=str(record.get("object_type") or ""),
-                object_id=str(record.get("object_global_id") or record.get("object_id") or ""),
-                payload_hash=str(record.get("content_hash") or ""),
-                status="applied",
+                object_type=object_type,
+                object_id=object_id,
+                payload_hash=str(record.get("content_hash") or _hash_json(record_payload)),
+                status=apply_status,
             ),
         )
-        applied += 1
 
-    now = utc_now()
-    run = SyncRun(
-        package_id=f"{package_id}_import_{now.strftime('%Y%m%d%H%M%S%f')}",
-        source_instance_id=str(payload.package_manifest.get("source_instance_id") or ""),
-        target_instance_id=str(payload.package_manifest.get("target_instance_id") or ""),
-        direction="import",
-        status="completed" if failed == 0 else "completed_with_errors",
-        counts_json={
-            "source_package_id": package_id,
-            "received": len(payload.records),
-            "applied": applied,
-            "skipped": skipped,
-            "failed": failed,
-            "errors": errors,
-        },
-        started_at=now,
-        completed_at=now,
-    )
-    session.add(run)
-    session.flush()
+    if failed:
+        run.status = "completed_with_errors"
+    elif conflicts:
+        run.status = "completed_with_conflicts"
+    else:
+        run.status = "completed"
+    run.counts_json = {
+        "source_package_id": package_id,
+        "received": len(payload.records),
+        "applied": applied,
+        "skipped": skipped,
+        "failed": failed,
+        "conflicts": conflicts,
+        "errors": errors,
+    }
+    run.completed_at = utc_now()
     write_audit(
         session,
         current_user,
         "sync_package.import",
         "sync_run",
         run.id,
-        {"source_package_id": package_id, "applied": applied, "skipped": skipped, "failed": failed},
+        {
+            "source_package_id": package_id,
+            "applied": applied,
+            "skipped": skipped,
+            "failed": failed,
+            "conflicts": conflicts,
+        },
     )
     session.commit()
     return SyncPackageImportRead(
@@ -366,6 +411,7 @@ def import_sync_package(
         applied=applied,
         skipped=skipped,
         failed=failed,
+        conflicts=conflicts,
         errors=errors,
     )
 
@@ -393,7 +439,7 @@ def list_audit_logs(
 
 @router.get("/legacy-import/summary", response_model=LegacyImportSummaryRead)
 def get_legacy_import_summary(
-    workspace_code: str = Query(default=LEGACY_WORKSPACE_CODE),
+    workspace_code: str = Query(...),
     _: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> LegacyImportSummaryRead:
@@ -403,7 +449,7 @@ def get_legacy_import_summary(
 
 @router.get("/legacy-import/gaps", response_model=list[LegacyImportGapItemRead])
 def list_legacy_import_gaps(
-    workspace_code: str = Query(default=LEGACY_WORKSPACE_CODE),
+    workspace_code: str = Query(...),
     kind: str = Query(default="all", pattern="^(all|historical_reports|entity_milestones|historical_feedback)$"),
     limit: int = Query(default=50, ge=1, le=300),
     _: User = CURRENT_USER,
@@ -415,7 +461,7 @@ def list_legacy_import_gaps(
 
 @router.get("/quality-archive/summary", response_model=QualityArchiveSummaryRead)
 def get_quality_archive_summary(
-    workspace_code: str = Query(default=LEGACY_WORKSPACE_CODE),
+    workspace_code: str = Query(...),
     _: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> QualityArchiveSummaryRead:
@@ -481,7 +527,7 @@ def get_quality_archive_summary(
 
 @router.get("/historical-feedback-items", response_model=list[HistoricalFeedbackListItem])
 def list_historical_feedback_items(
-    workspace_code: str = Query(default=LEGACY_WORKSPACE_CODE),
+    workspace_code: str = Query(...),
     feedback_kind: str | None = Query(default=None),
     feedback_type: str | None = Query(default=None),
     q: str | None = Query(default=None),
@@ -522,7 +568,7 @@ def list_historical_feedback_items(
 
 @router.get("/historical-job-runs", response_model=list[HistoricalJobRunListItem])
 def list_historical_job_runs(
-    workspace_code: str = Query(default=LEGACY_WORKSPACE_CODE),
+    workspace_code: str = Query(...),
     job_type: str | None = Query(default=None),
     status_filter: str | None = Query(default=None, alias="status"),
     q: str | None = Query(default=None),
@@ -555,7 +601,7 @@ def list_historical_job_runs(
 
 @router.get("/historical-reports/summary", response_model=HistoricalReportSummaryRead)
 def get_historical_reports_summary(
-    workspace_code: str = Query(default="legacy_tech_insight_loop"),
+    workspace_code: str = Query(...),
     _: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> HistoricalReportSummaryRead:
@@ -590,7 +636,7 @@ def get_historical_reports_summary(
 
 @router.get("/historical-reports", response_model=list[HistoricalReportListItem])
 def list_historical_reports(
-    workspace_code: str = Query(default="legacy_tech_insight_loop"),
+    workspace_code: str = Query(...),
     report_type: str | None = Query(default=None),
     status_filter: str | None = Query(default=None, alias="status"),
     start_date: date | None = Query(default=None),
@@ -635,7 +681,7 @@ def get_historical_report(
 
 @router.get("/entity-timeline/summary", response_model=EntityTimelineSummaryRead)
 def get_entity_timeline_summary(
-    workspace_code: str = Query(default="legacy_tech_insight_loop"),
+    workspace_code: str = Query(...),
     _: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> EntityTimelineSummaryRead:
@@ -690,7 +736,7 @@ def get_entity_timeline_summary(
 
 @router.get("/tracked-entities", response_model=list[TrackedEntityListItem])
 def list_tracked_entities(
-    workspace_code: str = Query(default="legacy_tech_insight_loop"),
+    workspace_code: str = Query(...),
     entity_type: str | None = Query(default=None),
     rank: str | None = Query(default=None),
     q: str | None = Query(default=None),
@@ -721,7 +767,7 @@ def list_tracked_entities(
 
 @router.get("/entity-milestones", response_model=list[EntityMilestoneListItem])
 def list_entity_milestones(
-    workspace_code: str = Query(default="legacy_tech_insight_loop"),
+    workspace_code: str = Query(...),
     tracked_entity_id: str | None = Query(default=None),
     entity_type: str | None = Query(default=None),
     event_type: str | None = Query(default=None),
@@ -863,6 +909,377 @@ def _sync_outbox_to_record(item: SyncOutbox) -> dict[str, object]:
         "workspace_code": item.workspace_code,
         "domain_code": item.domain_code,
         "payload": payload,
+    }
+
+
+def _apply_sync_record(session: Session, run: SyncRun, record: dict[str, Any]) -> tuple[str, str | None]:
+    object_type = str(record.get("object_type") or "")
+    operation = str(record.get("operation") or "upsert")
+    if object_type not in SYNC_APPLY_OBJECT_TYPES:
+        return "failed", f"unsupported object_type: {object_type}"
+    if operation not in {"upsert", "create", "update"}:
+        return "failed", f"unsupported operation for {object_type}: {operation}"
+
+    payload = record.get("payload")
+    if not isinstance(payload, dict):
+        return "failed", f"{object_type} payload must be an object"
+    if _contains_secret_key(payload):
+        return "failed", f"{object_type} payload contains secret-like fields"
+    if str(record.get("visibility_scope") or payload.get("visibility_scope") or "") == "restricted":
+        return "skipped", f"{object_type} has restricted visibility"
+
+    if object_type == "data_sources":
+        return _apply_data_source_record(session, run, record, payload)
+    if object_type == "raw_items":
+        return _apply_raw_item_record(session, run, record, payload)
+    if object_type == "news_items":
+        return _apply_news_item_record(session, run, record, payload)
+    return "failed", f"unsupported object_type: {object_type}"
+
+
+def _apply_data_source_record(
+    session: Session,
+    run: SyncRun,
+    record: dict[str, Any],
+    payload: dict[str, Any],
+) -> tuple[str, str | None]:
+    global_id = _record_global_id(record, payload)
+    incoming_revision = _record_revision(record, payload)
+    incoming_hash = _record_content_hash(record, payload)
+    source = session.scalar(select(DataSource).where(DataSource.global_id == global_id))
+    if source is not None:
+        conflict = _maybe_record_sync_conflict(
+            session,
+            run,
+            object_type="data_sources",
+            object_id=global_id,
+            local_revision=source.revision,
+            incoming_revision=incoming_revision,
+            local_hash=source.content_hash,
+            incoming_hash=incoming_hash,
+            local_json=_data_source_snapshot(source),
+            incoming_json=payload,
+        )
+        if conflict:
+            return "conflict", conflict
+    else:
+        source = DataSource(
+            global_id=global_id,
+            origin_instance_id=str(payload.get("origin_instance_id") or "remote"),
+            source_type=str(payload.get("source_type") or "rss"),
+            name=str(payload.get("name") or payload.get("source_name") or global_id),
+        )
+        session.add(source)
+
+    source.workspace_code = str(payload.get("workspace_code") or record.get("workspace_code") or "shared")
+    source.domain_code = str(payload.get("domain_code") or record.get("domain_code") or source.domain_code or "ai")
+    source.visibility_scope = str(payload.get("visibility_scope") or record.get("visibility_scope") or "public")
+    source.sync_policy = str(payload.get("sync_policy") or record.get("sync_policy") or "public_to_intranet")
+    source.source_type = str(payload.get("source_type") or source.source_type)
+    source.name = str(payload.get("name") or source.name)
+    source.url = _optional_str(payload.get("url"))
+    source.enabled = bool(payload.get("enabled", source.enabled))
+    source.default_focus_id = _int_value(payload.get("default_focus_id"), source.default_focus_id)
+    source.backfill_days = _int_value(payload.get("backfill_days"), source.backfill_days)
+    source.credential_ref = _optional_str(payload.get("credential_ref"))
+    source.fetch_config = _dict_value(payload.get("fetch_config"))
+    source.paper_config = _dict_value(payload.get("paper_config"))
+    source.metadata_json = _dict_value(payload.get("metadata_json") or payload.get("metadata"))
+    source.last_fetch_at = _datetime_value(payload.get("last_fetch_at"))
+    source.last_success_at = _datetime_value(payload.get("last_success_at"))
+    source.last_error = str(payload.get("last_error") or "")
+    source.source_score = _float_value(payload.get("source_score"), source.source_score)
+    source.revision = incoming_revision
+    source.content_hash = incoming_hash
+    return "applied", None
+
+
+def _apply_raw_item_record(
+    session: Session,
+    run: SyncRun,
+    record: dict[str, Any],
+    payload: dict[str, Any],
+) -> tuple[str, str | None]:
+    global_id = _record_global_id(record, payload)
+    incoming_revision = _record_revision(record, payload)
+    incoming_hash = _record_content_hash(record, payload)
+    raw_item = session.scalar(select(RawItem).where(RawItem.global_id == global_id))
+    data_source = _resolve_data_source(session, payload)
+    if data_source is None:
+        return "failed", "raw_items payload cannot resolve data source"
+
+    if raw_item is not None:
+        conflict = _maybe_record_sync_conflict(
+            session,
+            run,
+            object_type="raw_items",
+            object_id=global_id,
+            local_revision=raw_item.revision,
+            incoming_revision=incoming_revision,
+            local_hash=raw_item.content_hash,
+            incoming_hash=incoming_hash,
+            local_json=_raw_item_snapshot(raw_item),
+            incoming_json=payload,
+        )
+        if conflict:
+            return "conflict", conflict
+    else:
+        raw_item = RawItem(
+            global_id=global_id,
+            origin_instance_id=str(payload.get("origin_instance_id") or "remote"),
+            data_source=data_source,
+            source_type=str(payload.get("source_type") or data_source.source_type),
+            source_name=str(payload.get("source_name") or data_source.name),
+            entry_key=str(payload.get("entry_key") or global_id)[:255],
+            fetched_at=_datetime_value(payload.get("fetched_at")) or utc_now(),
+        )
+        session.add(raw_item)
+
+    raw_item.data_source = data_source
+    raw_item.workspace_code = str(payload.get("workspace_code") or record.get("workspace_code") or "planning_intel")
+    raw_item.domain_code = str(payload.get("domain_code") or record.get("domain_code") or data_source.domain_code)
+    raw_item.visibility_scope = str(payload.get("visibility_scope") or record.get("visibility_scope") or "public")
+    raw_item.sync_policy = str(payload.get("sync_policy") or record.get("sync_policy") or "public_to_intranet")
+    raw_item.source_type = str(payload.get("source_type") or data_source.source_type)
+    raw_item.source_name = str(payload.get("source_name") or data_source.name)
+    raw_item.entry_key = str(payload.get("entry_key") or raw_item.entry_key)[:255]
+    raw_item.source_title = str(payload.get("source_title") or "")
+    raw_item.source_url = _optional_str(payload.get("source_url"))
+    raw_item.raw_content = str(payload.get("raw_content") or "")
+    raw_item.fetched_at = _datetime_value(payload.get("fetched_at")) or raw_item.fetched_at or utc_now()
+    raw_item.published_at = _datetime_value(payload.get("published_at"))
+    raw_item.raw_payload_json = _dict_value(payload.get("raw_payload_json"))
+    raw_item.revision = incoming_revision
+    raw_item.content_hash = incoming_hash
+    return "applied", None
+
+
+def _apply_news_item_record(
+    session: Session,
+    run: SyncRun,
+    record: dict[str, Any],
+    payload: dict[str, Any],
+) -> tuple[str, str | None]:
+    global_id = _record_global_id(record, payload)
+    incoming_revision = _record_revision(record, payload)
+    incoming_hash = _record_content_hash(record, payload)
+    news_item = session.scalar(select(NewsItem).where(NewsItem.global_id == global_id))
+    raw_item = _resolve_raw_item(session, payload)
+    data_source = _resolve_data_source(session, payload) or (raw_item.data_source if raw_item else None)
+    if raw_item is None or data_source is None:
+        return "failed", "news_items payload cannot resolve raw item and data source"
+
+    if news_item is not None:
+        conflict = _maybe_record_sync_conflict(
+            session,
+            run,
+            object_type="news_items",
+            object_id=global_id,
+            local_revision=news_item.revision,
+            incoming_revision=incoming_revision,
+            local_hash=news_item.content_hash,
+            incoming_hash=incoming_hash,
+            local_json=_news_item_snapshot(news_item),
+            incoming_json=payload,
+        )
+        if conflict:
+            return "conflict", conflict
+    else:
+        news_item = NewsItem(
+            global_id=global_id,
+            origin_instance_id=str(payload.get("origin_instance_id") or "remote"),
+            raw_item=raw_item,
+            data_source=data_source,
+            source_type=str(payload.get("source_type") or raw_item.source_type),
+            source_name=str(payload.get("source_name") or raw_item.source_name),
+            source_title=str(payload.get("source_title") or raw_item.source_title),
+            dedupe_key=str(payload.get("dedupe_key") or f"sync:{global_id}")[:512],
+        )
+        session.add(news_item)
+
+    news_item.raw_item = raw_item
+    news_item.data_source = data_source
+    news_item.workspace_code = str(payload.get("workspace_code") or record.get("workspace_code") or raw_item.workspace_code)
+    news_item.domain_code = str(payload.get("domain_code") or record.get("domain_code") or raw_item.domain_code)
+    news_item.visibility_scope = str(payload.get("visibility_scope") or record.get("visibility_scope") or raw_item.visibility_scope)
+    news_item.sync_policy = str(payload.get("sync_policy") or record.get("sync_policy") or raw_item.sync_policy)
+    news_item.source_type = str(payload.get("source_type") or raw_item.source_type)
+    news_item.source_name = str(payload.get("source_name") or raw_item.source_name)
+    news_item.source_url = _optional_str(payload.get("source_url") or raw_item.source_url)
+    news_item.canonical_url = _optional_str(payload.get("canonical_url"))
+    news_item.source_title = str(payload.get("source_title") or raw_item.source_title)
+    news_item.normalized_title = str(payload.get("normalized_title") or news_item.source_title)
+    news_item.summary = str(payload.get("summary") or "")
+    news_item.content = str(payload.get("content") or raw_item.raw_content or news_item.summary or news_item.source_title)
+    news_item.author = str(payload.get("author") or "")
+    news_item.published_at = _datetime_value(payload.get("published_at")) or raw_item.published_at
+    news_item.focus_id = _int_value(payload.get("focus_id"), news_item.focus_id)
+    news_item.dedupe_key = str(payload.get("dedupe_key") or news_item.dedupe_key)[:512]
+    news_item.active = bool(payload.get("active", news_item.active))
+    news_item.normalization_status = str(payload.get("normalization_status") or "normalized")
+    news_item.normalization_notes = str(payload.get("normalization_notes") or "")
+    news_item.revision = incoming_revision
+    news_item.content_hash = incoming_hash
+    return "applied", None
+
+
+def _maybe_record_sync_conflict(
+    session: Session,
+    run: SyncRun,
+    *,
+    object_type: str,
+    object_id: str,
+    local_revision: int,
+    incoming_revision: int,
+    local_hash: str,
+    incoming_hash: str,
+    local_json: dict[str, Any],
+    incoming_json: dict[str, Any],
+) -> str | None:
+    if local_revision > incoming_revision:
+        reason = "incoming revision is older than local revision"
+    elif local_revision == incoming_revision and local_hash and incoming_hash and local_hash != incoming_hash:
+        reason = "same revision has different content hash"
+    else:
+        return None
+    session.add(
+        SyncConflict(
+            sync_run=run,
+            object_type=object_type,
+            object_id=object_id,
+            local_revision=local_revision,
+            incoming_revision=incoming_revision,
+            field_name="record",
+            local_value_json=local_json,
+            incoming_value_json=incoming_json,
+            status="open",
+            resolution_json={"reason": reason},
+        ),
+    )
+    return f"{object_type}:{object_id} conflict: {reason}"
+
+
+def _resolve_data_source(session: Session, payload: dict[str, Any]) -> DataSource | None:
+    data_source_global_id = _optional_str(payload.get("data_source_global_id") or payload.get("data_source_id"))
+    if data_source_global_id:
+        source = session.scalar(select(DataSource).where(DataSource.global_id == data_source_global_id))
+        if source is not None:
+            return source
+        source = session.get(DataSource, data_source_global_id)
+        if source is not None:
+            return source
+    url = _optional_str(payload.get("data_source_url") or payload.get("url"))
+    if url:
+        return session.scalar(select(DataSource).where(DataSource.url == url))
+    return None
+
+
+def _resolve_raw_item(session: Session, payload: dict[str, Any]) -> RawItem | None:
+    raw_global_id = _optional_str(payload.get("raw_item_global_id") or payload.get("raw_item_id"))
+    if raw_global_id:
+        raw_item = session.scalar(select(RawItem).where(RawItem.global_id == raw_global_id))
+        if raw_item is not None:
+            return raw_item
+        raw_item = session.get(RawItem, raw_global_id)
+        if raw_item is not None:
+            return raw_item
+    return None
+
+
+def _record_global_id(record: dict[str, Any], payload: dict[str, Any]) -> str:
+    value = _optional_str(record.get("object_global_id") or payload.get("global_id") or record.get("object_id"))
+    if not value:
+        raise ValueError("sync record is missing object_global_id")
+    return value
+
+
+def _record_revision(record: dict[str, Any], payload: dict[str, Any]) -> int:
+    return max(1, _int_value(record.get("revision") or payload.get("revision"), 1))
+
+
+def _record_content_hash(record: dict[str, Any], payload: dict[str, Any]) -> str:
+    return str(record.get("content_hash") or payload.get("content_hash") or _hash_json(payload))
+
+
+def _contains_secret_key(value: Any) -> bool:
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            key_lower = str(key).lower()
+            if any(part in key_lower for part in SYNC_SECRET_KEY_PARTS):
+                return True
+            if _contains_secret_key(nested):
+                return True
+    elif isinstance(value, list):
+        return any(_contains_secret_key(item) for item in value)
+    return False
+
+
+def _optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _int_value(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _float_value(value: Any, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _dict_value(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _datetime_value(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return None
+
+
+def _data_source_snapshot(source: DataSource) -> dict[str, Any]:
+    return {
+        "global_id": source.global_id,
+        "revision": source.revision,
+        "content_hash": source.content_hash,
+        "name": source.name,
+        "url": source.url,
+        "source_type": source.source_type,
+    }
+
+
+def _raw_item_snapshot(raw_item: RawItem) -> dict[str, Any]:
+    return {
+        "global_id": raw_item.global_id,
+        "revision": raw_item.revision,
+        "content_hash": raw_item.content_hash,
+        "entry_key": raw_item.entry_key,
+        "source_title": raw_item.source_title,
+        "source_url": raw_item.source_url,
+    }
+
+
+def _news_item_snapshot(news_item: NewsItem) -> dict[str, Any]:
+    return {
+        "global_id": news_item.global_id,
+        "revision": news_item.revision,
+        "content_hash": news_item.content_hash,
+        "dedupe_key": news_item.dedupe_key,
+        "source_title": news_item.source_title,
+        "source_url": news_item.source_url,
     }
 
 
