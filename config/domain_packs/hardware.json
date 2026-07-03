@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "domain_code": "hardware",
+  "name": "硬件情报板块",
+  "description": "用于验证 domain pack 只靠配置即可扩展新领域，不 fork 主流水线。",
+  "boards": [
+    {
+      "code": "compute_chips",
+      "name": "算力芯片",
+      "description": "GPU、AI 加速器、推理芯片和先进封装相关动态。"
+    },
+    {
+      "code": "edge_devices",
+      "name": "端侧设备",
+      "description": "AI PC、手机、机器人、可穿戴和边缘盒子相关动态。"
+    },
+    {
+      "code": "supply_chain",
+      "name": "供应链与制造",
+      "description": "代工、封测、材料、设备和产能约束相关动态。"
+    }
+  ],
+  "label_sets": [
+    {
+      "workspace_code": "shared",
+      "domain_code": "hardware",
+      "code": "hardware_categories",
+      "name": "硬件情报标签",
+      "description": "硬件领域工作台可复制使用的一级/二级标签。",
+      "target_types": [
+        "data_source",
+        "workspace_source_link",
+        "news_item",
+        "dedupe_group",
+        "daily_report_item",
+        "weekly_report_item"
+      ],
+      "categories": [
+        "算力芯片",
+        "端侧设备",
+        "供应链与制造",
+        "产品发布",
+        "生态合作",
+        "监管与出口"
+      ],
+      "secondary_labels_by_primary": {
+        "算力芯片": ["GPU", "ASIC", "先进封装", "推理加速"],
+        "端侧设备": ["AI PC", "手机", "机器人", "可穿戴"],
+        "供应链与制造": ["晶圆代工", "封测", "材料", "设备"]
+      }
+    }
+  ],
+  "scoring": {
+    "prior_keywords": [
+      "GPU",
+      "AI chip",
+      "accelerator",
+      "HBM",
+      "advanced packaging",
+      "edge AI",
+      "semiconductor",
+      "foundry"
+    ],
+    "source_weight_hints": {
+      "compute_chips": 1.2,
+      "supply_chain": 1.1,
+      "edge_devices": 1.0
+    }
+  }
+}

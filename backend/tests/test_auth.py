@@ -273,6 +273,19 @@ def test_auth_seed_creates_default_label_set(monkeypatch, tmp_path):
         assert tool_label_set is not None
         assert tool_label_set.workspace_code == "ai_tools"
         assert session.scalar(select(Label).where(Label.code == "工具新功能:cursor")) is not None
+        hardware_label_set = session.scalar(
+            select(LabelSet).where(LabelSet.code == "hardware_categories"),
+        )
+        assert hardware_label_set is not None
+        assert hardware_label_set.workspace_code == "shared"
+        assert hardware_label_set.domain_code == "hardware"
+        assert hardware_label_set.config_json["domain_pack"] == "hardware"
+        assert "compute_chips" in {
+            board["code"] for board in hardware_label_set.config_json["boards"]
+        }
+        assert session.scalar(select(Label).where(Label.code == "算力芯片:GPU")) is not None
+
+
 def test_super_admin_can_list_roles_and_update_user_roles(monkeypatch, tmp_path):
     client, engine = make_client(monkeypatch, tmp_path, AUTH_MODE="public_password")
     login = client.post("/api/auth/login", json={"username": "admin", "password": "password"})

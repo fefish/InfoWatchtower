@@ -224,7 +224,8 @@ AuthAdapter -> ExternalIdentity -> IdentityResolver -> users -> session/JWT -> R
 - 空 `users` 表且无 bootstrap 密码时，`GET /api/setup/status` 返回 `needs_setup=true`，`POST /api/setup` 创建首个 `super_admin` 并签发 session；已有任意用户后再次调用返回 410。
 - 内网模式下，可信 header 能自动创建用户。
 - 业务接口只认本地 `user_id` 和本地角色。
-- 带 `workspace_code` 的业务 API 需执行 membership 校验；当前已接入 workspace sections/label policy、sources、ingestion、news、recommendation、daily/weekly reports、renditions 和 exports。viewer 只读，member 可采信/编辑/发布/导出，admin/owner 可管理源、标签策略、格式和流水线 run；无 `workspace_code` 的全局列表仍限 super_admin，`GET /api/users?workspace_code=...` 只给该工作台 admin/owner 提供用户候选列表。
+- 带 `workspace_code` 的业务 API 需执行 membership 校验；当前已接入 workspace sections/label policy、members、sources、ingestion、news、recommendation、daily/weekly reports、renditions 和 exports。viewer 只读，member 可采信/编辑/发布/导出，admin/owner 可管理成员、源、标签策略、格式和流水线 run；无 `workspace_code` 的全局列表仍限 super_admin，`GET /api/users?workspace_code=...` 只给该工作台 admin/owner 提供用户候选列表。
+- `super_admin/editor_admin` 可通过三步向导自助创建工作台；`PATCH /api/workspaces/{code}` 仅 `super_admin` 可用，`planning_intel` 不可停用；`config/domain_packs/hardware.json` 已作为 domain pack 样例注册 label set。
 - 修改认证模式不需要改日报、数据源、评论等业务代码。
 
 ### 5.4 数据源导入
@@ -504,7 +505,7 @@ API 与页面细节见 `docs/api-and-ui-implementation.md`。
 - 日报时间线页：已实现展示、点赞、评分、评论、采信和编辑弹窗。
 - 日报详情/编辑路由：已实现独立详情与轻编辑入口。
 - SQL 导出页：已实现已发布日报选择、导出历史、SQL 生成、预览和下载。
-- 用户和角色管理页：已实现角色管理、邀请管理、邀请链接复制、用户启停和管理员代重置密码。
+- 用户和角色管理页：已实现角色管理、邀请管理、邀请链接复制、用户启停、管理员代重置密码和工作台成员管理。
 - 周报、需求、任务、同步、审计：已从模块路线页升级为真实 API 页面；同步页当前记录同步 run，完整同步包导出/导入仍按 `docs/multi-environment-sync.md` 继续实现。
 
 当前前端/后端下一步边界：
@@ -515,7 +516,7 @@ API 与页面细节见 `docs/api-and-ui-implementation.md`。
 - 周报页下一步补热度/反馈排序、自动周报正文和周报导出；板块 v1 继续来自成品新闻一级标签，若需要业务化板块名，新增映射层而不是改 `generated_news.category`。
 - 补采页下一步补论文 provider、分页归档、sitemap 深挖、失败源重试和手工 CSV 上传；`rss_window` 的语义继续是当前 feed 窗口恢复，不能宣传成全站历史归档抓取。
 - 需求/任务页下一步从已发布日报/周报条目一键沉淀 insight、requirement 和 task，并补完整追溯。
-- 部署侧已补 `deploy/install.sh`、`deploy/upgrade.sh`、API 容器启动自动迁移、`scripts/backup_db.sh`、`scripts/restore_db.sh` 和生产配置 healthcheck 检查；WP2 完成后再跑蓝图 §9 干净环境全量验收并留证。
+- 扩展侧已补三步建台向导、工作台更新/停用、成员管理、`hardware` domain pack 样例和 `docs/extension-recipes.md`；部署侧已补 `deploy/install.sh`、`deploy/upgrade.sh`、API 容器启动自动迁移、`scripts/backup_db.sh`、`scripts/restore_db.sh` 和生产配置 healthcheck 检查；下一步再跑蓝图 §9 干净环境全量验收并留证。
 
 前端不要做营销首页，打开后就是工作台。
 

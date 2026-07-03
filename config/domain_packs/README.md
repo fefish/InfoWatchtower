@@ -2,7 +2,16 @@
 
 Domain pack 用于新增规划部关注板块，例如硬件、半导体、政策、竞品，而不修改主链路。
 
-建议结构：
+当前 seed loader 支持 flat JSON：
+
+```text
+config/domain_packs/{domain_code}.json
+```
+
+可参考 `hardware.json`，至少包含 `domain_code`、`boards`、`label_sets` 和
+`scoring.prior_keywords`。启动时会注册 `label_sets/labels`，不会改主流水线。
+
+后续板块配置变复杂时，可扩展为目录结构：
 
 ```text
 config/domain_packs/{domain_code}/

@@ -103,6 +103,123 @@ def test_create_workspace_validates_code_and_uniqueness(monkeypatch, tmp_path):
     assert invalid.status_code == 422
 
 
+def test_workspace_update_members_and_member_scoped_list(monkeypatch, tmp_path):
+    admin = make_client(monkeypatch, tmp_path)
+
+    login = admin.post("/api/auth/login", json={"username": "admin", "password": "password"})
+    assert login.status_code == 200
+
+    editor_invite = admin.post(
+        "/api/auth/invites",
+        json={
+            "role_code": "editor_admin",
+            "workspaces": [{"code": "planning_intel", "workspace_role": "viewer"}],
+            "expires_in_days": 7,
+        },
+    )
+    assert editor_invite.status_code == 200
+    editor = TestClient(create_app())
+    accepted_editor = editor.post(
+        f"/api/auth/invites/{editor_invite.json()['code']}/accept",
+        json={
+            "username": "workspace-owner",
+            "display_name": "工作台 Owner",
+            "password": "strong-password",
+        },
+    )
+    assert accepted_editor.status_code == 200
+
+    created = editor.post(
+        "/api/workspaces",
+        json={
+            "code": "hardware_team",
+            "name": "硬件团队桌面",
+            "description": "硬件团队自助创建。",
+            "default_domain_code": "hardware",
+        },
+    )
+    assert created.status_code == 201
+
+    renamed = admin.patch(
+        "/api/workspaces/hardware_team",
+        json={"name": "硬件情报团队", "enabled": False},
+    )
+    assert renamed.status_code == 200
+    assert renamed.json()["enabled"] is False
+    assert "hardware_team" not in [item["code"] for item in admin.get("/api/workspaces").json()]
+
+    restored = admin.patch("/api/workspaces/hardware_team", json={"enabled": True})
+    assert restored.status_code == 200
+    assert restored.json()["enabled"] is True
+
+    cannot_disable_planning = admin.patch("/api/workspaces/planning_intel", json={"enabled": False})
+    assert cannot_disable_planning.status_code == 400
+
+    viewer_invite = admin.post(
+        "/api/auth/invites",
+        json={
+            "role_code": "viewer",
+            "workspaces": [{"code": "planning_intel", "workspace_role": "viewer"}],
+            "expires_in_days": 7,
+        },
+    )
+    assert viewer_invite.status_code == 200
+    viewer = TestClient(create_app())
+    accepted_viewer = viewer.post(
+        f"/api/auth/invites/{viewer_invite.json()['code']}/accept",
+        json={
+            "username": "hardware-member",
+            "display_name": "硬件成员",
+            "password": "strong-password",
+        },
+    )
+    assert accepted_viewer.status_code == 200
+    viewer_user_id = accepted_viewer.json()["user"]["id"]
+
+    assert [item["code"] for item in viewer.get("/api/workspaces").json()] == ["planning_intel"]
+
+    members_before = editor.get("/api/workspaces/hardware_team/members")
+    assert members_before.status_code == 200
+    members_before_payload = members_before.json()
+    assert [item["user"]["username"] for item in members_before_payload] == [
+        "admin",
+        "workspace-owner",
+    ]
+    admin_user_id = next(
+        item["user"]["id"]
+        for item in members_before_payload
+        if item["user"]["username"] == "admin"
+    )
+    candidates = editor.get("/api/users", params={"workspace_code": "hardware_team"})
+    assert candidates.status_code == 200
+    assert {"admin", "workspace-owner", "hardware-member"}.issubset(
+        {item["username"] for item in candidates.json()}
+    )
+    viewer_candidates = viewer.get("/api/users", params={"workspace_code": "hardware_team"})
+    assert viewer_candidates.status_code == 403
+
+    added = editor.post(
+        "/api/workspaces/hardware_team/members",
+        json={"user_id": viewer_user_id, "workspace_role": "member"},
+    )
+    assert added.status_code == 200
+    assert added.json()["workspace_role"] == "member"
+    assert [item["code"] for item in viewer.get("/api/workspaces").json()] == [
+        "planning_intel",
+        "hardware_team",
+    ]
+
+    removed = editor.delete(f"/api/workspaces/hardware_team/members/{viewer_user_id}")
+    assert removed.status_code == 204
+    assert [item["code"] for item in viewer.get("/api/workspaces").json()] == ["planning_intel"]
+
+    owner_user_id = accepted_editor.json()["user"]["id"]
+    removed_admin_owner = editor.delete(f"/api/workspaces/hardware_team/members/{admin_user_id}")
+    assert removed_admin_owner.status_code == 204
+    last_owner = editor.delete(f"/api/workspaces/hardware_team/members/{owner_user_id}")
+    assert last_owner.status_code == 400
+
+
 def test_create_workspace_requires_authentication(monkeypatch, tmp_path):
     client = make_client(monkeypatch, tmp_path)
 

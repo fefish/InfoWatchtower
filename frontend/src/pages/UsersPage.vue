@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { Ban, Copy, KeyRound, Plus, RefreshCw, Save } from "lucide-vue-next";
-import { computed, onMounted, reactive, ref } from "vue";
+import { Ban, Copy, KeyRound, Plus, RefreshCw, Save, Trash2, UserPlus } from "lucide-vue-next";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 
 import type { InviteRecord, SessionUser, UserRole } from "../api/auth";
 import {
@@ -14,6 +14,12 @@ import {
   updateUserRoles,
   type RoleRecord
 } from "../api/identity";
+import {
+  fetchWorkspaceMembers,
+  removeWorkspaceMember,
+  upsertWorkspaceMember,
+  type WorkspaceMemberRecord
+} from "../api/workspaces";
 import { useSessionStore } from "../stores/session";
 import { useWorkspaceStore } from "../stores/workspace";
 
@@ -22,13 +28,15 @@ const workspace = useWorkspaceStore();
 const users = ref<SessionUser[]>([]);
 const roles = ref<RoleRecord[]>([]);
 const invites = ref<InviteRecord[]>([]);
+const members = ref<WorkspaceMemberRecord[]>([]);
 const selectedRoles = reactive<Record<string, Set<UserRole>>>({});
-const activeTab = ref<"users" | "invites">("users");
+const activeTab = ref<"users" | "invites" | "members">("users");
 const loading = ref(false);
 const savingUserId = ref("");
 const error = ref("");
 const notice = ref("");
 const temporaryPassword = ref("");
+const savingMember = ref(false);
 const inviteForm = reactive({
   email: "",
   role_code: "viewer" as UserRole,
@@ -36,23 +44,38 @@ const inviteForm = reactive({
   workspace_role: "member",
   expires_in_days: 7
 });
+const memberForm = reactive({
+  user_id: "",
+  workspace_role: "member"
+});
 const isSuperAdmin = computed(() => session.user?.roles.includes("super_admin") ?? false);
+const memberUserOptions = computed(() =>
+  users.value.filter((user) => !members.value.some((member) => member.user.id === user.id))
+);
 
 async function loadData() {
   loading.value = true;
   error.value = "";
   try {
     await workspace.loadWorkspaces();
-    const [nextUsers, nextRoles, nextInvites] = await Promise.all([
-      fetchUsers(),
-      fetchRoles(),
-      isSuperAdmin.value ? fetchInvites() : Promise.resolve([])
+    if (!isSuperAdmin.value && activeTab.value !== "members") {
+      activeTab.value = "members";
+    }
+    const [nextUsers, nextRoles, nextInvites, nextMembers] = await Promise.all([
+      fetchUsers(isSuperAdmin.value ? undefined : workspace.currentCode),
+      isSuperAdmin.value ? fetchRoles() : Promise.resolve([]),
+      isSuperAdmin.value ? fetchInvites() : Promise.resolve([]),
+      fetchWorkspaceMembers(workspace.currentCode)
     ]);
     users.value = nextUsers;
     roles.value = nextRoles;
     invites.value = nextInvites;
+    members.value = nextMembers;
     for (const user of nextUsers) {
       selectedRoles[user.id] = new Set(user.roles);
+    }
+    if (!memberUserOptions.value.some((user) => user.id === memberForm.user_id)) {
+      memberForm.user_id = memberUserOptions.value[0]?.id ?? "";
     }
     if (!workspace.options.some((item) => item.code === inviteForm.workspace_code)) {
       inviteForm.workspace_code = workspace.currentCode;
@@ -61,6 +84,22 @@ async function loadData() {
     error.value = exc instanceof Error ? exc.message : "加载用户权限失败";
   } finally {
     loading.value = false;
+  }
+}
+
+async function loadWorkspaceMembers() {
+  if (!workspace.currentCode) {
+    members.value = [];
+    return;
+  }
+  const [nextUsers, nextMembers] = await Promise.all([
+    fetchUsers(isSuperAdmin.value ? undefined : workspace.currentCode),
+    fetchWorkspaceMembers(workspace.currentCode)
+  ]);
+  users.value = nextUsers;
+  members.value = nextMembers;
+  if (!memberUserOptions.value.some((user) => user.id === memberForm.user_id)) {
+    memberForm.user_id = memberUserOptions.value[0]?.id ?? "";
   }
 }
 
@@ -145,6 +184,41 @@ async function toggleActive(user: SessionUser) {
   }
 }
 
+async function submitMember() {
+  if (!workspace.currentCode || !memberForm.user_id) {
+    return;
+  }
+  savingMember.value = true;
+  error.value = "";
+  try {
+    await upsertWorkspaceMember(workspace.currentCode, {
+      user_id: memberForm.user_id,
+      workspace_role: memberForm.workspace_role
+    });
+    await loadWorkspaceMembers();
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "保存成员失败";
+  } finally {
+    savingMember.value = false;
+  }
+}
+
+async function removeMember(member: WorkspaceMemberRecord) {
+  if (!workspace.currentCode) {
+    return;
+  }
+  savingMember.value = true;
+  error.value = "";
+  try {
+    await removeWorkspaceMember(workspace.currentCode, member.user.id);
+    await loadWorkspaceMembers();
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "移除成员失败";
+  } finally {
+    savingMember.value = false;
+  }
+}
+
 async function copyText(value: string) {
   try {
     await navigator.clipboard?.writeText(value);
@@ -152,6 +226,15 @@ async function copyText(value: string) {
     // Clipboard is optional in non-secure local contexts.
   }
 }
+
+watch(
+  () => workspace.currentCode,
+  () => {
+    if (activeTab.value === "members") {
+      void loadData();
+    }
+  }
+);
 
 onMounted(loadData);
 </script>
@@ -163,15 +246,18 @@ onMounted(loadData);
       <h2>用户权限</h2>
       <p>公网账号和内网身份最终都落到本地用户，再由这里的角色决定权限。</p>
     </div>
-    <button type="button" class="icon-button" :disabled="loading" @click="loadData" title="刷新">
-      <RefreshCw :size="18" />
-      <span>刷新</span>
-    </button>
+    <div class="topbar-tools">
+      <button type="button" class="icon-button" :disabled="loading" @click="loadData" title="刷新">
+        <RefreshCw :size="18" />
+        <span>刷新</span>
+      </button>
+    </div>
   </section>
 
   <div class="policy-tabs">
-    <button type="button" :class="{ active: activeTab === 'users' }" @click="activeTab = 'users'">用户</button>
+    <button v-if="isSuperAdmin" type="button" :class="{ active: activeTab === 'users' }" @click="activeTab = 'users'">用户</button>
     <button v-if="isSuperAdmin" type="button" :class="{ active: activeTab === 'invites' }" @click="activeTab = 'invites'">邀请</button>
+    <button type="button" :class="{ active: activeTab === 'members' }" @click="activeTab = 'members'">工作台成员</button>
   </div>
 
   <p v-if="error" class="form-error">{{ error }}</p>
@@ -240,7 +326,7 @@ onMounted(loadData);
     <p v-if="!loading && users.length === 0" class="empty-state">暂无用户，可通过邀请链接创建第一个协作者账号。</p>
   </section>
 
-  <section v-else class="data-table-wrap">
+  <section v-else-if="activeTab === 'invites'" class="data-table-wrap">
     <form class="form-grid-two" @submit.prevent="submitInvite">
       <label>
         <span>邮箱</span>
@@ -320,5 +406,65 @@ onMounted(loadData);
       </tbody>
     </table>
     <p v-if="!loading && invites.length === 0" class="empty-state">暂无邀请，选择角色和工作台后生成邀请链接。</p>
+  </section>
+
+  <section v-else class="data-table-wrap">
+    <form class="form-grid-two" @submit.prevent="submitMember">
+      <label>
+        <span>工作台</span>
+        <input :value="workspace.current?.name || workspace.currentCode" disabled />
+      </label>
+      <label>
+        <span>用户</span>
+        <select v-model="memberForm.user_id">
+          <option v-for="user in memberUserOptions" :key="user.id" :value="user.id">
+            {{ user.display_name }} · {{ user.username }}
+          </option>
+        </select>
+      </label>
+      <label>
+        <span>工作台角色</span>
+        <select v-model="memberForm.workspace_role">
+          <option value="viewer">viewer</option>
+          <option value="member">member</option>
+          <option value="admin">admin</option>
+          <option value="owner">owner</option>
+        </select>
+      </label>
+      <button type="submit" class="icon-button" :disabled="savingMember || !memberForm.user_id">
+        <UserPlus :size="16" />
+        <span>加入工作台</span>
+      </button>
+    </form>
+
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>成员</th>
+          <th>全局角色</th>
+          <th>工作台角色</th>
+          <th>状态</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr v-for="member in members" :key="member.user.id">
+          <td>
+            <strong>{{ member.user.display_name }}</strong>
+            <span>{{ member.user.username }}</span>
+          </td>
+          <td>{{ member.user.roles.join(", ") || "-" }}</td>
+          <td>{{ member.workspace_role }}</td>
+          <td>{{ member.user.status }}</td>
+          <td>
+            <button type="button" class="icon-button secondary" :disabled="savingMember" @click="removeMember(member)" title="移出工作台">
+              <Trash2 :size="16" />
+              <span>移出</span>
+            </button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+    <p v-if="!loading && members.length === 0" class="empty-state">暂无成员，从上方选择用户并加入当前工作台。</p>
   </section>
 </template>
