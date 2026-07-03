@@ -19,10 +19,12 @@ import RequirementsPage from "../pages/RequirementsPage.vue";
 import SourceDetailPage from "../pages/SourceDetailPage.vue";
 import SourcesPage from "../pages/SourcesPage.vue";
 import SyncRunsPage from "../pages/SyncRunsPage.vue";
+import SetupPage from "../pages/SetupPage.vue";
 import TopicTasksPage from "../pages/TopicTasksPage.vue";
 import UsersPage from "../pages/UsersPage.vue";
 import WeeklyReportsPage from "../pages/WeeklyReportsPage.vue";
 import { useSessionStore } from "../stores/session";
+import { useSetupStore } from "../stores/setup";
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -36,6 +38,11 @@ export const router = createRouter({
       path: "/invite/:code",
       name: "invite",
       component: InvitePage
+    },
+    {
+      path: "/setup",
+      name: "setup",
+      component: SetupPage
     },
     {
       path: "/",
@@ -151,6 +158,17 @@ export const router = createRouter({
 });
 
 router.beforeEach(async (to) => {
+  const setup = useSetupStore();
+  if (!setup.checked) {
+    await setup.loadStatus();
+  }
+  if (setup.needsSetup) {
+    return to.path === "/setup" ? true : "/setup";
+  }
+  if (to.path === "/setup") {
+    return "/login";
+  }
+
   const session = useSessionStore();
   if (!session.checked) {
     await session.loadCurrentUser();

@@ -291,6 +291,77 @@ def test_missing_public_password_secret_fails_startup(tmp_path):
     assert "AUTH_SESSION_SECRET is required" in result.stderr
 
 
+def test_setup_wizard_creates_first_super_admin(monkeypatch, tmp_path):
+    client, engine = make_client(
+        monkeypatch,
+        tmp_path,
+        AUTH_MODE="public_password",
+        AUTH_BOOTSTRAP_ADMIN_PASSWORD="",
+    )
+
+    status_response = client.get("/api/setup/status")
+    assert status_response.status_code == 200
+    assert status_response.json() == {"needs_setup": True}
+
+    created = client.post(
+        "/api/setup",
+        json={
+            "username": "first-admin",
+            "display_name": "First Admin",
+            "password": "strong-password",
+        },
+    )
+    assert created.status_code == 200
+    assert created.json()["user"]["roles"] == ["super_admin"]
+    assert "infowatchtower_session" in created.headers["set-cookie"]
+    assert client.get("/api/auth/me").status_code == 200
+    assert client.get("/api/setup/status").json() == {"needs_setup": False}
+
+    repeated = client.post(
+        "/api/setup",
+        json={
+            "username": "second-admin",
+            "display_name": "Second Admin",
+            "password": "another-password",
+        },
+    )
+    assert repeated.status_code == 410
+
+    Session = sessionmaker(bind=engine)
+    with Session() as session:
+        user = session.scalar(select(User).where(User.username == "first-admin"))
+        assert user is not None
+        workspaces = session.scalars(select(Workspace).order_by(Workspace.code)).all()
+        memberships = session.scalars(
+            select(WorkspaceMembership).where(WorkspaceMembership.user_id == user.id),
+        ).all()
+        assert [workspace.code for workspace in workspaces] == ["ai_tools", "planning_intel"]
+        assert sorted(membership.workspace_role for membership in memberships) == ["owner", "owner"]
+
+
+def test_missing_production_database_url_fails_startup(tmp_path):
+    code = (
+        "from fastapi.testclient import TestClient\n"
+        "from app.main import create_app\n"
+        "with TestClient(create_app()) as client:\n"
+        "    client.get('/healthz')\n"
+    )
+    env = {
+        **os.environ,
+        "PYTHONPATH": str(ROOT / "backend"),
+        "APP_ENV": "production",
+        "DATABASE_URL": "",
+        "AUTH_MODE": "public_password",
+        "AUTH_SESSION_SECRET": "test-session-secret",
+        "AUTH_BOOTSTRAP_ADMIN_PASSWORD": "",
+    }
+
+    result = subprocess.run([sys.executable, "-c", code], env=env, text=True, capture_output=True, check=False)
+
+    assert result.returncode != 0
+    assert "DATABASE_URL is required" in result.stderr
+
+
 def _login(client: TestClient):
     return client.post("/api/auth/login", json={"username": "admin", "password": "password"})
 

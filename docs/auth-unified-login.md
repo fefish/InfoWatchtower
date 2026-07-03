@@ -87,10 +87,12 @@ class ExternalIdentity:
 - 当前最小闭环支持 `AUTH_MODE=public_password`。
 - 正式公网推荐切到 OIDC provider，接入 Google、企业微信、飞书、GitHub、Microsoft Entra ID 等。
 - 首个超级管理员仍可由 `AUTH_BOOTSTRAP_ADMIN_*` 创建；已有用户时 seed 不覆盖。
+- 没有 bootstrap 密码且 `users` 表为空时，前端会进入 `/setup`，由 `POST /api/setup`
+  创建首个 `super_admin`；已有任意用户后 `/api/setup` 返回 410。
 - 注册默认关闭，由超级管理员创建邀请链接。
 - 已实现登录限流、签名 cookie max-age、改密后旧 cookie 失效和 `AUTH_SESSION_SECRET`
-  启动自检；公网仍应由 HTTPS/Caddy 提供 Secure Cookie 传输环境。首次运行 `/setup`
-  向导属于 WP3，不在当前账户生命周期闭环内。
+  启动自检；`APP_ENV=production` 还要求 `DATABASE_URL`。公网仍应由 HTTPS/Caddy 提供
+  Secure Cookie 传输环境。
 
 公网环境变量示例：
 

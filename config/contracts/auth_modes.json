@@ -80,7 +80,14 @@
     "cookie_max_age_seconds_env": "AUTH_SESSION_TTL_SECONDS",
     "cookie_secure_env": "AUTH_SESSION_COOKIE_SECURE; defaults to true when APP_ENV=production, but local HTTP Docker acceptance may set false",
     "payload_nonce": "users.updated_at serialized as sv; changing password or admin reset invalidates old cookies",
-    "startup_self_check": "AUTH_MODE=public_password requires AUTH_SESSION_SECRET at API startup"
+    "startup_self_check": "APP_ENV=production requires DATABASE_URL; AUTH_MODE=public_password requires AUTH_SESSION_SECRET at API startup"
+  },
+  "setup_flow": {
+    "status_endpoint": "GET /api/setup/status -> {needs_setup}",
+    "create_endpoint": "POST /api/setup -> first local super_admin; only allowed while users table is empty",
+    "completed_status": "410 Setup already completed",
+    "frontend_route": "/setup",
+    "bootstrap_compatibility": "AUTH_BOOTSTRAP_ADMIN_PASSWORD still creates the first admin for unattended deployments; when present, setup status is false"
   },
   "workspace_membership_rule": {
     "global_super_admin_bypass": true,

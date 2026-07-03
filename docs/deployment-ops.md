@@ -281,19 +281,62 @@ DEPLOY_PATH=/srv/infowatchtower/app
 
 ### 8.3 部署动作
 
-GitHub Actions 在 `main` 分支 push 后执行：
+首次部署优先使用仓库脚本生成环境文件、随机密钥并启动 Compose：
+
+```text
+cd deploy
+./install.sh --domain your-domain.example
+```
+
+本地演练：
+
+```text
+cd deploy
+./install.sh --local
+```
+
+脚本会生成 `.env`（生产默认 `/srv/infowatchtower/.env.production`，本地默认
+`deploy/.env`）、随机 `POSTGRES_PASSWORD` 和 `AUTH_SESSION_SECRET`，执行
+`docker compose up -d --build`，等待 `/healthz` 通过并打印访问地址。默认不写
+`AUTH_BOOTSTRAP_ADMIN_PASSWORD`；首次访问会进入 `/setup` 创建首个超级管理员。生产域名
+安装默认 `AUTH_SESSION_COOKIE_SECURE=true`，`--local` 默认 `false`，方便本地 HTTP 验收。
+
+如果本机端口冲突，本地演练可以显式指定端口和 env 文件：
+
+```text
+cd deploy
+INFOWATCHTOWER_ENV_FILE=/tmp/infowatchtower-local.env \
+POSTGRES_PORT=55432 \
+REDIS_PORT=56379 \
+BACKEND_PORT=18080 \
+FRONTEND_PORT=15173 \
+  ./install.sh --local
+```
+
+升级脚本：
+
+```text
+cd deploy
+./upgrade.sh
+```
+
+本地升级演练使用 `./upgrade.sh --local`。回滚流程是恢复升级前备份，并 checkout 旧 tag。
+
+如果仍由 GitHub Actions 在 `main` 分支 push 后 SSH 触发，动作可以简化为：
 
 ```text
 ssh deploy@$DEPLOY_HOST
 cd /srv/infowatchtower/app
 git fetch --prune
 git reset --hard origin/main
-docker compose -f deploy/docker-compose.prod.yml --env-file /srv/infowatchtower/.env.production build
-docker compose -f deploy/docker-compose.prod.yml --env-file /srv/infowatchtower/.env.production run --rm backend alembic upgrade head
-docker compose -f deploy/docker-compose.prod.yml --env-file /srv/infowatchtower/.env.production up -d --remove-orphans
+INFOWATCHTOWER_ENV_FILE=/srv/infowatchtower/.env.production \
+  docker compose --env-file /srv/infowatchtower/.env.production \
+  -f deploy/docker-compose.prod.yml up -d --build --remove-orphans
 docker image prune -f
 ```
 
+API 镜像入口会先执行 `alembic upgrade head` 再启动 uvicorn；worker、scheduler 和
+reverse proxy 会等 backend healthcheck 通过后再启动。
 这不是严格零停机蓝绿发布，但对第一版足够简单可靠。后端重启通常只有短暂停顿，前端静态文件基本无感。
 
 ### 8.4 生产配置检查
@@ -326,6 +369,7 @@ python3 scripts/check_prod_deploy.py --env-file /srv/infowatchtower/.env.product
 - `APP_ENV=production`，`ENABLE_DOCS=false`。
 - 生产密钥不能使用 `change_me`、`password`、`secret` 等开发默认值。
 - 规划部日报定时任务时区必须是 `Asia/Shanghai`。
+- backend 必须有 `/healthz` healthcheck；worker、scheduler、reverse proxy 依赖 backend healthy。
 
 CI 也会运行该检查，避免生产部署文件和文档口径漂移。
 
@@ -344,11 +388,26 @@ CI 也会运行该检查，避免生产部署文件和文档口径漂移。
 
 ## 10. 备份
 
-最低每天备份 PostgreSQL：
+最低每天备份 PostgreSQL。仓库提供脚本：
 
 ```text
-pg_dump "$DATABASE_URL" > /srv/infowatchtower/backups/infowatchtower_YYYYMMDD.sql
+INFOWATCHTOWER_ENV_FILE=/srv/infowatchtower/.env.production \
+  scripts/backup_db.sh
 ```
+
+本地 Compose 演练可显式指定本地 env 和 compose 文件：
+
+```text
+INFOWATCHTOWER_ENV_FILE=deploy/.env \
+INFOWATCHTOWER_COMPOSE_FILE=deploy/docker-compose.local.yml \
+BACKUP_DIR="$(mktemp -d)" \
+  scripts/backup_db.sh
+```
+
+脚本默认写入 `/srv/infowatchtower/backups/infowatchtower_YYYYMMDDTHHMMSSZ.sql.gz`，
+默认保留最近 14 份，可用 `BACKUP_KEEP=30` 调整。脚本优先使用本机 `pg_dump`；
+不可用时会通过 compose 中的 `postgres` 容器执行。应用侧
+`postgresql+psycopg://...` URL 会在调用 `pg_dump/psql` 前规范化为 `postgresql://...`。
 
 建议保留：
 
@@ -357,6 +416,16 @@ pg_dump "$DATABASE_URL" > /srv/infowatchtower/backups/infowatchtower_YYYYMMDD.sq
 - 每次数据库迁移前临时备份。
 
 备份文件不要提交 GitHub。
+
+恢复脚本：
+
+```text
+INFOWATCHTOWER_ENV_FILE=/srv/infowatchtower/.env.production \
+  scripts/restore_db.sh /srv/infowatchtower/backups/infowatchtower_YYYYMMDDTHHMMSSZ.sql.gz
+```
+
+恢复脚本会要求输入 `RESTORE` 确认；无人值守演练可设置 `RESTORE_CONFIRM=yes`。恢复后重启
+backend、worker 和 scheduler，再访问 `/healthz` 和前端页面确认服务可用。
 
 ## 11. 内网迁移
 
