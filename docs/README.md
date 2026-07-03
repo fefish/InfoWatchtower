@@ -9,12 +9,13 @@
 1. 先读 `AGENTS.md`。
 2. 再读 `docs/00-system-design.md`。
 3. 想快速掌握"有哪些能力、分布在哪、还差什么"，读 `docs/architecture-capability-map.md`。
-4. 再读 `docs/implementation-handoff.md`。
-5. 再读 `docs/01-implementation-plan.md`。
-6. 先读 `config/contracts/README.md`，理解 contracts 是什么。
-7. 写代码时查相关 `config/contracts/*.json` 和 `config/taxonomy/*.json`。
-8. 只在需要模块细节时阅读对应专题附录。
-9. 旧系统事实从私有参考仓查询；主仓说明见 `references/README.md`，不从旧代码直接继承新架构。
+4. 要实施「账户登录 / 可扩展桌面 / 开箱部署」三个工作包，读 `docs/target-state-spec.md`（实现级规格与验收标准）。
+5. 再读 `docs/implementation-handoff.md`。
+6. 再读 `docs/01-implementation-plan.md`。
+7. 先读 `config/contracts/README.md`，理解 contracts 是什么。
+8. 写代码时查相关 `config/contracts/*.json` 和 `config/taxonomy/*.json`。
+9. 只在需要模块细节时阅读对应专题附录。
+10. 旧系统事实从私有参考仓查询；主仓说明见 `references/README.md`，不从旧代码直接继承新架构。
 
 当前进度：阶段 0-6 标准日报链路已完成可回填闭环。阶段 3 已完成旧种子源导入、共享数据源池、默认工作台源链接、工作台统一标签/新闻结构策略、adapter 框架、RSS/paper RSS/页面源抓取到 `raw_items`、工作台级 ingestion run API 和 Redis/RQ worker + scheduler 调度入口；规划部工作台 v1 默认 294 个共享源全部启用，CSV 状态/纳入建议只作为评分先验。阶段 4 已完成 raw 到 news 标准化、canonical URL、dedupe key、工作台隔离硬去重、winner/loser 回写和查询 API；阶段 5 已完成完整流水线 API、按 `day_key` 推荐 run、可解释推荐分、可选 MiniMax 中国区 OpenAI-compatible `generated_news`、日报草稿、发布、条目编辑和点赞/评分/评论最小 API；阶段 6 已实现已发布日报的公司 SQL 标准导出，`POST /api/exports/company-sql/daily-reports/{daily_report_id}` 只导出 `adoption_status = 2`、`generated_news.generation_status = ready` 且 `generated_by` 非 `rule_v1` 的采信项；`GET /api/exports/{export_job_id}/trace` 可按 SQL 语句追到日报条目、生成稿、news、raw 和数据源；MiniMax 未启用、超时或失败时只生成 `fallback_needs_review` 草稿，不直接写入标准 SQL。`planning_intel` 的成品新闻一级分类使用 `config/taxonomy/news_categories.json` 里的 AI 十分类，SQL category 默认使用同一个 `generated_news.category`；`config/taxonomy/source_tags.json` 是数据源侧方向标签，只用于源管理、覆盖分析和评分先验。`planning_intel/company_sql_v1` 生成稿必须带 `background/effects/eventSummary/technologyAndInnovation/valueAndImpact`；导出时 `content_json` 只保留这五个旧内网字段，`created_at` 必须严格对齐旧脚本和已验证合集 SQL 的列顺序与字面量样式，使用 `'YYYY-MM-DD HH:MM:SS'`，来源缺失发布时间时兜底为日报 `day_key 09:00:00`。所有 SQL 预览统一 `InfoWatchtower Company SQL Preview` 标题，且导入内网前必须通过 `python3 scripts/validate_company_sql.py` 逐字段校验。scheduler 开启后可按固定北京时间执行每日完整流水线：抓取、标准化/去重、推荐和日报草稿；生产推荐 `INGESTION_SCHEDULER_DAILY_TIME=09:00`、`INGESTION_SCHEDULER_TIMEZONE=Asia/Shanghai`、`DAILY_PIPELINE_DAY_OFFSET_DAYS=-1`，每天早上生成昨天日报。前端首页必须显示动态工作台状态；工作台壳和导航必须来自后端工作台配置；数据源页采用信息流式共享源列表和右侧标签/新闻结构 tab 面板；候选池页已接入 `dedupe_groups/news_items` 展示 winner/loser、重复来源、推荐分、日报采信状态和追溯 ID；推荐运行页已接入 recommendation runs 和分数拆解；抓取覆盖率页已接入 ingestion runs、RSS 窗口补采、sitemap/归档页/手工导入补采模式、目标日覆盖漏斗和每源链路详情；周报页已接入周报草稿、按一级标签形成板块、条目采信/剔除、板块内排序、编辑和发布；SQL 导出页已接入已发布日报、导出历史和条目追溯；日报页可按日期生成日报草稿，支持生成超时兜底、ready/fallback 状态展示和草稿生成稿重跑，并通过 brief 列表 + 详情弹窗完成正文查看、采信、编辑、点赞、评分、评论和追溯；本地恢复和演示补齐可用 `scripts/import_company_sql_preview_to_reports.py` 把已校验单日 SQL 预览回填为日报/周报工作台数据，且不改变公司 SQL 导出契约；需求、任务、同步、审计页已从路线图占位升级为真实 API 页面，同步页支持导出 zip 同步包、下载、导入到 `sync_inbox` 做幂等记录和审计。`2026-05-21` 到 `2026-05-27` 的规划部日报已发布并导出 SQL；其中 5/27 通过当天 RSS/paper RSS 窗口补采新增 72 条 raw/news 后生成 6 条采信项。`planning_intel` 与 `ai_tools` 的默认标签策略必须保持后端隔离。
 
