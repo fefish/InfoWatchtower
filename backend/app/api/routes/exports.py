@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
-from sqlalchemy.orm import Session
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import Session, selectinload
 
-from app.api.routes.auth import get_current_user, require_super_admin
+from app.api.routes.auth import assert_workspace_member, get_current_user, require_super_admin
 from app.auth.service import write_audit
 from app.core.database import get_db_session
 from app.exports.company_sql import (
@@ -15,10 +14,15 @@ from app.exports.company_sql import (
     generate_company_sql_for_daily_report,
 )
 from app.models.content import NewsItem, RawItem
-from app.models.export import ExportJob
-from app.models.export import ExportJobItem
+from app.models.export import ExportJob, ExportJobItem
 from app.models.identity import User
-from app.schemas.exports import CompanySqlExportRead, CompanySqlTraceItemRead, CompanySqlTraceRead, ExportJobRead
+from app.models.reports import DailyReport
+from app.schemas.exports import (
+    CompanySqlExportRead,
+    CompanySqlTraceItemRead,
+    CompanySqlTraceRead,
+    ExportJobRead,
+)
 
 router = APIRouter(prefix="/api/exports", tags=["exports"])
 SUPER_ADMIN = Depends(require_super_admin)
@@ -29,9 +33,13 @@ DB_SESSION = Depends(get_db_session)
 @router.post("/company-sql/daily-reports/{daily_report_id}", response_model=CompanySqlExportRead)
 def create_company_sql_export(
     daily_report_id: str,
-    current_user: User = SUPER_ADMIN,
+    current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> CompanySqlExportRead:
+    report = session.get(DailyReport, daily_report_id)
+    if report is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Daily report not found: {daily_report_id}")
+    assert_workspace_member(session, current_user, report.workspace_code, min_role="member")
     try:
         result = generate_company_sql_for_daily_report(
             session,
@@ -68,36 +76,44 @@ def create_company_sql_export(
 
 @router.get("", response_model=list[ExportJobRead])
 def list_export_jobs(
-    _: User = CURRENT_USER,
+    workspace_code: str | None = Query(default=None),
+    current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> list[ExportJobRead]:
-    jobs = session.scalars(
-        select(ExportJob).order_by(ExportJob.created_at.desc()).limit(50),
-    ).all()
+    if workspace_code:
+        assert_workspace_member(session, current_user, workspace_code, min_role="viewer")
+    else:
+        require_super_admin(current_user)
+    statement = select(ExportJob).order_by(ExportJob.created_at.desc()).limit(50)
+    if workspace_code:
+        statement = statement.where(ExportJob.workspace_code == workspace_code)
+    jobs = session.scalars(statement).all()
     return [_export_job_to_read(job) for job in jobs]
 
 
 @router.get("/{export_job_id}", response_model=ExportJobRead)
 def get_export_job(
     export_job_id: str,
-    _: User = CURRENT_USER,
+    current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> ExportJobRead:
     job = session.get(ExportJob, export_job_id)
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Export job not found")
+    assert_workspace_member(session, current_user, job.workspace_code, min_role="viewer")
     return _export_job_to_read(job)
 
 
 @router.get("/{export_job_id}/trace", response_model=CompanySqlTraceRead)
 def get_export_job_trace(
     export_job_id: str,
-    _: User = CURRENT_USER,
+    current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> CompanySqlTraceRead:
     job = session.get(ExportJob, export_job_id)
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Export job not found")
+    assert_workspace_member(session, current_user, job.workspace_code, min_role="viewer")
     items = session.scalars(
         select(ExportJobItem)
         .options(

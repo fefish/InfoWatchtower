@@ -48,6 +48,23 @@ def test_public_password_login_sets_session_and_returns_current_user(monkeypatch
     assert me.json()["user"]["username"] == "admin"
 
 
+def test_local_http_can_disable_secure_session_cookie(monkeypatch, tmp_path):
+    client, _ = make_client(
+        monkeypatch,
+        tmp_path,
+        APP_ENV="production",
+        AUTH_MODE="public_password",
+        AUTH_SESSION_COOKIE_SECURE="false",
+    )
+
+    response = client.post("/api/auth/login", json={"username": "admin", "password": "password"})
+
+    assert response.status_code == 200
+    assert "secure" not in response.headers["set-cookie"].lower()
+    me = client.get("/api/auth/me")
+    assert me.status_code == 200
+
+
 def test_auth_seed_creates_default_workspaces(monkeypatch, tmp_path):
     _, engine = make_client(monkeypatch, tmp_path, AUTH_MODE="public_password")
     Session = sessionmaker(bind=engine)
@@ -256,8 +273,6 @@ def test_auth_seed_creates_default_label_set(monkeypatch, tmp_path):
         assert tool_label_set is not None
         assert tool_label_set.workspace_code == "ai_tools"
         assert session.scalar(select(Label).where(Label.code == "工具新功能:cursor")) is not None
-
-
 def test_super_admin_can_list_roles_and_update_user_roles(monkeypatch, tmp_path):
     client, engine = make_client(monkeypatch, tmp_path, AUTH_MODE="public_password")
     login = client.post("/api/auth/login", json={"username": "admin", "password": "password"})

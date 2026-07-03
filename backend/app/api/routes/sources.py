@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.routes.auth import get_current_user, require_super_admin
+from app.api.routes.auth import assert_workspace_member, get_current_user, require_super_admin
 from app.auth.service import write_audit
 from app.core.config import Settings, get_settings
 from app.core.database import get_db_session
@@ -34,9 +34,11 @@ router = APIRouter(prefix="/api/sources", tags=["sources"])
 def list_sources(
     workspace_code: str | None = Query(default=None),
     source_type: str | None = Query(default=None),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> list[DataSourceRead]:
+    if workspace_code:
+        assert_workspace_member(session, current_user, workspace_code, min_role="viewer")
     statement = select(DataSource)
     if source_type:
         statement = statement.where(DataSource.source_type == source_type)
@@ -49,10 +51,11 @@ def list_sources(
 @router.post("", response_model=DataSourceCreateRead, status_code=status.HTTP_201_CREATED)
 def create_source(
     payload: DataSourceCreate,
-    current_user: User = Depends(require_super_admin),
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> DataSourceCreateRead:
     workspace = _get_enabled_workspace(session, payload.workspace_code)
+    assert_workspace_member(session, current_user, workspace.code, min_role="admin")
     if payload.source_type not in CUSTOM_SOURCE_TYPES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -112,12 +115,18 @@ def update_source_definition(
     source_id: str,
     payload: DataSourceDefinitionUpdate,
     workspace_code: str | None = Query(default=None),
-    current_user: User = Depends(require_super_admin),
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> DataSourceRead:
     source = session.get(DataSource, source_id)
     if source is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Data source not found")
+    if workspace_code:
+        workspace = _get_enabled_workspace(session, workspace_code)
+        assert_workspace_member(session, current_user, workspace.code, min_role="admin")
+        _require_source_link(session, workspace, source)
+    else:
+        require_super_admin(current_user)
 
     changes: dict[str, object] = {}
     if payload.name is not None:
@@ -215,7 +224,7 @@ def import_tech_insight_loop_seed_sources(
 def update_source_workspace_link(
     source_id: str,
     payload: DataSourceWorkspaceConfigUpdate,
-    _: User = Depends(require_super_admin),
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> DataSourceRead:
     source = session.get(DataSource, source_id)
@@ -230,6 +239,7 @@ def update_source_workspace_link(
     )
     if workspace is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
+    assert_workspace_member(session, current_user, workspace.code, min_role="admin")
 
     link = session.scalar(
         select(WorkspaceSourceLink).where(
@@ -265,9 +275,19 @@ def update_source_workspace_link(
 @router.post("/{source_id}/fetch", response_model=SourceFetchRead)
 async def fetch_source(
     source_id: str,
-    _: User = Depends(require_super_admin),
+    workspace_code: str | None = Query(default=None),
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> SourceFetchRead:
+    source = session.get(DataSource, source_id)
+    if source is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Data source not found")
+    if workspace_code:
+        workspace = _get_enabled_workspace(session, workspace_code)
+        assert_workspace_member(session, current_user, workspace.code, min_role="admin")
+        _require_source_link(session, workspace, source)
+    else:
+        require_super_admin(current_user)
     try:
         result = await fetch_source_to_raw_items(session, source_id)
     except SourceNotFoundError as exc:
@@ -332,6 +352,22 @@ def _ensure_custom_workspace_link(
         )
         session.add(link)
         session.flush()
+    return link
+
+
+def _require_source_link(
+    session: Session,
+    workspace: Workspace,
+    source: DataSource,
+) -> WorkspaceSourceLink:
+    link = session.scalar(
+        select(WorkspaceSourceLink).where(
+            WorkspaceSourceLink.workspace_id == workspace.id,
+            WorkspaceSourceLink.data_source_id == source.id,
+        ),
+    )
+    if link is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace source link not found")
     return link
 
 

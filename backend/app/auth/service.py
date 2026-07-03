@@ -1,21 +1,23 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import secrets
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
 from app.auth.passwords import hash_password, verify_password
 from app.core.config import REPO_ROOT, Settings
 from app.models.feedback import AuditLog
-from app.models.identity import Permission, Role, User
+from app.models.identity import LoginAttempt, PasswordResetToken, Permission, Role, User, UserInvite
 from app.models.labels import Label, LabelSet
 from app.models.workspace import Workspace, WorkspaceMembership, WorkspaceSection
 from app.reports.renditions import ensure_report_formats
-from app.schemas.auth import RoleRead, UserRead
+from app.schemas.auth import InviteRead, RoleRead, UserRead, WorkspaceInviteTarget
 
 ROLE_DEFINITIONS = {
     "super_admin": ("超级管理员", "Full system administration."),
@@ -146,6 +148,7 @@ def user_to_read(user: User) -> UserRead:
         department=user.department,
         email=user.email,
         status=user.status,
+        is_active=user.is_active,
         roles=sorted(role.code for role in user.roles),
     )
 
@@ -237,11 +240,45 @@ def authenticate_password_user(session: Session, username: str, password: str) -
     user = session.scalar(
         select(User)
         .options(selectinload(User.roles))
-        .where(User.username == username, User.is_active.is_(True), User.status == "active"),
+        .where(
+            User.username == username,
+            User.is_active.is_(True),
+            User.status.in_(("active", "must_change_password")),
+        ),
     )
     if user and verify_password(password, user.password_hash):
         return user
     return None
+
+
+def login_failure_count(session: Session, username: str, ip: str, *, window_minutes: int = 15) -> int:
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=window_minutes)
+    latest_success = session.scalar(
+        select(func.max(LoginAttempt.created_at)).where(
+            LoginAttempt.username == username,
+            LoginAttempt.ip == ip,
+            LoginAttempt.success.is_(True),
+            LoginAttempt.created_at >= cutoff,
+        ),
+    )
+    latest_success = _as_utc(latest_success)
+    if latest_success is not None and latest_success > cutoff:
+        cutoff = latest_success
+    value = session.scalar(
+        select(func.count())
+        .select_from(LoginAttempt)
+        .where(
+            LoginAttempt.username == username,
+            LoginAttempt.ip == ip,
+            LoginAttempt.success.is_(False),
+            LoginAttempt.created_at >= cutoff,
+        ),
+    )
+    return int(value or 0)
+
+
+def record_login_attempt(session: Session, username: str, ip: str, *, success: bool) -> None:
+    session.add(LoginAttempt(username=username, ip=ip, success=success))
 
 
 def resolve_header_identity(
@@ -316,6 +353,175 @@ def write_audit(session: Session, user: User | None, action: str, object_type: s
 def set_user_roles(session: Session, target_user: User, role_codes: list[str]) -> None:
     roles = [_get_role(session, code) for code in sorted(set(role_codes))]
     target_user.roles = roles
+
+
+def create_user_invite(
+    session: Session,
+    *,
+    email: str | None,
+    role_code: str,
+    workspaces: list[WorkspaceInviteTarget],
+    invited_by: User,
+    expires_in_days: int,
+    app_base_url: str,
+) -> InviteRead:
+    _get_role(session, role_code)
+    workspace_targets = _normalize_workspace_targets(session, workspaces)
+    invite = UserInvite(
+        code=secrets.token_urlsafe(32)[:64],
+        email=email,
+        role_code=role_code,
+        workspace_codes={"workspaces": [target.model_dump() for target in workspace_targets]},
+        invited_by_id=invited_by.id,
+        expires_at=datetime.now(timezone.utc) + timedelta(days=expires_in_days),
+    )
+    session.add(invite)
+    session.flush()
+    return invite_to_read(invite, app_base_url)
+
+
+def invite_to_read(invite: UserInvite, app_base_url: str) -> InviteRead:
+    return InviteRead(
+        id=invite.id,
+        code=invite.code,
+        email=invite.email,
+        role_code=invite.role_code,
+        workspaces=_invite_targets(invite),
+        invite_url=f"{app_base_url.rstrip('/')}/invite/{invite.code}",
+        status=invite_status(invite),
+        expires_at=invite.expires_at,
+        accepted_at=invite.accepted_at,
+        revoked_at=invite.revoked_at,
+    )
+
+
+def invite_status(invite: UserInvite) -> str:
+    if invite.revoked_at is not None:
+        return "revoked"
+    if invite.accepted_at is not None:
+        return "accepted"
+    if _as_utc(invite.expires_at) <= datetime.now(timezone.utc):
+        return "expired"
+    return "pending"
+
+
+def accept_user_invite(
+    session: Session,
+    *,
+    invite: UserInvite,
+    username: str,
+    display_name: str,
+    password: str,
+) -> User:
+    status = invite_status(invite)
+    if status != "pending":
+        raise ValueError(status)
+    existing = session.scalar(select(User).where(User.username == username))
+    if existing is not None:
+        raise RuntimeError("username_conflict")
+    role = _get_role(session, invite.role_code)
+    user = User(
+        external_provider="local",
+        external_id=username,
+        username=username,
+        display_name=display_name,
+        email=invite.email,
+        password_hash=hash_password(password),
+        status="active",
+        roles=[role],
+    )
+    session.add(user)
+    session.flush()
+    for target in _invite_targets(invite):
+        workspace = session.scalar(select(Workspace).where(Workspace.code == target.code, Workspace.enabled.is_(True)))
+        if workspace is None:
+            continue
+        membership = session.scalar(
+            select(WorkspaceMembership).where(
+                WorkspaceMembership.workspace_id == workspace.id,
+                WorkspaceMembership.user_id == user.id,
+            ),
+        )
+        if membership is None:
+            session.add(
+                WorkspaceMembership(
+                    workspace_id=workspace.id,
+                    user_id=user.id,
+                    workspace_role=target.workspace_role,
+                    enabled=True,
+                ),
+            )
+        else:
+            membership.workspace_role = target.workspace_role
+            membership.enabled = True
+    invite.accepted_by_id = user.id
+    invite.accepted_at = datetime.now(timezone.utc)
+    session.flush()
+    return user
+
+
+def create_password_reset_token(session: Session, user: User, *, ttl_minutes: int = 30) -> str:
+    token = secrets.token_urlsafe(32)
+    session.add(
+        PasswordResetToken(
+            user_id=user.id,
+            token_hash=hash_token(token),
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes),
+        ),
+    )
+    return token
+
+
+def hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def generate_temporary_password() -> str:
+    return secrets.token_urlsafe(18)
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _invite_targets(invite: UserInvite) -> list[WorkspaceInviteTarget]:
+    raw_targets = (invite.workspace_codes or {}).get("workspaces") or []
+    targets = []
+    for item in raw_targets:
+        if not isinstance(item, dict):
+            continue
+        targets.append(
+            WorkspaceInviteTarget(
+                code=str(item.get("code") or ""),
+                workspace_role=str(item.get("workspace_role") or "member"),
+            ),
+        )
+    return [target for target in targets if target.code]
+
+
+def _normalize_workspace_targets(
+    session: Session,
+    targets: list[WorkspaceInviteTarget],
+) -> list[WorkspaceInviteTarget]:
+    normalized = targets
+    if not normalized:
+        raise ValueError("At least one workspace target is required")
+    result = []
+    for target in normalized:
+        workspace = session.scalar(select(Workspace).where(Workspace.code == target.code, Workspace.enabled.is_(True)))
+        if workspace is None:
+            raise ValueError(f"Unknown workspace: {target.code}")
+        result.append(
+            WorkspaceInviteTarget(
+                code=target.code,
+                workspace_role=target.workspace_role or "member",
+            ),
+        )
+    return result
 
 
 def _ensure_permissions(session: Session) -> dict[str, Permission]:

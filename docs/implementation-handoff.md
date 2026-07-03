@@ -207,6 +207,7 @@ daily_report_items
 - `public_password`
 - `local`
 - `intranet_header`
+- `oidc` 预留 Protocol（未配置 provider 时返回 501）
 
 统一流程：
 
@@ -216,9 +217,13 @@ AuthAdapter -> ExternalIdentity -> IdentityResolver -> users -> session/JWT -> R
 
 验收：
 
-- 公网账号密码能登录。
+- 公网账号密码能登录；登录失败同一账号+IP 15 分钟内 5 次后返回 429。
+- 超级管理员可创建/撤销邀请，邀请必须显式指定工作台目标；匿名用户可通过 `/invite/:code` 建号并获得角色和工作台 membership。
+- 本地用户可在 `/account` 改密；管理员代重置会返回一次性临时密码并强制 `must_change_password`。
+- 改密或代重置后旧 cookie 失效；`AUTH_MODE=public_password` 且缺 `AUTH_SESSION_SECRET` 时启动失败。
 - 内网模式下，可信 header 能自动创建用户。
 - 业务接口只认本地 `user_id` 和本地角色。
+- 带 `workspace_code` 的业务 API 需执行 membership 校验；当前已接入 workspace sections/label policy、sources、ingestion、news、recommendation、daily/weekly reports、renditions 和 exports。viewer 只读，member 可采信/编辑/发布/导出，admin/owner 可管理源、标签策略、格式和流水线 run；无 `workspace_code` 的全局列表仍限 super_admin，`GET /api/users?workspace_code=...` 只给该工作台 admin/owner 提供用户候选列表。
 - 修改认证模式不需要改日报、数据源、评论等业务代码。
 
 ### 5.4 数据源导入
@@ -488,7 +493,7 @@ API 与页面细节见 `docs/api-and-ui-implementation.md`。
 
 第一版页面：
 
-- 登录页。
+- 登录页、邀请接受页 `/invite/:code`、账号改密页 `/account`。
 - 数据源列表页：已实现共享源信息流、工作台统一标签/新闻结构、单源启停/权重/日限。
 - 数据源详情页：已实现配置、启停、最近抓取、来源评分。
 - 候选池页：已实现 winner/loser、重复来源、候选搜索、推荐分、日报采信状态和追溯入口。
@@ -497,7 +502,7 @@ API 与页面细节见 `docs/api-and-ui-implementation.md`。
 - 日报时间线页：已实现展示、点赞、评分、评论、采信和编辑弹窗。
 - 日报详情/编辑路由：已实现独立详情与轻编辑入口。
 - SQL 导出页：已实现已发布日报选择、导出历史、SQL 生成、预览和下载。
-- 用户和角色管理页：已实现。
+- 用户和角色管理页：已实现角色管理、邀请管理、邀请链接复制、用户启停和管理员代重置密码。
 - 周报、需求、任务、同步、审计：已从模块路线页升级为真实 API 页面；同步页当前记录同步 run，完整同步包导出/导入仍按 `docs/multi-environment-sync.md` 继续实现。
 
 当前前端/后端下一步边界：

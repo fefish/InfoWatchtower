@@ -67,8 +67,9 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export async function fetchExportJobs(): Promise<ExportJobRecord[]> {
-  return requestJson<ExportJobRecord[]>("/api/exports");
+export async function fetchExportJobs(workspaceCode?: string): Promise<ExportJobRecord[]> {
+  const params = workspaceCode ? `?${new URLSearchParams({ workspace_code: workspaceCode }).toString()}` : "";
+  return requestJson<ExportJobRecord[]>(`/api/exports${params}`);
 }
 
 export async function fetchExportJob(exportJobId: string): Promise<ExportJobRecord> {

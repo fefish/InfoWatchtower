@@ -112,7 +112,7 @@ references/
 持续维护的差距清单（按能力块、含判定标准）以 `docs/architecture-capability-map.md` §4 为准；下面是与第一版施工计划对应的历史视角清单：
 
 1. P0 SQL 导出增强：当前已支持选择已发布日报、查看导出历史、预览和下载 SQL，并通过 trace API 从 SQL 语句追溯到 daily item、generated news、news item、raw item 和 source；下一步补导出前字段长度、URL 长度和 HTML 污染校验摘要。
-2. P0 公网/内网部署与登录安全：当前已有生产 Compose、Caddy 反向代理、生产 env 模板和部署检查脚本；下一步补真实服务器备份恢复演练、登录限流、默认密码治理、Google OIDC 预留和公司 IDaaS code flow adapter 预留。
+2. P0 公网/内网部署与登录安全：当前已有生产 Compose、Caddy 反向代理、生产 env 模板、部署检查脚本、登录限流、管理员邀请、改密/忘记密码/管理员代重置、会话密钥启动自检、改密后旧 cookie 失效、OIDC adapter Protocol 预留，以及主要工作台业务 API 的 membership gate；下一步补真实服务器备份恢复演练、首次运行 Setup 和公司 IDaaS code flow adapter 预留。
 3. P0 同步包能力：当前 `/sync` 已能导出同步包、下载 zip、导入到 `sync_inbox` 做幂等记录并写审计；后续补业务表 apply handler、冲突检查和同步审计细化；继续坚持公网公开信号向内网同步，内网用户反馈默认不回流公网。
 4. P1 历史补采深化：当前已支持 `rss_window/paper_api/archive_page/sitemap/manual_import` 运行模式和覆盖率统计；后续要把论文 provider、归档页分页、sitemap 深挖、失败源重试和手工 CSV 上传做成完整可验收体验。`rss_window` 仍只代表当前 feed 窗口恢复，不等同全站历史归档抓取。
 5. P1 周报增强：周报双版成稿（技术洞察版按业务板块分组 + MD/HTML 导出）已随 rendition P4 落地；剩余为热度/反馈排序和周报开头摘要段（板块分布/关键亮点）的模型生成。

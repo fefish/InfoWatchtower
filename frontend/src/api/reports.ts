@@ -19,6 +19,7 @@ export interface DailyPipelineRunCreate {
   day_key?: string | null;
   source_types: string[];
   ingestion_limit?: number | null;
+  ingestion_max_items_per_source?: number | null;
   recommendation_limit: number;
   source_daily_limit: number;
   generation_timeout_seconds?: number;
