@@ -90,8 +90,11 @@ P2/P3 观察池的复核工作流（P2）。
 | 配置 | `taxonomy/business_boards.json`（14 板块，辅助维度）、`contracts/report_renditions.json` |
 
 现状：✅ P1-P4 已实施：双内置格式、头条自动 Top6+可调、板块分组、MD/HTML 导出对齐快报
-样式、自定义格式注册表、周报双版；未配 MiniMax key 时 insight 走规则降级并标注。
-**Gap**：① 生产配置 MiniMax key 后验证模型版 insight 质量（P0，运维+验收动作）
+样式、自定义格式注册表、周报双版；未配 MiniMax key 时 insight 走规则降级并标注；
+`scripts/validate_minimax_generation_acceptance.py` 已提供真实 key 结构验收和 fixture pytest。
+真实 MiniMax 验收已通过并归档到 `outputs/minimax/minimax_generation_acceptance.json`；
+validator 会拒绝来源未给出的百分比、P95/P99、倍数、延迟/显存数值，避免模型成稿编造指标。
+**Gap**：① 模型版 insight/成稿在真实生产日报流水线中持续抽检（P0 运维动作）
 ② 周报开头摘要段（板块分布/关键亮点）的模型生成（P1）③ 快报 PPT 导出（旧系统能力，
 可选插件，P2）。
 
@@ -132,8 +135,12 @@ P2/P3 观察池的复核工作流（P2）。
 | 数据 | `historical_reports`、`tracked_entities/entity_milestones`、`historical_feedback_items/historical_job_runs`、`insights/requirements/topic_tasks` |
 
 现状：✅ 旧库 14834 素材/66 报告/275 大事记的导入脚本、只读页、验收摘要、引用缺口全链
-就绪（默认 no-write）。
-**Gap**：① 生产主库执行全量导入验收（P0，一条命令级动作+人工核对）② 从新日报/周报持
+就绪（默认 no-write）；`scripts/validate_tech_import_acceptance.py` 可对生产 `--check-only`
+报告做机器验收，覆盖率、只读边界和已归档缺口不满足时直接失败。本地隔离 PostgreSQL 全量导入
+证据已归档到 `outputs/tech_insight_loop/postgres_full_import_20260703T050653Z/`，7 项覆盖率 complete，
+30 个旧库断链引用已通过 `tech_insight_loop_import_accepted_gaps.json` 归档；旧 PDF/二进制文本中的
+NUL byte 会转义为 `\u0000` 标记并写入 `legacy_import.nul_sanitized_fields` 审计。
+**Gap**：① 生产主库执行同一套全量导入验收（P0，一条命令级动作+机器验收+缺口人工复核）② 从新日报/周报持
 续沉淀实体大事记（编辑入口，P1）③ insight→requirement→task 与外部信号的完整追溯闭环
 （P1）。
 
@@ -156,10 +163,10 @@ domain pack 样例（P2，证明扩展性）。
 
 | 级 | 差距 | 所属块 | 判定标准 |
 |---|---|---|---|
-| P0 | 生产库执行 Tech 历史资产全量导入验收 | G | `--check-only` 覆盖率对齐冻结基线，缺口清零或归档 |
+| P0 | 生产库执行 Tech 历史资产全量导入验收 | G | 本地隔离 PostgreSQL 全量证据已通过；生产库仍需 `--check-only` 覆盖率对齐冻结基线，`validate_tech_import_acceptance.py` 通过，缺口清零或用 accepted-gaps JSON 归档 |
 | P0 | 同步包业务 apply handler + 冲突处理 | F | 公网→内网一次真实同步，对象落库幂等 |
 | P0 | 生产登录安全（限流/密码治理）+ 备份恢复演练 | H/F | 演练记录入 docs/deployment-ops.md |
-| P0 | MiniMax key 配置后模型版 insight/成稿验收 | D | 技术洞察版要点/总结与快报样例人工对齐 |
+| P0 | MiniMax key 配置后模型版 insight/成稿验收 | D | ✅ `validate_minimax_generation_acceptance.py` live 通过，技术洞察版结构、五段 content_json、短关键词和无编造数值门禁已归档；后续保留生产日报抽检 |
 | P1 | wx:// 公众号 adapter 或替代入口 | A | 31 个待补源可抓取或明确豁免 |
 | P1 | 深度历史补采（归档页/sitemap 深挖） | A | 指定历史日期可恢复候选 |
 | P1 | 周报摘要段模型生成 | D | 周报 rendition 头部自动产出板块分布+亮点 |

@@ -33,6 +33,7 @@ LEGACY_JOB_TABLE = "jobs"
 LEGACY_SOURCE_TYPE = "legacy_tech_insight_loop"
 LEGACY_ARCHIVE_SOURCE_NAME = "Tech Insight Loop Legacy Archive"
 LEGACY_WORKSPACE_CODE = "legacy_tech_insight_loop"
+NUL_TEXT_REPLACEMENT = "\\u0000"
 SUPPORTED_REPORT_TYPES = {"daily", "weekly"}
 
 
@@ -418,7 +419,7 @@ def import_article_rows(
         raw_item.published_at = parse_datetime(row.get("publish_time"))
         raw_item.fetched_at = parse_datetime(row.get("crawled_at")) or raw_item.fetched_at or now
         raw_item.raw_payload_json = {
-            "legacy_tech_insight_loop": row,
+            "legacy_tech_insight_loop": sanitize_json_for_storage(row),
             "legacy_import": {
                 "legacy_system": LEGACY_SYSTEM,
                 "legacy_table": LEGACY_ARTICLE_TABLE,
@@ -427,6 +428,7 @@ def import_article_rows(
                 "import_status": "historical_imported",
                 "recommendation_eligible": False,
                 "company_sql_eligible": False,
+                "nul_sanitized_fields": nul_sanitized_fields(row),
             },
         }
         raw_item.content_hash = stable_hash(raw_item.raw_payload_json)
@@ -514,7 +516,7 @@ def import_report_rows(
             "unresolved_count": len(unresolved_refs),
         }
         report.metadata_json = {
-            "legacy_tech_insight_loop": row,
+            "legacy_tech_insight_loop": sanitize_json_for_storage(row),
             "legacy_import": {
                 "legacy_system": LEGACY_SYSTEM,
                 "legacy_table": LEGACY_REPORT_TABLE,
@@ -522,6 +524,7 @@ def import_report_rows(
                 "target": "historical_reports",
                 "recommendation_eligible": False,
                 "company_sql_eligible": False,
+                "nul_sanitized_fields": nul_sanitized_fields(row),
             },
         }
         report.content_hash = stable_hash(
@@ -592,7 +595,7 @@ def import_entity_rows(
         entity.influence_score = as_float(row.get("influence_score"))
         entity.notes = clean_text(row.get("notes"))
         entity.metadata_json = {
-            "legacy_tech_insight_loop": row,
+            "legacy_tech_insight_loop": sanitize_json_for_storage(row),
             "legacy_import": {
                 "legacy_system": LEGACY_SYSTEM,
                 "legacy_table": LEGACY_ENTITY_TABLE,
@@ -600,6 +603,7 @@ def import_entity_rows(
                 "target": "tracked_entities",
                 "recommendation_eligible": False,
                 "company_sql_eligible": False,
+                "nul_sanitized_fields": nul_sanitized_fields(row),
             },
             "influence_breakdown": {
                 "market_influence": as_float(row.get("market_influence")),
@@ -726,7 +730,7 @@ def import_milestone_rows(
         milestone.importance_level = clean_text(row.get("importance_level")) or "medium"
         milestone.event_dedupe_key = clean_text(row.get("event_dedupe_key"))
         milestone.metadata_json = {
-            "legacy_tech_insight_loop": row,
+            "legacy_tech_insight_loop": sanitize_json_for_storage(row),
             "legacy_import": {
                 "legacy_system": LEGACY_SYSTEM,
                 "legacy_table": LEGACY_MILESTONE_TABLE,
@@ -734,6 +738,7 @@ def import_milestone_rows(
                 "target": "entity_milestones",
                 "recommendation_eligible": False,
                 "company_sql_eligible": False,
+                "nul_sanitized_fields": nul_sanitized_fields(row),
             },
             "legacy_refs": {
                 "entity_id": legacy_entity_id,
@@ -842,7 +847,7 @@ def import_feedback_rows(
         item.comment = clean_text(row.get("comment"))
         item.feedback_at = parse_datetime(row.get("created_at"))
         item.metadata_json = {
-            "legacy_tech_insight_loop": row,
+            "legacy_tech_insight_loop": sanitize_json_for_storage(row),
             "legacy_import": {
                 "legacy_system": LEGACY_SYSTEM,
                 "legacy_table": legacy_table,
@@ -851,6 +856,7 @@ def import_feedback_rows(
                 "recommendation_eligible": False,
                 "company_sql_eligible": False,
                 "mutates_current_feedback": False,
+                "nul_sanitized_fields": nul_sanitized_fields(row),
             },
             "legacy_refs": {
                 "article_id": legacy_article_id,
@@ -932,7 +938,7 @@ def import_job_rows(
         job.failed_count = as_int(row.get("failed_count"))
         job.details_json = details if isinstance(details, dict) else {"raw": details}
         job.metadata_json = {
-            "legacy_tech_insight_loop": row,
+            "legacy_tech_insight_loop": sanitize_json_for_storage(row),
             "legacy_import": {
                 "legacy_system": LEGACY_SYSTEM,
                 "legacy_table": LEGACY_JOB_TABLE,
@@ -940,6 +946,7 @@ def import_job_rows(
                 "target": "historical_job_runs",
                 "migrates_old_task_state_machine": False,
                 "statistics_only": True,
+                "nul_sanitized_fields": nul_sanitized_fields(row),
             },
         }
         job.content_hash = stable_hash(
@@ -977,7 +984,33 @@ def article_identity(row: dict[str, Any]) -> str:
 def clean_text(value: Any) -> str:
     if value is None:
         return ""
-    return str(value).strip()
+    return replace_nul(str(value)).strip()
+
+
+def replace_nul(value: str) -> str:
+    return value.replace("\x00", NUL_TEXT_REPLACEMENT)
+
+
+def sanitize_json_for_storage(value: Any) -> Any:
+    if isinstance(value, str):
+        return replace_nul(value)
+    if isinstance(value, list):
+        return [sanitize_json_for_storage(item) for item in value]
+    if isinstance(value, tuple):
+        return [sanitize_json_for_storage(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): sanitize_json_for_storage(item) for key, item in value.items()}
+    return value
+
+
+def nul_sanitized_fields(row: dict[str, Any]) -> list[dict[str, Any]]:
+    fields = []
+    for key, value in row.items():
+        if isinstance(value, str):
+            count = value.count("\x00")
+            if count:
+                fields.append({"field": key, "nul_count": count, "replacement": NUL_TEXT_REPLACEMENT})
+    return fields
 
 
 def parse_json_list(value: Any) -> list[Any]:
@@ -988,6 +1021,7 @@ def parse_json_list(value: Any) -> list[Any]:
         parsed = json.loads(text)
     except json.JSONDecodeError:
         return []
+    parsed = sanitize_json_for_storage(parsed)
     return parsed if isinstance(parsed, list) else []
 
 
@@ -996,9 +1030,10 @@ def parse_json_value(value: Any) -> Any:
     if not text:
         return None
     try:
-        return json.loads(text)
+        parsed = json.loads(text)
     except json.JSONDecodeError:
         return text
+    return sanitize_json_for_storage(parsed)
 
 
 def parse_datetime(value: Any) -> datetime | None:

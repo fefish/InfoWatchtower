@@ -191,6 +191,12 @@
     "provider_rule": "Model output must be strict JSON, must be Simplified Chinese except for proper nouns, and category must be one of the workspace label policy primary labels. Source trace IDs are forced by backend after generation.",
     "news_format_rule": "For planning_intel/company_sql_v1, generated_news.content_json must contain background, effects, eventSummary, technologyAndInnovation and valueAndImpact so later SQL export can map without guessing.",
     "fallback_rule": "LLM timeout or failure must not abort the daily pipeline; selected recommendations still generate rule_v1:fallback drafts with the same required content_json fields, but generation_status must be fallback_needs_review and standard Company SQL export must reject them until an LLM-ready or edited-ready version exists.",
+    "live_acceptance_command": "MINIMAX_GENERATION_ENABLED=true MINIMAX_API_KEY=<secret> python3 scripts/validate_minimax_generation_acceptance.py",
+    "latest_live_acceptance": {
+      "output_json": "outputs/minimax/minimax_generation_acceptance.json",
+      "response_text": "outputs/minimax/minimax_live_acceptance_20260703.response.txt",
+      "status": "passed with MiniMax-M2.7-highspeed; unsupported numeric claims not present in source are rejected by the validator"
+    },
     "rerun_api": "POST /api/daily-reports/{report_id}/regenerate-generated-news can rerun non-ready or selected generated_news rows for a draft daily report."
   },
   "scheduled_daily_pipeline": {
