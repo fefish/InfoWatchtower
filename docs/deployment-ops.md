@@ -427,6 +427,22 @@ INFOWATCHTOWER_ENV_FILE=/srv/infowatchtower/.env.production \
 恢复脚本会要求输入 `RESTORE` 确认；无人值守演练可设置 `RESTORE_CONFIRM=yes`。恢复后重启
 backend、worker 和 scheduler，再访问 `/healthz` 和前端页面确认服务可用。
 
+## 10.1 部署后全量验收
+
+完成首次 `/setup` 或准备好管理员账号后，使用同一条脚本执行蓝图 §9 验收：
+
+```text
+python3 scripts/run_full_acceptance.py \
+  --base-url http://127.0.0.1:8000 \
+  --admin-username <admin> \
+  --admin-password <password> \
+  --rss-bind-host 0.0.0.0 \
+  --rss-public-host host.docker.internal
+```
+
+本地 Docker 最新证据在 `outputs/acceptance/20260703T062259Z/`，包含 Setup/邀请/建台/
+共享源+自建源/标签策略/成稿格式/流水线/日报周报导出/公司 SQL 校验/备份输出。
+
 ## 11. 内网迁移
 
 从公网迁到内网时：

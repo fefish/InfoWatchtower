@@ -25,7 +25,7 @@ class RequirementRead(BaseModel):
 
 
 class RequirementCreate(BaseModel):
-    workspace_code: str = "planning_intel"
+    workspace_code: str
     domain_code: str = "ai"
     title: str = Field(min_length=1)
     description: str = ""
@@ -64,7 +64,7 @@ class TopicTaskRead(BaseModel):
 
 
 class TopicTaskCreate(BaseModel):
-    workspace_code: str = "planning_intel"
+    workspace_code: str
     domain_code: str = "ai"
     requirement_id: str | None = None
     title: str = Field(min_length=1)

@@ -297,7 +297,7 @@ def test_historical_reports_are_listed_and_read_only(monkeypatch, tmp_path):
         session.commit()
         first_id = first.id
 
-    summary = client.get("/api/historical-reports/summary")
+    summary = client.get("/api/historical-reports/summary", params={"workspace_code": "legacy_tech_insight_loop"})
     assert summary.status_code == 200
     summary_payload = summary.json()
     assert summary_payload["total"] == 2
@@ -305,7 +305,10 @@ def test_historical_reports_are_listed_and_read_only(monkeypatch, tmp_path):
     assert summary_payload["unresolved_report_count"] == 1
     assert summary_payload["unresolved_ref_count"] == 1
 
-    unresolved = client.get("/api/historical-reports", params={"has_unresolved_refs": True})
+    unresolved = client.get(
+        "/api/historical-reports",
+        params={"workspace_code": "legacy_tech_insight_loop", "has_unresolved_refs": True},
+    )
     assert unresolved.status_code == 200
     unresolved_payload = unresolved.json()
     assert len(unresolved_payload) == 1
@@ -313,7 +316,10 @@ def test_historical_reports_are_listed_and_read_only(monkeypatch, tmp_path):
     assert unresolved_payload[0]["unresolved_ref_count"] == 1
     assert "content" not in unresolved_payload[0]
 
-    weekly = client.get("/api/historical-reports", params={"report_type": "weekly", "q": "周报"})
+    weekly = client.get(
+        "/api/historical-reports",
+        params={"workspace_code": "legacy_tech_insight_loop", "report_type": "weekly", "q": "周报"},
+    )
     assert weekly.status_code == 200
     assert [item["legacy_id"] for item in weekly.json()] == ["202"]
 
@@ -431,7 +437,7 @@ def test_legacy_import_summary_and_gaps(monkeypatch, tmp_path):
         session.add(milestone)
         session.commit()
 
-    summary = client.get("/api/legacy-import/summary")
+    summary = client.get("/api/legacy-import/summary", params={"workspace_code": "legacy_tech_insight_loop"})
     assert summary.status_code == 200
     payload = summary.json()
     assert payload["workspace_code"] == "legacy_tech_insight_loop"
@@ -448,7 +454,7 @@ def test_legacy_import_summary_and_gaps(monkeypatch, tmp_path):
     assert payload["total_unresolved_refs"] == 2
     assert payload["gap_item_count"] == 2
 
-    gaps = client.get("/api/legacy-import/gaps")
+    gaps = client.get("/api/legacy-import/gaps", params={"workspace_code": "legacy_tech_insight_loop"})
     assert gaps.status_code == 200
     gap_payload = gaps.json()
     assert {item["kind"] for item in gap_payload} == {"historical_reports", "entity_milestones"}
@@ -570,7 +576,7 @@ def test_quality_archive_summary_feedback_and_job_runs(monkeypatch, tmp_path):
         session.add_all([feedback, quality, job])
         session.commit()
 
-    summary = client.get("/api/quality-archive/summary")
+    summary = client.get("/api/quality-archive/summary", params={"workspace_code": "legacy_tech_insight_loop"})
     assert summary.status_code == 200
     payload = summary.json()
     assert payload["total_feedback"] == 1
@@ -586,7 +592,7 @@ def test_quality_archive_summary_feedback_and_job_runs(monkeypatch, tmp_path):
 
     unresolved_feedback = client.get(
         "/api/historical-feedback-items",
-        params={"has_unresolved_refs": True},
+        params={"workspace_code": "legacy_tech_insight_loop", "has_unresolved_refs": True},
     )
     assert unresolved_feedback.status_code == 200
     unresolved_payload = unresolved_feedback.json()
@@ -595,18 +601,24 @@ def test_quality_archive_summary_feedback_and_job_runs(monkeypatch, tmp_path):
 
     quality_feedback = client.get(
         "/api/historical-feedback-items",
-        params={"feedback_kind": "quality_feedback", "q": "marketing"},
+        params={"workspace_code": "legacy_tech_insight_loop", "feedback_kind": "quality_feedback", "q": "marketing"},
     )
     assert quality_feedback.status_code == 200
     assert [item["legacy_id"] for item in quality_feedback.json()] == ["601"]
     assert quality_feedback.json()[0]["article_ref_resolved"] is True
 
-    gaps = client.get("/api/legacy-import/gaps", params={"kind": "historical_feedback"})
+    gaps = client.get(
+        "/api/legacy-import/gaps",
+        params={"workspace_code": "legacy_tech_insight_loop", "kind": "historical_feedback"},
+    )
     assert gaps.status_code == 200
     assert gaps.json()[0]["kind"] == "historical_feedback"
     assert gaps.json()[0]["unresolved_refs"] == [{"ref_type": "article_id", "legacy_ref": "999"}]
 
-    jobs = client.get("/api/historical-job-runs", params={"status": "failed", "q": "timeout"})
+    jobs = client.get(
+        "/api/historical-job-runs",
+        params={"workspace_code": "legacy_tech_insight_loop", "status": "failed", "q": "timeout"},
+    )
     assert jobs.status_code == 200
     job_payload = jobs.json()
     assert [item["legacy_id"] for item in job_payload] == ["701"]
@@ -715,7 +727,7 @@ def test_entity_timeline_is_listed_and_read_only(monkeypatch, tmp_path):
         session.commit()
         linked_id = linked.id
 
-    summary = client.get("/api/entity-timeline/summary")
+    summary = client.get("/api/entity-timeline/summary", params={"workspace_code": "legacy_tech_insight_loop"})
     assert summary.status_code == 200
     summary_payload = summary.json()
     assert summary_payload["total_entities"] == 1
@@ -723,20 +735,26 @@ def test_entity_timeline_is_listed_and_read_only(monkeypatch, tmp_path):
     assert summary_payload["unresolved_milestone_count"] == 1
     assert summary_payload["by_entity_type"] == {"AI模型厂商": 1}
 
-    entities = client.get("/api/tracked-entities", params={"q": "OpenAI"})
+    entities = client.get("/api/tracked-entities", params={"workspace_code": "legacy_tech_insight_loop", "q": "OpenAI"})
     assert entities.status_code == 200
     entity_payload = entities.json()[0]
     assert entity_payload["name"] == "OpenAI"
     assert entity_payload["milestone_count"] == 2
     assert entity_payload["aliases_json"] == ["GPT", "ChatGPT"]
 
-    unresolved_response = client.get("/api/entity-milestones", params={"has_unresolved_refs": True})
+    unresolved_response = client.get(
+        "/api/entity-milestones",
+        params={"workspace_code": "legacy_tech_insight_loop", "has_unresolved_refs": True},
+    )
     assert unresolved_response.status_code == 200
     unresolved_payload = unresolved_response.json()
     assert [item["legacy_id"] for item in unresolved_payload] == ["402"]
     assert unresolved_payload[0]["article_ref_resolved"] is False
 
-    event_type_response = client.get("/api/entity-milestones", params={"event_type": "产品/模型发布"})
+    event_type_response = client.get(
+        "/api/entity-milestones",
+        params={"workspace_code": "legacy_tech_insight_loop", "event_type": "产品/模型发布"},
+    )
     assert event_type_response.status_code == 200
     assert [item["legacy_id"] for item in event_type_response.json()] == ["401"]
 

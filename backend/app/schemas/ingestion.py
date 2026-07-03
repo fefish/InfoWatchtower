@@ -14,7 +14,7 @@ from app.ingestion.runs import (
 
 
 class IngestionRunCreate(BaseModel):
-    workspace_code: str = "planning_intel"
+    workspace_code: str
     source_types: list[str] = Field(default_factory=lambda: list(DEFAULT_INGESTION_SOURCE_TYPES))
     limit: int | None = Field(default=None, ge=0)
     concurrency: int = Field(default=DEFAULT_INGESTION_CONCURRENCY, ge=1, le=32)
@@ -23,7 +23,7 @@ class IngestionRunCreate(BaseModel):
 
 
 class HistoricalBackfillCreate(BaseModel):
-    workspace_code: str = "planning_intel"
+    workspace_code: str
     target_day_start: str
     target_day_end: str
     source_types: list[str] = Field(default_factory=lambda: list(DEFAULT_BACKFILL_SOURCE_TYPES))

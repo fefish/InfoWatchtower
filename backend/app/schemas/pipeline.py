@@ -10,7 +10,7 @@ from app.ingestion.runs import (
 
 
 class DailyPipelineRunCreate(BaseModel):
-    workspace_code: str = "planning_intel"
+    workspace_code: str
     day_key: str | None = None
     source_types: list[str] = Field(default_factory=lambda: list(DEFAULT_INGESTION_SOURCE_TYPES))
     ingestion_limit: int | None = Field(default=None, ge=1, le=500)
@@ -20,6 +20,7 @@ class DailyPipelineRunCreate(BaseModel):
         ge=3,
         le=120,
     )
+    ingestion_max_items_per_source: int | None = Field(default=None, ge=0)
     recommendation_limit: int = Field(default=15, ge=0, le=100)
     source_daily_limit: int = Field(default=2, ge=1, le=20)
     generation_timeout_seconds: float = Field(default=45.0, ge=5, le=180)

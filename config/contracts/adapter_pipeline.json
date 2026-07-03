@@ -17,6 +17,7 @@
   ],
   "ingestion_run_rule": "A workspace ingestion run selects enabled workspace_source_links, executes the registered adapters, persists raw_items idempotently, and records run-level source success/failure plus raw created/updated counts. Schedulers and workers must call this same service layer instead of bypassing adapters.",
   "adapter_rule": "Each source type may have its own input structure, but every adapter must persist the full raw payload and emit canonical raw_items. Normalization enriches and maps fields; it must not discard the original payload.",
+  "adapter_network_rule": "HTTP adapters that fetch RSS, paper RSS, archive pages or sitemaps must not inherit host proxy environment variables by default; local, intranet and container-internal sources must be fetched directly unless a source-specific proxy is explicitly configured.",
   "raw_item_identity_rule": "raw_items are idempotent by data_source_id + entry_key. entry_key must fit raw_items.entry_key length 255. If an upstream feed id or redirect URL is longer, the ingestion layer must deterministically shorten it with a stable hash suffix while preserving the original value inside raw_payload_json.",
   "source_type_to_adapter": {
     "wiseflow": "WiseflowReadInfoAdapter",
@@ -212,6 +213,7 @@
       "INGESTION_SCHEDULER_LIMIT",
       "INGESTION_CONCURRENCY",
       "INGESTION_SOURCE_TIMEOUT_SECONDS",
+      "INGESTION_MAX_ITEMS_PER_SOURCE",
       "INGESTION_SCHEDULER_DAILY_TIME",
       "INGESTION_SCHEDULER_TIMEZONE",
       "DAILY_PIPELINE_DAY_OFFSET_DAYS"

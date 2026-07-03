@@ -71,6 +71,7 @@ def _enqueue_scheduled_job(queue: Queue, settings, now: datetime | None = None):
             settings.ingestion_scheduler_limit,
             settings.ingestion_concurrency,
             settings.ingestion_source_timeout_seconds,
+            getattr(settings, "ingestion_max_items_per_source", None),
             job_timeout=60 * 60 * 2,
             result_ttl=60 * 60 * 24,
             failure_ttl=60 * 60 * 24 * 7,
@@ -82,8 +83,10 @@ def _enqueue_scheduled_job(queue: Queue, settings, now: datetime | None = None):
         settings.ingestion_scheduler_limit,
         settings.ingestion_concurrency,
         settings.ingestion_source_timeout_seconds,
+        getattr(settings, "ingestion_max_items_per_source", None),
         settings.daily_pipeline_recommendation_limit,
         settings.daily_pipeline_source_daily_limit,
+        45.0,
         settings.daily_pipeline_create_daily_draft,
         settings.daily_pipeline_run_ingestion,
     ]

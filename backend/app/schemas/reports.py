@@ -99,7 +99,7 @@ class WeeklyReportRead(BaseModel):
 
 
 class WeeklyReportCreate(BaseModel):
-    workspace_code: str = "planning_intel"
+    workspace_code: str
     week_key: str
     limit: int = Field(default=50, ge=1, le=200)
     include_unpublished_daily: bool = False

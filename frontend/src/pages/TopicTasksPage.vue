@@ -143,7 +143,7 @@ onMounted(loadTasks);
             <span>{{ item.status === "done" ? "重开" : "完成" }}</span>
           </button>
         </article>
-        <p v-if="!loading && tasks.length === 0" class="empty-state">暂无指派任务。</p>
+        <p v-if="!loading && tasks.length === 0" class="empty-state">暂无指派任务，可从需求拆解或日报复盘中创建跟进行动。</p>
       </article>
     </section>
   </section>

@@ -194,7 +194,7 @@ onMounted(loadReport);
     </section>
 
     <section v-else class="module-card">
-      <p class="empty-state">{{ loading ? "加载中..." : "没有找到这份日报。" }}</p>
+      <p class="empty-state">{{ loading ? "加载中..." : "没有找到这份日报，请从日报列表重新选择。" }}</p>
     </section>
   </section>
 </template>
