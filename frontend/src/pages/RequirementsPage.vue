@@ -155,7 +155,7 @@ onMounted(loadRequirements);
             <span>{{ item.status === "done" ? "重开" : "完成" }}</span>
           </button>
         </article>
-        <p v-if="!loading && requirements.length === 0" class="empty-state">暂无内部需求。</p>
+        <p v-if="!loading && requirements.length === 0" class="empty-state">暂无内部需求，可从日报/周报复盘中新增需要跟进的问题。</p>
       </article>
     </section>
   </section>

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { CircleDot, Clock3, GitBranch, Link2, RefreshCw, Search, TriangleAlert, UserRound } from "lucide-vue-next";
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 
 import {
   fetchEntityMilestoneDetail,
@@ -12,7 +12,9 @@ import {
   type EntityTimelineSummaryRecord,
   type TrackedEntityListItem
 } from "../api/operations";
+import { useWorkspaceStore } from "../stores/workspace";
 
+const workspace = useWorkspaceStore();
 const summary = ref<EntityTimelineSummaryRecord | null>(null);
 const entities = ref<TrackedEntityListItem[]>([]);
 const milestones = ref<EntityMilestoneListItem[]>([]);
@@ -115,6 +117,13 @@ function compactJson(value: unknown) {
   return JSON.stringify(value ?? {}, null, 2);
 }
 
+watch(
+  () => workspace.currentCode,
+  () => {
+    selectedEntityId.value = "";
+    void loadAll();
+  }
+);
 onMounted(loadAll);
 </script>
 
@@ -225,7 +234,7 @@ onMounted(loadAll);
             <em>{{ entity.milestone_count }} events · score {{ entity.influence_score.toFixed(0) }}</em>
           </span>
         </button>
-        <p v-if="!loading && entities.length === 0" class="empty-state">暂无实体归档。</p>
+        <p v-if="!loading && entities.length === 0" class="empty-state">暂无实体归档，执行历史实体导入后这里会展示公司/项目时间线。</p>
       </aside>
 
       <section class="module-card milestone-list">
@@ -267,7 +276,7 @@ onMounted(loadAll);
             class="warning-icon"
           />
         </article>
-        <p v-if="!loading && milestones.length === 0" class="empty-state">暂无事件。</p>
+        <p v-if="!loading && milestones.length === 0" class="empty-state">暂无事件，选择其他实体或导入实体大事记后再查看。</p>
       </section>
 
       <section class="module-card milestone-detail">

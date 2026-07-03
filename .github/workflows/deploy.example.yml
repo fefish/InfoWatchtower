@@ -18,7 +18,7 @@ jobs:
             cd "${{ secrets.DEPLOY_PATH }}"
             git fetch --prune
             git reset --hard origin/main
-            docker compose -f deploy/docker-compose.prod.yml --env-file /srv/infowatchtower/.env.production build
-            docker compose -f deploy/docker-compose.prod.yml --env-file /srv/infowatchtower/.env.production run --rm backend alembic upgrade head
-            docker compose -f deploy/docker-compose.prod.yml --env-file /srv/infowatchtower/.env.production up -d --remove-orphans
+            INFOWATCHTOWER_ENV_FILE=/srv/infowatchtower/.env.production \
+              docker compose --env-file /srv/infowatchtower/.env.production \
+              -f deploy/docker-compose.prod.yml up -d --build --remove-orphans
             docker image prune -f

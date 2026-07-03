@@ -2,15 +2,15 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: infowatchtower
-      POSTGRES_USER: infowatchtower
-      POSTGRES_PASSWORD: change_me
+      POSTGRES_DB: ${POSTGRES_DB:-infowatchtower}
+      POSTGRES_USER: ${POSTGRES_USER:-infowatchtower}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U infowatchtower -d infowatchtower"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-infowatchtower} -d ${POSTGRES_DB:-infowatchtower}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -18,41 +18,42 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
 
   backend:
     build:
       context: ../backend
     env_file:
-      - ../config/env.example
+      - ${INFOWATCHTOWER_ENV_FILE:-./.env}
     environment:
-      DATABASE_URL: postgresql+psycopg://infowatchtower:change_me@postgres:5432/infowatchtower
-      REDIS_URL: redis://redis:6379/0
-      CORS_ORIGINS: http://localhost:5173
-      AUTH_BOOTSTRAP_ADMIN_PASSWORD: password
+      RUN_MIGRATIONS: "true"
     volumes:
       - ../config:/config:ro
     ports:
-      - "8000:8000"
+      - "${BACKEND_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3).read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
   worker:
     build:
       context: ../backend
     command: ["python", "-m", "app.workers.worker"]
     env_file:
-      - ../config/env.example
+      - ${INFOWATCHTOWER_ENV_FILE:-./.env}
     environment:
-      DATABASE_URL: postgresql+psycopg://infowatchtower:change_me@postgres:5432/infowatchtower
-      REDIS_URL: redis://redis:6379/0
+      RUN_MIGRATIONS: "false"
     volumes:
       - ../config:/config:ro
     depends_on:
-      postgres:
+      backend:
         condition: service_healthy
       redis:
         condition: service_started
@@ -62,20 +63,13 @@ services:
       context: ../backend
     command: ["python", "-m", "app.workers.scheduler"]
     env_file:
-      - ../config/env.example
+      - ${INFOWATCHTOWER_ENV_FILE:-./.env}
     environment:
-      DATABASE_URL: postgresql+psycopg://infowatchtower:change_me@postgres:5432/infowatchtower
-      REDIS_URL: redis://redis:6379/0
-      INGESTION_SCHEDULER_ENABLED: "false"
-      SCHEDULER_JOB_MODE: daily_pipeline
-      DAILY_PIPELINE_RUN_INGESTION: "true"
-      DAILY_PIPELINE_CREATE_DAILY_DRAFT: "true"
-      DAILY_PIPELINE_RECOMMENDATION_LIMIT: "15"
-      DAILY_PIPELINE_SOURCE_DAILY_LIMIT: "2"
+      RUN_MIGRATIONS: "false"
     volumes:
       - ../config:/config:ro
     depends_on:
-      postgres:
+      backend:
         condition: service_healthy
       redis:
         condition: service_started
@@ -91,9 +85,10 @@ services:
       - ../frontend:/app
       - frontend_node_modules:/app/node_modules
     ports:
-      - "5173:5173"
+      - "${FRONTEND_PORT:-5173}:5173"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
 volumes:
   postgres_data:

@@ -1,4 +1,4 @@
-COMPOSE = docker compose -p infowatchtower -f deploy/docker-compose.local.yml
+COMPOSE = docker compose --env-file deploy/.env -p infowatchtower -f deploy/docker-compose.local.yml
 
 .PHONY: up down restart ps logs backend-logs frontend-logs test build migrate migration-check
 

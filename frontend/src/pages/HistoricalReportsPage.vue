@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Archive, Database, FileText, GitBranch, RefreshCw, Search, TriangleAlert } from "lucide-vue-next";
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 
 import {
   fetchHistoricalReportDetail,
@@ -15,7 +15,9 @@ import {
   type LegacyImportMetricRecord,
   type LegacyImportSummaryRecord
 } from "../api/operations";
+import { useWorkspaceStore } from "../stores/workspace";
 
+const workspace = useWorkspaceStore();
 const summary = ref<HistoricalReportSummaryRecord | null>(null);
 const legacySummary = ref<LegacyImportSummaryRecord | null>(null);
 const legacyGaps = ref<LegacyImportGapItemRecord[]>([]);
@@ -118,6 +120,7 @@ function gapKindLabel(item: LegacyImportGapItemRecord) {
   return "历史报告";
 }
 
+watch(() => workspace.currentCode, loadReports);
 onMounted(loadReports);
 </script>
 

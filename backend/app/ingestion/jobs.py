@@ -23,6 +23,7 @@ def run_workspace_ingestion_job(
     limit: int | None = None,
     concurrency: int = DEFAULT_INGESTION_CONCURRENCY,
     source_timeout_seconds: float = DEFAULT_SOURCE_TIMEOUT_SECONDS,
+    max_items_per_source: int | None = None,
 ) -> dict[str, Any]:
     return asyncio.run(
         _run_workspace_ingestion_job(
@@ -31,6 +32,7 @@ def run_workspace_ingestion_job(
             limit,
             concurrency,
             source_timeout_seconds,
+            max_items_per_source,
         ),
     )
 
@@ -71,6 +73,7 @@ async def _run_workspace_ingestion_job(
     limit: int | None,
     concurrency: int,
     source_timeout_seconds: float,
+    max_items_per_source: int | None,
 ) -> dict[str, Any]:
     session_factory = get_session_factory()
     if session_factory is None:
@@ -85,6 +88,7 @@ async def _run_workspace_ingestion_job(
                 limit=limit,
                 concurrency=concurrency,
                 source_timeout_seconds=source_timeout_seconds,
+                max_items_per_source=max_items_per_source,
             ),
         )
         payload = {

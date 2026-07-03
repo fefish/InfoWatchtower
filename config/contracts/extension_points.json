@@ -118,7 +118,8 @@
       "first_phase_label_sets": [
         "ai_sql_categories",
         "planning_source_tags",
-        "ai_tools_categories"
+        "ai_tools_categories",
+        "hardware_categories"
       ],
       "rule": "News labels attach through content_labels. Source-side tags are metadata hints and must not replace generated_news.category."
     },
@@ -126,6 +127,7 @@
       "purpose": "Add a new strategic intelligence board such as hardware, semiconductor, robotics, policy, market, or competitor without changing the core pipeline.",
       "registry_key": "domain_code",
       "input_files": [
+        "config/domain_packs/{domain_code}.json",
         "sources.json",
         "taxonomy.json",
         "scoring.json",

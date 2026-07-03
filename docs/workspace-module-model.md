@@ -149,6 +149,8 @@ config/taxonomy/news_categories.json
 `planning_intel` 第一版使用 `company_sql_v1` 新闻结构，必须保留 `background/effects/eventSummary/technologyAndInnovation/valueAndImpact` 五个内容字段，后续 SQL 导出才可以从 `generated_news.content_json` 稳定映射到公司内网表。AI 工具桌面可以使用独立 `tool_intel_v1`，但仍复用相同主链路。
 
 后续硬件、半导体、政策等板块可以增加新的 label set；但仍通过 `label_sets/labels/content_labels` 扩展，不新建一套工具目录表。
+当前样例 `config/domain_packs/hardware.json` 会在启动 seed 时注册 `shared/hardware/hardware_categories`，
+并把板块与评分先验写入 `label_sets.config_json`。新增板块优先复制这个 flat JSON 结构。
 
 ## 6. 权限规则
 
@@ -159,11 +161,12 @@ global role      super_admin/editor_admin/analyst/viewer
 workspace role   owner/admin/member/viewer
 ```
 
-第一版先以 global role 为主。后续做真正多团队协作时：
+当前权限已经按两层模型执行：
 
-- 先检查用户是否属于 workspace。
-- 再检查 global role 是否允许这个动作。
-- 再检查 workspace role 是否允许访问该工作台模块。
+- `super_admin` 绕过 workspace membership，并管理全局用户、邀请、seed 导入和工作台启停。
+- `editor_admin` 可自助创建工作台，创建者获得该工作台 owner membership。
+- 非 `super_admin` 的工作台列表只返回用户已有 enabled membership 的工作台。
+- `viewer` 只读；`member` 可采信、编辑、发布和导出；`admin/owner` 可管理源、标签策略、流水线 run、成稿格式和工作台成员。
 
 ## 7. 插件模块规则
 
@@ -178,7 +181,7 @@ workspace role   owner/admin/member/viewer
 
 ## 8. 工作台自助扩展
 
-工作台可以由超级管理员在界面上直接创建，不需要改代码或种子：
+工作台可以由 `super_admin` 或 `editor_admin` 在界面上直接创建，不需要改代码或种子：
 
 ```text
 POST /api/workspaces
@@ -192,7 +195,7 @@ POST /api/workspaces
 
 - 注册全部核心页面分区（数据源管理、候选池、日报、周报、历史归档、实体大事记、质量归档、导出、用户、审计）。
 - 写入默认标签策略（`ai_sql_categories` 起步），随后在数据源管理页右侧策略面板改成该工作台自己的一级/二级标签和新闻结构。
-- 给现有超管加 owner 成员关系，`sort_order` 排在现有工作台之后。
+- 给现有超管和创建者加 owner 成员关系，`sort_order` 排在现有工作台之后。
 
 启动 seed 只维护内置 `planning_intel/ai_tools` 定义，不会停用或覆盖自建工作台。
 
@@ -201,7 +204,13 @@ POST /api/workspaces
 - 启用已有共享源：数据源列表按当前工作台展示启停状态，单源配置面板写 `workspace_source_links` 的启用/权重/日限。
 - 自建新源：`POST /api/sources` 传 `workspace_code + name + source_type + url`，源进入共享池并自动在该工作台启用；同 URL 源自动复用已有定义，不产生重复源。`PATCH /api/sources/{source_id}` 可编辑源定义，给 Tech Insight Loop 待补入口源补 URL 后即可抓取。
 
-机器契约见 `config/contracts/workspace_model.json` 的 `workspace_creation` 和 `config/contracts/source_fields.json` 的 `custom_source_api`。
+工作台管理和成员管理：
+
+- `PATCH /api/workspaces/{code}` 可改名、改描述、启停和调整默认 domain，仅 `super_admin` 可用；`planning_intel` 不可停用。
+- `GET/POST/DELETE /api/workspaces/{code}/members` 由该工作台 `admin/owner` 或 `super_admin` 使用。
+- `/users` 页面提供「工作台成员」tab，候选用户来自 `GET /api/users?workspace_code={code}`。
+
+机器契约见 `config/contracts/workspace_model.json` 的 `workspace_creation/membership_management` 和 `config/contracts/source_fields.json` 的 `custom_source_api`。
 
 ## 9. 和 domain pack 的关系
 

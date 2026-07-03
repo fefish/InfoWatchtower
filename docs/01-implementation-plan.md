@@ -488,7 +488,7 @@ cd frontend && npm run build
 浏览器打开 /news、/recommendations、/exports、/ingestion-runs、/weekly-reports、/requirements、/tasks、/sync、/audit-logs
 ```
 
-以上页面不再落入通用 `PlaceholderPage`。`/weekly-reports`、`/requirements`、`/tasks`、`/sync`、`/audit-logs` 已是真实 API 页面；其中 `/sync` 当前只记录同步 run，完整同步包导出/导入仍在阶段 8 实现。
+以上页面不再落入通用 `PlaceholderPage`。`/weekly-reports`、`/requirements`、`/tasks`、`/sync`、`/audit-logs` 已是真实 API 页面；其中 `/sync` 已支持同步包导出、下载、导入和 `data_sources/raw_items/news_items` 幂等 apply，后续阶段继续扩展更多 object_type、冲突解决 UI 和导入摘要。
 
 ## 12. 阶段 8：同步、部署和自动发布
 
@@ -556,7 +556,7 @@ backup restore smoke test
 
 - 主链路：抓取、raw 入库、news 标准化、工作台隔离去重、推荐、MiniMax 结构化生成、日报发布和标准公司 SQL 导出已跑通。
 - 源治理：`/api/sources/import-tech-insight-loop` 已支持导入 Tech Insight Loop 的 386 行源治理记录，其中 355 行有可抓取入口、31 行作为待补入口 metadata-only，按 URL/RSS 去重后形成 363 个共享源且不覆盖既有人工启用关系。
-- 融合迁移基线：`scripts/tech_insight_loop_inventory.py` 已只读盘点旧 SQLite，确认 14834 条素材、66 份报告、23 个实体、275 条实体大事记、反馈和旧任务记录；`scripts/tech_insight_loop_legacy_dry_run.py` 已生成历史素材/报告导入 dry-run，确认 14834 条素材可归档、58 份 daily/weekly 报告可归档、报告引用 2773 个中 30 个缺口；`scripts/tech_insight_loop_legacy_import.py` 已提供默认 no-write、`--execute` 才写库的真实导入脚本，旧素材进入禁用的 `legacy_tech_insight_loop` 档案源和 `raw_items.raw_payload_json.legacy_tech_insight_loop`，旧报告进入 `historical_reports`，不进入当前推荐、日报和公司 SQL；`tracked_entities/entity_milestones` 归档模型、`scripts/tech_insight_loop_entity_import.py` 和 `/entity-milestones` 只读页面已提供旧实体/大事记导入与查看能力，旧引用缺口写入 `metadata_json.legacy_refs`；`historical_feedback_items/historical_job_runs` 归档模型、`scripts/tech_insight_loop_quality_import.py` 和 `/quality-archive` 只读页面已提供旧反馈、质量反馈和旧任务统计导入/查看能力，不创建当前反馈或当前抓取任务；`GET /api/legacy-import/summary`、`GET /api/legacy-import/gaps` 和 `/historical-reports` 顶部验收面板已提供导入覆盖率、未解析引用和缺口样例查看；`scripts/tech_insight_loop_import_verify.py` 已提供 check-only、小批量执行和全量确认执行的统一验收报告，历史反馈和旧任务归档通过 `--include-quality-archive` 显式纳入。
+- 融合迁移基线：`scripts/tech_insight_loop_inventory.py` 已只读盘点旧 SQLite，确认 14834 条素材、66 份报告、23 个实体、275 条实体大事记、反馈和旧任务记录；`scripts/tech_insight_loop_legacy_dry_run.py` 已生成历史素材/报告导入 dry-run，确认 14834 条素材可归档、58 份 daily/weekly 报告可归档、报告引用 2773 个中 30 个缺口；`scripts/tech_insight_loop_legacy_import.py` 已提供默认 no-write、`--execute` 才写库的真实导入脚本，旧素材进入禁用的 `legacy_tech_insight_loop` 档案源和 `raw_items.raw_payload_json.legacy_tech_insight_loop`，旧报告进入 `historical_reports`，不进入当前推荐、日报和公司 SQL；`tracked_entities/entity_milestones` 归档模型、`scripts/tech_insight_loop_entity_import.py` 和 `/entity-milestones` 只读页面已提供旧实体/大事记导入与查看能力，旧引用缺口写入 `metadata_json.legacy_refs`；`historical_feedback_items/historical_job_runs` 归档模型、`scripts/tech_insight_loop_quality_import.py` 和 `/quality-archive` 只读页面已提供旧反馈、质量反馈和旧任务统计导入/查看能力，不创建当前反馈或当前抓取任务；`GET /api/legacy-import/summary`、`GET /api/legacy-import/gaps` 和 `/historical-reports` 顶部验收面板已提供导入覆盖率、未解析引用和缺口样例查看；`scripts/tech_insight_loop_import_verify.py` 已提供 check-only、小批量执行和全量确认执行的统一验收报告，历史反馈和旧任务归档通过 `--include-quality-archive` 显式纳入；`scripts/validate_tech_import_acceptance.py` 已把生产 `--check-only` 报告的覆盖率、只读 guardrail 和 accepted-gaps 归档做成机器验收。
 - 可观测：`/ingestion-runs` 已展示常规抓取、多模式补采、每源覆盖统计和目标日 raw/news/winner/recommendation/daily 漏斗；`/news` 已展示候选推荐分、推荐状态、日报采信状态和追溯 ID。
 - 内容运营：日报已支持 brief 列表、详情弹窗、采信、编辑、点赞、评分、评论和生成稿重跑；已校验单日公司 SQL 预览可以回填为完整追溯链路的已发布日报；周报 v1 已支持从已发布日报采信项生成候选、按一级标签分板块、条目采信/剔除、排序、编辑和发布。
 - 管理页面：数据源、推荐运行、SQL 导出、用户权限、需求、任务、历史归档、实体大事记、质量归档、同步和审计均已从占位页升级为真实 API 页面。
@@ -564,7 +564,7 @@ backup restore smoke test
 
 下一轮编码按这个顺序做：
 
-1. Tech Insight Loop 历史归档执行验收：配置真实数据库 `DATABASE_URL` 后，先跑 `python3 scripts/tech_insight_loop_import_verify.py --execute --article-limit 20 --report-limit 5 --entity-limit 5 --milestone-limit 20` 小批量；如需同步验收历史反馈和旧任务，加 `--include-quality-archive --feedback-limit 4 --quality-feedback-limit 4 --job-limit 10`；再跑 `--execute --confirm-full-import` 全量。用输出报告、`GET /api/legacy-import/summary`、`GET /api/legacy-import/gaps`、`/historical-reports` 顶部验收面板和 `/quality-archive` 核对覆盖率、未解析报告/反馈引用、旧任务失败原因和跳过原因。
+1. Tech Insight Loop 历史归档执行验收：配置真实数据库 `DATABASE_URL` 后，先跑 `python3 scripts/tech_insight_loop_import_verify.py --execute --article-limit 20 --report-limit 5 --entity-limit 5 --milestone-limit 20` 小批量；如需同步验收历史反馈和旧任务，加 `--include-quality-archive --feedback-limit 4 --quality-feedback-limit 4 --job-limit 10`；再跑 `--execute --confirm-full-import` 全量。全量后再跑 `python3 scripts/tech_insight_loop_import_verify.py --check-only`，并用 `python3 scripts/validate_tech_import_acceptance.py outputs/tech_insight_loop/tech_insight_loop_import_execution_report.json` 判定覆盖率、只读 guardrail 和未解析引用归档。用输出报告、`GET /api/legacy-import/summary`、`GET /api/legacy-import/gaps`、`/historical-reports` 顶部验收面板和 `/quality-archive` 核对覆盖率、未解析报告/反馈引用、旧任务失败原因和跳过原因。
 2. Tech Insight Loop 实体大事记执行验收：同一验收脚本会在历史导入后执行实体/事件导入；也可用原子脚本 `scripts/tech_insight_loop_entity_import.py --execute` 单独重跑，并用导入验收面板和 `/entity-milestones` 核对实体事件覆盖率、未解析旧引用和跳过原因。
 3. SQL 导出增强：补导出前字段长度、URL 长度、HTML 污染校验；把 SQL 条目追溯到 daily item、generated news、news item、raw item 和 source。
 4. 部署和登录安全：补公网登录限流、默认密码治理、Google OIDC 预留、公司 IDaaS code flow adapter 预留、生产 Compose 和反向代理配置。

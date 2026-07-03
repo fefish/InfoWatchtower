@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -64,6 +65,13 @@ def test_import_tech_insight_loop_legacy_history_is_idempotent(tmp_path: Path):
     assert raw_items[0].source_name == "Example"
     assert raw_items[0].raw_payload_json["legacy_import"]["company_sql_eligible"] is False
     assert raw_items[0].raw_payload_json["legacy_tech_insight_loop"]["article_id"] == "ART-1"
+    assert "\x00" not in raw_items[0].raw_content
+    assert "\\u0000" in raw_items[0].raw_content
+    assert "\x00" not in json.dumps(raw_items[0].raw_payload_json, ensure_ascii=False)
+    assert raw_items[0].raw_payload_json["legacy_import"]["nul_sanitized_fields"] == [
+        {"field": "raw_content", "nul_count": 1, "replacement": "\\u0000"},
+        {"field": "model_payload_json", "nul_count": 1, "replacement": "\\u0000"},
+    ]
 
     report = session.scalar(select(HistoricalReport))
     assert report is not None
@@ -148,6 +156,10 @@ def create_legacy_fixture(path: Path) -> None:
                     '2026-05-01T11:00:00+00:00',
                     'summary', 'content', 'Model title', 'Model summary', 'Effect', '{}')
             """,
+        )
+        conn.execute(
+            "UPDATE articles SET raw_content = ?, model_payload_json = ? WHERE id = 101",
+            ("content\x00with-binary-marker", '{"note": "kept\x00as-marker"}'),
         )
         conn.execute(
             """

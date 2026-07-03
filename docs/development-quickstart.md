@@ -13,9 +13,10 @@
 - 前端 Vue/Vite 工作台骨架。
 - 本地和生产 Docker Compose 草案。
 - GitHub Actions CI 草案。
-- PostgreSQL 中已能创建 40 张业务表。
+- PostgreSQL 中已能创建 46 张表（44 张业务表 + 2 张 RBAC 关联表）。
 - 测试已覆盖 `daily_report_items -> generated_news -> recommendation_items -> dedupe_group_items -> news_items -> raw_items.raw_payload_json` 追溯链路。
-- 登录已接入 `local/public_password/intranet_header`，本地开发账号为 `admin/password`。
+- 登录已接入 `local/public_password/intranet_header`。Python 测试夹具仍使用
+  `admin/password`；本地 Docker 首次运行默认进入 `/setup` 创建管理员。
 - 用户权限页面已能读取用户、读取角色并保存用户角色。
 - 公网安全和 SSO 后续计划见 `docs/auth-security-roadmap.md`。
 - 工作台模型按共享主链路实现；工作台列表来自 `workspaces`，页面来自 `workspace_sections`，所有工作台共享数据源管理、候选池、日报、周报和导出能力。差异配置通过 `workspaces.config_json.label_policy` 的工作台统一一级/二级标签策略、`workspace_source_links` 的源启用/权重/日限和可选插件模块完成。
@@ -72,7 +73,17 @@ VITE_API_PROXY_TARGET=http://backend:8000
 
 ## 4. Docker Compose
 
-本机已经配置 Docker Compose plugin 后，可以直接用：
+本机已经配置 Docker Compose plugin 后，首次本地容器启动推荐：
+
+```bash
+cd deploy
+./install.sh --local
+```
+
+这会生成 `deploy/.env`、启动服务并等待 `/healthz`。首次访问
+`http://localhost:5173` 会进入 `/setup`。
+
+已有 `deploy/.env` 后，也可以用：
 
 ```bash
 make up
@@ -100,7 +111,8 @@ make logs
 等价原生命令：
 
 ```bash
-docker compose -f deploy/docker-compose.local.yml up --build
+INFOWATCHTOWER_ENV_FILE=deploy/.env \
+  docker compose --env-file deploy/.env -f deploy/docker-compose.local.yml up --build
 ```
 
 日常开发不要每次都加 `--build`。改普通 Python/Vue 代码后，优先用 `make up` 或 `make restart`。
@@ -141,7 +153,8 @@ curl http://localhost:5173/healthz
 前端验收：
 
 1. 打开 `http://127.0.0.1:5173/sources`。
-2. 使用 `admin/password` 登录。
+2. 若使用 `deploy/install.sh --local`，先在 `/setup` 创建管理员；若使用测试夹具，则使用
+   `admin/password` 登录。
 3. 首页应显示当前阶段为阶段 5；本节验收的是仍然可用的数据源与抓取能力。
 4. 数据源页标题应为“数据源管理”，共享源列表标题应为“活跃数据源”。
 5. 数据源页右侧应显示工作台统一新闻标签策略，规划部默认含旧系统 AI 十分类；数据源行可显示源侧方向标签，但这些标签不能成为成品新闻 category；AI 工具桌面默认含“工具新功能、工具新案例、工具新技术”，且每个一级标签下都有 `cursor/claude code/opencode/codex` 二级标签；一级/二级标签都支持新增、重命名、删除。

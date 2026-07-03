@@ -171,7 +171,18 @@
       "GET /api/sync/runs",
       "GET /api/sync/conflicts",
       "POST /api/sync/conflicts/{id}/resolve"
-    ]
+    ],
+    "first_phase_apply_handlers": {
+      "supported_object_types": [
+        "data_sources",
+        "raw_items",
+        "news_items"
+      ],
+      "idempotency": "sync_inbox.event_id is the package-level idempotency key; supported business objects upsert by object_global_id/global_id.",
+      "conflict_rule": "If local revision is newer than incoming, or the same revision has a different content_hash, write sync_conflicts and do not overwrite the local object.",
+      "safety_rule": "Payloads with restricted visibility or secret-like fields such as token/password/secret/cookie/.env are not applied.",
+      "unsupported_object_types": "Unsupported object types fail the record and remain auditable in sync_runs.counts_json.errors instead of being silently applied."
+    }
   },
   "conflict_policy": {
     "raw_items": "append_or_upsert_by_global_id_and_content_hash",

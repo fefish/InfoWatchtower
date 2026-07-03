@@ -207,6 +207,7 @@ daily_report_items
 - `public_password`
 - `local`
 - `intranet_header`
+- `oidc` 预留 Protocol（未配置 provider 时返回 501）
 
 统一流程：
 
@@ -216,9 +217,14 @@ AuthAdapter -> ExternalIdentity -> IdentityResolver -> users -> session/JWT -> R
 
 验收：
 
-- 公网账号密码能登录。
+- 公网账号密码能登录；登录失败同一账号+IP 15 分钟内 5 次后返回 429。
+- 超级管理员可创建/撤销邀请，匿名用户可通过 `/invite/:code` 建号并获得角色和工作台 membership。
+- 本地用户可在 `/account` 改密；管理员代重置会返回一次性临时密码并强制 `must_change_password`。
+- 改密或代重置后旧 cookie 失效；`AUTH_MODE=public_password` 且缺 `AUTH_SESSION_SECRET` 时启动失败。
 - 内网模式下，可信 header 能自动创建用户。
 - 业务接口只认本地 `user_id` 和本地角色。
+- 带 `workspace_code` 的业务 API 需执行 membership 校验；当前已接入 workspace sections/label policy、sources、ingestion、news、recommendation、daily/weekly reports、renditions、exports 和 workspace members。viewer 只读，member 可采信/编辑/发布/导出，admin/owner 可管理源、标签策略、格式、流水线 run 和成员；无 `workspace_code` 的全局列表仍限 super_admin，`GET /api/users?workspace_code=...` 只给该工作台 admin/owner 提供候选用户。
+- `super_admin/editor_admin` 可通过三步向导自助创建工作台；`PATCH /api/workspaces/{code}` 仅 `super_admin` 可用，`planning_intel` 不可停用；`config/domain_packs/hardware.json` 已作为 domain pack 样例注册 label set。
 - 修改认证模式不需要改日报、数据源、评论等业务代码。
 
 ### 5.4 数据源导入
@@ -232,6 +238,8 @@ AuthAdapter -> ExternalIdentity -> IdentityResolver -> users -> session/JWT -> R
 Tech Insight Loop 第二轮阶段 0 已完成只读资产盘点和历史素材/报告 dry-run，并已补真实导入脚本：`scripts/tech_insight_loop_inventory.py` 输出旧 SQLite 的表统计、字段质量、关系检查和迁移预览，`scripts/tech_insight_loop_legacy_dry_run.py` 输出旧 `articles/reports` 的导入计划、状态映射和报告引用缺口，`scripts/tech_insight_loop_legacy_import.py --execute` 在配置 `DATABASE_URL` 后把旧素材写入禁用归档源的 `raw_items`，把 daily/weekly 旧报告写入 `historical_reports`。
 
 实体大事记归档模型、导入脚本和只读页面已补齐：`tracked_entities/entity_milestones` 保存旧 `ai_entities/entity_milestones`，`scripts/tech_insight_loop_entity_import.py --execute` 在配置 `DATABASE_URL` 后写入 23 个实体和 275 条事件，并把旧 `article_id/report_id` 尽量解析到已导入的 `raw_items/historical_reports`；未解析引用保留在 `metadata_json.legacy_refs`。`GET /api/entity-timeline/summary`、`GET /api/tracked-entities`、`GET /api/entity-milestones`、`GET /api/entity-milestones/{id}` 和前端 `/entity-milestones` 可只读查看实体列表、事件时间线和引用缺口。历史反馈和旧任务归档模型也已补齐：`historical_feedback_items/historical_job_runs` 保存旧 `feedback/article_quality_feedback/jobs`，`scripts/tech_insight_loop_quality_import.py --execute` 在配置 `DATABASE_URL` 后写入；反馈只作为历史质量信号归档，不创建当前 `comments/ratings`，旧任务只保存统计和失败原因，不创建当前 `ingestion_runs`。`GET /api/quality-archive/summary`、`GET /api/historical-feedback-items`、`GET /api/historical-job-runs` 和前端 `/quality-archive` 可只读查看旧反馈、旧质量反馈、旧任务统计和反馈引用缺口。导入验收入口已补齐：`GET /api/legacy-import/summary` 按冻结基线统计历史 raw、报告、实体、事件、历史反馈和旧任务覆盖率，`GET /api/legacy-import/gaps` 汇总历史报告、实体事件和历史反馈的未解析旧引用，前端 `/historical-reports` 顶部展示只读验收面板。`scripts/tech_insight_loop_import_verify.py` 已提供真实库执行验收包装：`--check-only` 只读核对，`--execute` 配合 limit 做小批量导入，全量必须显式 `--confirm-full-import`；需要同步验收反馈/旧任务归档时加 `--include-quality-archive` 和对应 limit。`config/contracts/tech_insight_loop_legacy_import.json` 固化“历史导入不进当前推荐和公司 SQL”的边界；后续真实库执行仍必须继续保留旧行追溯。
+
+生产库执行验收必须在全量导入后再跑一次 `scripts/tech_insight_loop_import_verify.py --check-only`，并把输出 JSON 交给 `scripts/validate_tech_import_acceptance.py`。该断言器会检查冻结基线覆盖率、当前日报/周报/generated_news/公司 SQL guardrail、以及未解析旧引用是否清零；无法清零的旧引用必须用 `--accepted-gaps-json` 逐项记录 `kind/legacy_id/ref_type/accepted_unresolved_count/reason` 后才算“已归档”。
 
 从这些文件导入初始源：
 
@@ -315,7 +323,7 @@ class SourceAdapter:
 
 ### 5.8 推荐
 
-当前进度：已实现可回填闭环，并新增内容级准入层。`POST /api/pipeline/daily-runs` 可按工作台和 `day_key` 执行抓取、标准化/去重、推荐和日报草稿；`POST /api/recommendation/runs` 可只重跑推荐层。推荐读取目标日期的 `dedupe_groups` winner，先计算 `P0/P1/P2/P3/R` 准入等级，再写入 `recommendation_runs/recommendation_items`，并为 selected 推荐生成 `generated_news`。推荐分数包含 `quality_score/topic_score/freshness_score/feedback_score/diversity_score/source_score/heat_score/final_score` 和 `recommendation_reason`；`recommendation_reason` 必须包含 `admission=...`、`pool=...`、`content_value=...`，`recommendation_runs.summary_json.admission` 汇总各等级、内容池和噪声类型。`planning_intel` 默认采用技术情报优先策略：提升 AI 软件、AI 基础设施、模型工程、推理/训练、RAG、多智能体、Agent 记忆、硬件厂商技术路线、友商技术动态、AI 芯片、GPU 集群、数据中心架构和通信系统信号；但源侧方向标签只是弱先验，厂商源/硬件源不能绕过内容级准入，单条内容仍要有架构、推理、模型服务、芯片、数据中心、通信系统、标准或工程实现证据。降权融资、财报、股价、宏观产业收入数据、传闻曝光、采购/中标/集采、消费硬件、活动预告、宣传推广会/品牌行动、泛商业合作、纯营销、航天火箭等离题工程新闻、法律/版权元讨论、标题党、社会/教育离题内容和离题生物医学/纯学术论文。日报选择先选 P0/P1，再用无噪声且有明确技术信号的 P2 补齐；P2 paper_rss、带噪声 P2、P3/R 默认不进日报；每个源仍受 `source_daily_limit` 限制，`paper_rss` 默认不超过日报条数约 10%，单个内容池默认不超过约 40%，避免新闻过度集中。MiniMax 生成通过 `MINIMAX_GENERATION_ENABLED=true` 开启，按旧参考脚本已验证的中国区 OpenAI-compatible `https://api.minimaxi.com/v1/chat/completions` 调用。生成 prompt 强制简体中文和旧系统五段正文；单条生成默认 45 秒超时，失败或超时不阻塞整轮流水线，只落回 `rule_v1:fallback` 且标记 `fallback_needs_review`，不能直接导出标准公司 SQL。推荐 run 的 `summary_json.generation_status` 会汇总 ready/fallback 状态；日报草稿可通过 `POST /api/daily-reports/{report_id}/regenerate-generated-news` 对非 ready 项或指定条目重跑结构化生成。
+当前进度：已实现可回填闭环，并新增内容级准入层。`POST /api/pipeline/daily-runs` 可按工作台和 `day_key` 执行抓取、标准化/去重、推荐和日报草稿；`POST /api/recommendation/runs` 可只重跑推荐层。推荐读取目标日期的 `dedupe_groups` winner，先计算 `P0/P1/P2/P3/R` 准入等级，再写入 `recommendation_runs/recommendation_items`，并为 selected 推荐生成 `generated_news`。推荐分数包含 `quality_score/topic_score/freshness_score/feedback_score/diversity_score/source_score/heat_score/final_score` 和 `recommendation_reason`；`recommendation_reason` 必须包含 `admission=...`、`pool=...`、`content_value=...`，`recommendation_runs.summary_json.admission` 汇总各等级、内容池和噪声类型。`planning_intel` 默认采用技术情报优先策略：提升 AI 软件、AI 基础设施、模型工程、推理/训练、RAG、多智能体、Agent 记忆、硬件厂商技术路线、友商技术动态、AI 芯片、GPU 集群、数据中心架构和通信系统信号；但源侧方向标签只是弱先验，厂商源/硬件源不能绕过内容级准入，单条内容仍要有架构、推理、模型服务、芯片、数据中心、通信系统、标准或工程实现证据。降权融资、财报、股价、宏观产业收入数据、传闻曝光、采购/中标/集采、消费硬件、活动预告、宣传推广会/品牌行动、泛商业合作、纯营销、航天火箭等离题工程新闻、法律/版权元讨论、标题党、社会/教育离题内容和离题生物医学/纯学术论文。日报选择先选 P0/P1，再用无噪声且有明确技术信号的 P2 补齐；P2 paper_rss、带噪声 P2、P3/R 默认不进日报；每个源仍受 `source_daily_limit` 限制，`paper_rss` 默认不超过日报条数约 10%，单个内容池默认不超过约 40%，避免新闻过度集中。MiniMax 生成通过 `MINIMAX_GENERATION_ENABLED=true` 开启，按旧参考脚本已验证的中国区 OpenAI-compatible `https://api.minimaxi.com/v1/chat/completions` 调用。生成 prompt 强制简体中文、旧系统五段正文和技术洞察 `insight_json`；单条生成默认 45 秒超时，失败或超时不阻塞整轮流水线，只落回 `rule_v1:fallback` 且标记 `fallback_needs_review`，不能直接导出标准公司 SQL。配置真实 key 后先跑 `scripts/validate_minimax_generation_acceptance.py` 验收十分类、五段正文、短关键词、`insight_json` 和 HTML 污染门禁。推荐 run 的 `summary_json.generation_status` 会汇总 ready/fallback 状态；日报草稿可通过 `POST /api/daily-reports/{report_id}/regenerate-generated-news` 对非 ready 项或指定条目重跑结构化生成。
 
 第一轮 Tech Insight Loop 评分器融合已落地：`config/scoring/content_scorer_v2.json` 保存迁入的阈值、权重、source channel score、source tier score、topic weights、noise rules 和 expert routes；`backend/app/scoring/content_scorer.py` 在缺配置时回退现有 baseline 准入逻辑，配置存在时把源等级、渠道、板块相关度、专家路由、噪声和拒绝原因输出为结构化结果。`recommendation_items` 已增加 `admission_level/admission_score/admission_pool/noise_types_json/reject_reasons_json/scorer_breakdown_json/expert_routes_json`；`recommendation_reason` 仍保留人类可读摘要。该融合不修改 `generated_news.content_json` 五段结构，不修改公司 SQL 导出筛选和 category 合同。
 
@@ -453,7 +461,7 @@ workspace_source_links enabled
 - 历史补采/backfill：`POST /api/ingestion/backfill-runs` 和 `run_historical_backfill_job` 复用工作台启用源、adapter registry、并发池和单源超时，创建 `run_type=historical_backfill` 的 `ingestion_runs`。
 - 历史补采任务模型：`params_json` 写入 `target_day_start`、`target_day_end`、`backfill_mode`、`source_scope`、`retry_policy`、`include_undated` 和 `manual_items` 规模；`summary_json.sources` 记录每源成功、失败、fetched、in_target_range、out_of_target_range、missing_published_at、raw 新增/更新和失败原因。默认只持久化 `published_at` 落入目标日期窗口的 raw，`include_undated=true` 只作为手工修复模式使用。
 - 补采模式：`rss_window` 用当前 RSS/feed 窗口恢复，`paper_api` 调用已注册 paper adapter，`archive_page` 抓取配置里的归档页链接，`sitemap` 解析官方 sitemap，`manual_import` 从显式传入的条目写入 raw。
-- RSS 时间解析：RSS/paper RSS adapter 已兼容邮件格式时间、ISO 8601 时间和 feedparser `published_parsed/updated_parsed`，避免条目失去日期后在推荐层被错误当成最新内容。
+- RSS 时间解析：RSS/paper RSS adapter 已兼容邮件格式时间、ISO 8601 时间和 feedparser `published_parsed/updated_parsed`，并与归档页/sitemap 抓取一样不继承宿主机代理环境，避免本机或内网 RSS 源被外部代理劫持；这可避免条目失去日期后在推荐层被错误当成最新内容。
 - 候选池追溯：`GET /api/dedupe-groups` 返回 winner 最近一次 recommendation trace 和 daily report trace；前端候选池展示推荐分、推荐状态、日报采信状态、推荐理由和追溯 ID，第一屏仍保持可读摘要。
 
 后续继续补：
@@ -488,7 +496,7 @@ API 与页面细节见 `docs/api-and-ui-implementation.md`。
 
 第一版页面：
 
-- 登录页。
+- 登录页、邀请接受页 `/invite/:code`、账号改密页 `/account`。
 - 数据源列表页：已实现共享源信息流、工作台统一标签/新闻结构、单源启停/权重/日限。
 - 数据源详情页：已实现配置、启停、最近抓取、来源评分。
 - 候选池页：已实现 winner/loser、重复来源、候选搜索、推荐分、日报采信状态和追溯入口。
@@ -497,17 +505,20 @@ API 与页面细节见 `docs/api-and-ui-implementation.md`。
 - 日报时间线页：已实现展示、点赞、评分、评论、采信和编辑弹窗。
 - 日报详情/编辑路由：已实现独立详情与轻编辑入口。
 - SQL 导出页：已实现已发布日报选择、导出历史、SQL 生成、预览和下载。
-- 用户和角色管理页：已实现。
-- 周报、需求、任务、同步、审计：已从模块路线页升级为真实 API 页面；同步页当前记录同步 run，完整同步包导出/导入仍按 `docs/multi-environment-sync.md` 继续实现。
+- 用户和角色管理页：已实现角色管理、邀请管理、邀请链接复制、用户启停和管理员代重置密码。
+- 周报、需求、任务、同步、审计：已从模块路线页升级为真实 API 页面；同步页已支持同步包导出、下载和导入，`data_sources/raw_items/news_items` 会按 global id 幂等 apply 并把 revision/hash 冲突写入 `sync_conflicts`；更多 object_type 和冲突解决 UI 继续按 `docs/multi-environment-sync.md` 扩展。
 
 当前前端/后端下一步边界：
 
 - SQL 导出页下一步只补导出前校验、复制下载体验和逐条追溯 UI，不改变公司 SQL 字段契约。
-- 历史归档/质量归档下一步只做配置 `DATABASE_URL` 后的真实库小批量/全量导入执行验收，并使用 `scripts/tech_insight_loop_import_verify.py`、现有导入验收面板和 `/quality-archive` 核对覆盖率、未解析引用和旧任务失败原因；历史反馈和旧任务归档可用 `--include-quality-archive` 一并验收。不增加编辑、采信或 SQL 导出入口。
-- 同步页下一步从“记录一次同步 run”升级为“生成同步包、下载、导入、幂等校验和冲突审计”，不做公网/内网实时双写。
+- 历史归档/质量归档下一步只做配置 `DATABASE_URL` 后的真实库小批量/全量导入执行验收，并使用 `scripts/tech_insight_loop_import_verify.py`、`scripts/validate_tech_import_acceptance.py`、现有导入验收面板和 `/quality-archive` 核对覆盖率、未解析引用和旧任务失败原因；历史反馈和旧任务归档可用 `--include-quality-archive` 一并验收。不增加编辑、采信或 SQL 导出入口。
+- 同步页下一步扩展更多 object_type、冲突解决 UI 和导入摘要，不做公网/内网实时双写。
 - 周报页下一步补热度/反馈排序、自动周报正文和周报导出；板块 v1 继续来自成品新闻一级标签，若需要业务化板块名，新增映射层而不是改 `generated_news.category`。
 - 补采页下一步补论文 provider、分页归档、sitemap 深挖、失败源重试和手工 CSV 上传；`rss_window` 的语义继续是当前 feed 窗口恢复，不能宣传成全站历史归档抓取。
 - 需求/任务页下一步从已发布日报/周报条目一键沉淀 insight、requirement 和 task，并补完整追溯。
+- 全局验收下一步在干净 Docker 或生产库上执行 `scripts/run_full_acceptance.py` 并归档
+  `outputs/acceptance/<timestamp>/`；脚本已在 pytest 中覆盖 Setup/邀请/建台/自建源/标签策略/
+  自定义周报格式/流水线/日报周报 MD+HTML/公司 SQL 校验链路。
 
 前端不要做营销首页，打开后就是工作台。
 

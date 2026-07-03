@@ -35,7 +35,7 @@
 
 当前种子源统计：旧 113 个种子源 + 补充 CSV 台账 248 条导入记录，按 `source_type + url` 去重后形成 294 个共享源；规划部工作台 v1 默认全部启用。`config/taxonomy/source_tags.json` 是数据源侧方向标签，只用于源管理、覆盖分析和评分先验，不进入成品新闻一级标签或公司 SQL category。
 
-当前数据库骨架：40 张业务表，覆盖用户/RBAC、工作台、共享数据源、标签、raw/news、去重、推荐、日报/周报、互动反馈、SQL 导出、同步回流和战略需求闭环。任意日报条目应能沿外键追回 `raw_items.raw_payload_json`。
+当前数据库骨架：46 张表（44 张业务表 + `user_roles`/`role_permissions` 两张 RBAC 关联表），覆盖用户/RBAC、工作台、共享数据源、标签、raw/news、去重、推荐、日报/周报、互动反馈、SQL 导出、同步回流和战略需求闭环。任意日报条目应能沿外键追回 `raw_items.raw_payload_json`。
 
 当前登录能力：支持 `local/public_password/intranet_header` 三种入口，统一落到本地 `users` 和 `roles`；本地 Docker 默认开发账号为 `admin/password`，生产环境必须替换 `AUTH_SESSION_SECRET` 和 `AUTH_BOOTSTRAP_ADMIN_PASSWORD`。
 

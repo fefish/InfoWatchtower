@@ -45,7 +45,7 @@
     }
   },
   "workspace_creation": {
-    "endpoint": "POST /api/workspaces (super_admin)",
+    "endpoint": "POST /api/workspaces (super_admin or editor_admin)",
     "fields": [
       "code (^[a-z][a-z0-9_]*$, unique across enabled and disabled workspaces)",
       "name",
@@ -57,12 +57,47 @@
       "All core_sections are registered and enabled for the new workspace.",
       "config_json.label_policy starts from the default ai_sql_categories policy and is then edited per workspace via PATCH /api/workspaces/{code}/label-policy.",
       "Existing super admins receive owner memberships.",
+      "The creator receives an owner membership even when the creator is editor_admin rather than super_admin.",
       "sort_order is appended after existing workspaces."
     ],
     "rules": [
       "Custom workspaces are database records; the startup seed only maintains the built-in planning_intel and ai_tools definitions and must never disable or overwrite custom workspaces.",
       "New workspaces integrate sources through the shared pool: enable existing sources via workspace_source_links or create new ones via POST /api/sources.",
       "Creating a workspace must not fork the pipeline, the SQL contract or the taxonomy files."
+    ]
+  },
+  "workspace_management": {
+    "update_endpoint": "PATCH /api/workspaces/{workspace_code} (super_admin)",
+    "update_fields": [
+      "name",
+      "description",
+      "enabled",
+      "default_domain_code"
+    ],
+    "rules": [
+      "Disabled workspaces are hidden from GET /api/workspaces but data is retained.",
+      "planning_intel cannot be disabled.",
+      "Startup seed maintains only built-in planning_intel and ai_tools and must not overwrite custom workspaces."
+    ]
+  },
+  "membership_management": {
+    "endpoints": [
+      "GET /api/workspaces/{workspace_code}/members",
+      "POST /api/workspaces/{workspace_code}/members",
+      "DELETE /api/workspaces/{workspace_code}/members/{user_id}"
+    ],
+    "min_role": "workspace admin or owner; super_admin bypasses membership",
+    "candidate_user_endpoint": "GET /api/users?workspace_code={workspace_code}",
+    "roles": [
+      "viewer",
+      "member",
+      "admin",
+      "owner"
+    ],
+    "rules": [
+      "GET /api/workspaces filters to enabled memberships for non-super_admin users.",
+      "Member removal disables the membership row instead of deleting history.",
+      "The last enabled owner in a workspace cannot be removed."
     ]
   },
   "core_sections": [
@@ -149,5 +184,11 @@
     "First-level and second-level labels are the directory for clustering and recommendation; do not add a separate tool management page for that.",
     "Data APIs that list reusable sources may filter by workspace_code through workspace_source_links.",
     "Workspace membership controls access to a desktop, while global roles still control privileged actions."
-  ]
+  ],
+  "domain_pack_example": {
+    "file": "config/domain_packs/hardware.json",
+    "domain_code": "hardware",
+    "registered_label_set": "shared/hardware/hardware_categories",
+    "rule": "The startup seed reads flat JSON files in config/domain_packs and registers label_sets plus labels; domain pack config must not fork the pipeline."
+  }
 }

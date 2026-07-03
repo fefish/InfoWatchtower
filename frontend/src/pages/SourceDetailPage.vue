@@ -85,7 +85,7 @@ async function runFetch() {
   error.value = "";
   message.value = "";
   try {
-    const result = await fetchSource(source.value.id);
+    const result = await fetchSource(source.value.id, workspace.currentCode);
     message.value = `抓取完成：fetched ${result.fetched}，新增 ${result.created}，更新 ${result.updated}`;
     await loadSource();
   } catch (exc) {
@@ -217,7 +217,7 @@ onMounted(loadSource);
     </div>
 
     <section v-else class="module-card">
-      <p class="empty-state">{{ loading ? "加载中..." : "没有找到这个数据源。" }}</p>
+      <p class="empty-state">{{ loading ? "加载中..." : "没有找到这个数据源，请回到数据源列表重新选择。" }}</p>
     </section>
   </section>
 </template>

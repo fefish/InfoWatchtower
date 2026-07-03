@@ -20,13 +20,29 @@
 
 ```text
 GET  /healthz
+GET  /api/setup/status
+POST /api/setup
 
 POST /api/auth/login
 POST /api/auth/logout
 GET  /api/auth/me
+POST /api/auth/invites
+GET  /api/auth/invites
+GET  /api/auth/invites/{code}
+POST /api/auth/invites/{code}/accept
+POST /api/auth/invites/{code}/revoke
+POST /api/auth/password/change
+POST /api/auth/password/forgot
+POST /api/auth/password/reset
+POST /api/users/{id}/reset-password
+PATCH /api/users/{id}
 
 GET  /api/workspaces
 POST /api/workspaces
+PATCH /api/workspaces/{workspace_code}
+GET  /api/workspaces/{workspace_code}/members
+POST /api/workspaces/{workspace_code}/members
+DELETE /api/workspaces/{workspace_code}/members/{user_id}
 GET  /api/workspaces/{workspace_code}/sections
 GET  /api/workspaces/{workspace_code}/label-policy
 PATCH /api/workspaces/{workspace_code}/label-policy
@@ -37,7 +53,7 @@ PATCH /api/sources/{source_id}
 PATCH /api/sources/{source_id}/workspace-link
 POST /api/sources/import-legacy-seeds
 POST /api/sources/import-tech-insight-loop
-POST /api/sources/{source_id}/fetch
+POST /api/sources/{source_id}/fetch?workspace_code={workspace_code}
 
 POST /api/ingestion/runs
 GET  /api/ingestion/runs
@@ -110,7 +126,7 @@ POST /api/weekly-reports/{id}/renditions/{format_code}/regenerate
 GET  /api/weekly-reports/{id}/renditions/{format_code}/export?target=md|html
 
 POST /api/exports/company-sql/daily-reports/{daily_report_id}
-GET  /api/exports
+GET  /api/exports?workspace_code={workspace_code}
 GET  /api/exports/{id}
 GET  /api/exports/{id}/trace
 
@@ -121,6 +137,7 @@ GET  /api/sync/packages/{package_id}/download
 POST /api/sync/packages/import
 
 GET  /api/users
+GET  /api/users?workspace_code={workspace_code}
 POST /api/users
 PATCH /api/users/{id}
 GET  /api/roles
@@ -130,9 +147,17 @@ GET  /api/audit-logs
 
 `POST /api/ingestion/runs` 支持 `concurrency`、`source_timeout_seconds` 和 `max_items_per_source`（单源条数上限，对齐 Tech Insight Loop 的单源上限行为，截断按 feed 新在前顺序）；默认值来自 `INGESTION_CONCURRENCY=8`、`INGESTION_SOURCE_TIMEOUT_SECONDS=25`。RSS/页面适配器统一使用浏览器 User-Agent（`app/adapters/base.py` 的 `BROWSER_FETCH_HEADERS`，与旧系统一致），降低站点反爬 403。`POST /api/ingestion/backfill-runs` 支持 `rss_window/paper_api/archive_page/sitemap/manual_import` 模式；第一版仍只承诺把补采结果先写入 `raw_items`，后续复用标准化、去重、推荐和日报链路。
 
-`POST /api/workspaces` 是工作台自助扩展入口（super_admin）：按 `code/name/description/workspace_type/default_domain_code` 创建新工作台，自动注册全部核心页面分区、默认标签策略（`ai_sql_categories`，可随后用 label-policy 接口改成工作台自己的口径）和超管 owner 成员。启动 seed 只维护内置 `planning_intel/ai_tools`，不会停用或覆盖自建工作台。契约见 `config/contracts/workspace_model.json` 的 `workspace_creation`。
+`POST /api/workspaces` 是工作台自助扩展入口（`super_admin` 或 `editor_admin`）：按
+`code/name/description/workspace_type/default_domain_code` 创建新工作台，自动注册全部核心
+页面分区、默认标签策略（`ai_sql_categories`，可随后用 label-policy 接口改成工作台自己的口径）、
+内置成稿格式和 owner 成员。`PATCH /api/workspaces/{code}` 仅 `super_admin` 可改名、改描述、
+停用/启用和调整默认 domain；`planning_intel` 不可停用。`GET/POST/DELETE
+/api/workspaces/{code}/members` 允许该工作台 `admin/owner` 或 `super_admin` 管理 membership；
+`GET /api/users?workspace_code=...` 给成员管理提供候选用户，未带 `workspace_code` 的全局用户列表仍
+限 `super_admin`。启动 seed 只维护内置 `planning_intel/ai_tools`，不会停用或覆盖自建工作台。
+契约见 `config/contracts/workspace_model.json`。
 
-`POST /api/sources` 是自建信息源入口（super_admin）：`workspace_code + name + source_type(rss/paper_rss/page_manual/page_monitor) + url` 创建共享池源并自动在该工作台启用；同 URL 源默认复用而不是重复创建（`reuse_existing=false` 时返回 409），响应为 `{source, created}`。`PATCH /api/sources/{source_id}` 编辑源定义（名称/URL/启用/回溯天数）；给 `metadata_only/needs_entry` 治理记录补 URL 会清除待补入口标记并写 `fetch_entry_status=manual_entry_added`。契约见 `config/contracts/source_fields.json` 的 `custom_source_api`。早期文档中的 `/api/data-sources/*` 端点从未实现，已由上述端点取代。
+`POST /api/sources` 是自建信息源入口（workspace admin 或 super_admin）：`workspace_code + name + source_type(rss/paper_rss/page_manual/page_monitor) + url` 创建共享池源并自动在该工作台启用；同 URL 源默认复用而不是重复创建（`reuse_existing=false` 时返回 409），响应为 `{source, created}`。`PATCH /api/sources/{source_id}?workspace_code=...` 允许该工作台 admin 编辑已链接源定义（名称/URL/启用/回溯天数）；不给 `workspace_code` 时仍是 super_admin 的全局源定义维护。给 `metadata_only/needs_entry` 治理记录补 URL 会清除待补入口标记并写 `fetch_entry_status=manual_entry_added`。契约见 `config/contracts/source_fields.json` 的 `custom_source_api`。早期文档中的 `/api/data-sources/*` 端点从未实现，已由上述端点取代。
 
 成稿多版（renditions）遵循「一次采信，多版成稿」：`report-formats` 是工作台级格式注册表（内置 `company_sql_v1` 锁定 + `tech_insight_v1`，可注册自定义格式），renditions 端点把已采信条目投影成对应格式并支持 MD/HTML 导出；`PATCH /api/daily-report-items/{id}` 支持 `is_headline` 头条勾选。设计与边界见 `docs/report-renditions-design.md` 和 `config/contracts/report_renditions.json`；公司 SQL 出口不受任何格式配置影响。
 
@@ -140,11 +165,13 @@ GET  /api/audit-logs
 
 `GET /api/ingestion/coverage` 按 `workspace_code + day_key + 可选 run_id` 返回目标日覆盖漏斗：启用源、本次运行源、成功/失败源、目标日 raw、news、dedupe winner、recommendation candidate/selected、generated ready 和日报采信项；每源明细同时返回 fetched、created/updated、in/out target、missing published_at、news、winner、推荐和采信计数。
 
-同步包 v1 已实现导出、zip 下载和导入幂等骨架：`POST /api/sync/packages/export` 读取
+同步包 v1 已实现导出、zip 下载、导入幂等和核心对象 apply：`POST /api/sync/packages/export` 读取
 `sync_outbox` 并写入 `sync_runs` 审计，`GET /api/sync/packages/{package_id}/download` 返回
 包含 `manifest.json` 和 `records.jsonl` 的 zip，`POST /api/sync/packages/import` 写入
-`sync_inbox` 做重复导入跳过和导入审计。当前导入侧不直接 upsert 业务对象，后续再补
-`object_type` apply handler 和 `sync_conflicts` 处理。
+`sync_inbox` 做重复导入跳过和导入审计，并对 `data_sources/raw_items/news_items` 按
+`object_global_id/global_id` 落业务表；revision 或同 revision hash 冲突写入
+`sync_conflicts`，不静默覆盖本地对象。暂不支持的 `object_type` 在 `sync_runs.counts_json.errors`
+中显式失败。
 
 ## 3. 页面地图
 
@@ -161,6 +188,8 @@ workspace_sections     当前工作台启用的页面
 
 ```text
 /login
+/invite/:code
+/account
 /dashboard
 /sources
 /sources/:id
@@ -222,9 +251,10 @@ workspace_sections     当前工作台启用的页面
 - 已完成真实页面：`/sources`、`/ingestion-runs`、`/news`、`/recommendations`、`/daily-reports`、`/weekly-reports`、`/historical-reports`、`/entity-milestones`、`/quality-archive`、`/requirements`、`/tasks`、`/exports`、`/sync`、`/users`、`/audit-logs`。
 - `/sources` 已接入 Tech Insight Loop 源治理导入和展示：源等级、渠道类型、质量分、专家路由、待补入口状态会显示在信息流卡片中；`wx://` 公众号等当前没有抓取 adapter 的记录不进入默认调度。
 - `/sources` 支持自建信息源：stats bar 的“新增源”打开滑出面板（名称/类型/URL/主题域/回溯天数），创建后自动在当前工作台启用；同 URL 源自动复用共享池已有定义。单源配置面板下半部分可编辑源定义（名称/URL/回溯天数），待补入口源补 URL 后即可抓取。
-- 侧边栏工作台切换器下方提供“新建工作台”入口（仅 super_admin 可见）：填 code/name/描述/默认主题域即创建，自动带全部核心页面和默认标签策略，创建后切换到新工作台并跳转数据源管理页配置信息源。
+- 侧边栏工作台切换器下方提供“新建工作台”入口（`super_admin/editor_admin` 可见）：三步完成基本信息、共享源/自建源、标签策略；完成后切到新工作台，后续可去数据源页或日报页继续跑流水线。
+- `/users` 包含「工作台成员」tab：工作台 owner/admin 可在当前工作台添加/移除成员并设置 `viewer/member/admin/owner`，普通成员列表由后端 membership 过滤。
 - `/recommendations` 和 `/news` 已展示 `ContentScorer` 结构化准入结果：`admission_level`、`admission_score`、`admission_pool`、噪声标签、限制原因和专家路由。
-- 仍是 v1 能力：周报只管理采信项和板块，不自动生成整篇周报；历史归档页只读展示 `historical_reports` 和导入验收摘要，导入验收摘要覆盖历史 raw、报告、实体、事件、历史反馈和旧任务记录，不编辑、不采信、不导出 SQL、不执行导入脚本；实体大事记页只读展示旧实体和事件时间线，不触发导入、推荐或采信；质量归档页只读展示旧反馈、质量反馈和旧任务统计，不创建当前评论/评分/抓取任务；同步页只记录同步 run，不生成同步包；SQL 导出页可生成/预览/下载，但条目级追溯和导出前字段校验还要补。
+- 仍是 v1 能力：周报只管理采信项和板块，不自动生成整篇周报；历史归档页只读展示 `historical_reports` 和导入验收摘要，导入验收摘要覆盖历史 raw、报告、实体、事件、历史反馈和旧任务记录，不编辑、不采信、不导出 SQL、不执行导入脚本；实体大事记页只读展示旧实体和事件时间线，不触发导入、推荐或采信；质量归档页只读展示旧反馈、质量反馈和旧任务统计，不创建当前评论/评分/抓取任务；同步页已支持同步包导出/下载/导入和核心对象幂等 apply，更多 object_type 与冲突解决 UI 待补；SQL 导出页可生成/预览/下载，但条目级追溯和导出前字段校验还要补。
 - `/dashboard` 已重做为晨报式「今日速览」：流水线漏斗 hero、头条候选、报告/趋势侧栏、源健康和快捷入口；导航按 today/collect/curate/library/collab/system 六组垂直分组渲染。
 - 响应式基线：≥1440 舒适布局；≤1120 侧栏坍缩为 76px 图标栏（图标带 title 提示），顶栏出现工作台切换下拉；≤860 主内容单列堆叠、隐藏全局搜索。字号与间距用 clamp 流式收缩。
 - 设计保护线：不要把已确认的液态玻璃壳、信息流式数据源列表和右侧 tab 化标签策略面板回退成深色壳、宽表格、绿色/青色主调或单源标签配置。
@@ -352,7 +382,8 @@ workspace_sections     当前工作台启用的页面
 
 ## 6. 权限
 
-前端可以隐藏按钮，但最终权限以后端判断为准。
+前端可以隐藏按钮，但最终权限以后端判断为准。全局 `super_admin` 可绕过工作台
+membership；普通用户必须在目标 `workspace_code` 有启用 membership。
 
 第一版角色：
 
@@ -365,12 +396,14 @@ viewer
 
 关键权限：
 
-- 数据源管理。
-- 日报/周报编辑发布。
-- SQL 导出。
-- 用户和角色管理。
-- 同步包导入导出。
-- 审计查看。
+- `viewer`：工作台内只读，包括 sections、label policy、sources、news/dedupe、
+  ingestion/recommendation run 记录、日报/周报、成稿格式、rendition 导出、导出 trace。
+- `member`：采信和编审写操作，包括日报/周报发布、条目编辑、反馈、周报草稿、公司
+  SQL 导出和 rendition 重生成。
+- `admin`：工作台管理写操作，包括标签策略、自建/链接/编辑源、normalize/ingestion/
+  backfill/recommendation/pipeline run、成稿格式注册。
+- `super_admin`：全局建台、用户/角色/邀请、seed 导入、无 workspace_code 的全局列表、
+  同步包导入导出和审计查看。
 
 ## 7. 第一版验收
 

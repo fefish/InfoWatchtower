@@ -170,6 +170,12 @@ model_provider + model_name + prompt_version
 新增业务板块不要改主链路，新增 domain pack：
 
 ```text
+config/domain_packs/{domain_code}.json
+```
+
+也可以在后续需要更多文件时扩展成目录：
+
+```text
 config/domain_packs/{domain_code}/
   sources.json
   taxonomy.json
@@ -188,6 +194,9 @@ config/domain_packs/{domain_code}/
 - `competitor`
 
 每个板块可以有自己的信息源、标签、评分权重、报告模板和导出映射，但仍进入统一 `raw_items/news_items/report/export` 主模型。
+
+当前仓库已提供 flat JSON 样例 `config/domain_packs/hardware.json`，启动 seed 会注册
+`hardware_categories` label set；这证明新增板块只需要配置和 seed loader，不需要 fork 主链路。
 
 ## 12. 同步扩展
 

@@ -35,6 +35,7 @@ class DailyPipelineRequest:
     ingestion_limit: int | None = None
     ingestion_concurrency: int = DEFAULT_INGESTION_CONCURRENCY
     ingestion_source_timeout_seconds: float = DEFAULT_SOURCE_TIMEOUT_SECONDS
+    ingestion_max_items_per_source: int | None = None
     recommendation_limit: int = 15
     source_daily_limit: int = 2
     generation_timeout_seconds: float = 45.0
@@ -65,6 +66,7 @@ async def run_daily_pipeline(
                 limit=request.ingestion_limit,
                 concurrency=request.ingestion_concurrency,
                 source_timeout_seconds=request.ingestion_source_timeout_seconds,
+                max_items_per_source=request.ingestion_max_items_per_source,
             ),
             registry=registry,
         )
@@ -101,6 +103,7 @@ def run_daily_pipeline_job(
     ingestion_limit: int | None = None,
     ingestion_concurrency: int = DEFAULT_INGESTION_CONCURRENCY,
     ingestion_source_timeout_seconds: float = DEFAULT_SOURCE_TIMEOUT_SECONDS,
+    ingestion_max_items_per_source: int | None = None,
     recommendation_limit: int = 15,
     source_daily_limit: int = 2,
     generation_timeout_seconds: float = 45.0,
@@ -115,6 +118,7 @@ def run_daily_pipeline_job(
             ingestion_limit=ingestion_limit,
             ingestion_concurrency=ingestion_concurrency,
             ingestion_source_timeout_seconds=ingestion_source_timeout_seconds,
+            ingestion_max_items_per_source=ingestion_max_items_per_source,
             recommendation_limit=recommendation_limit,
             source_daily_limit=source_daily_limit,
             generation_timeout_seconds=generation_timeout_seconds,
@@ -131,6 +135,7 @@ async def _run_daily_pipeline_job(
     ingestion_limit: int | None,
     ingestion_concurrency: int,
     ingestion_source_timeout_seconds: float,
+    ingestion_max_items_per_source: int | None,
     recommendation_limit: int,
     source_daily_limit: int,
     generation_timeout_seconds: float,
@@ -152,6 +157,7 @@ async def _run_daily_pipeline_job(
                 ingestion_limit=ingestion_limit,
                 ingestion_concurrency=ingestion_concurrency,
                 ingestion_source_timeout_seconds=ingestion_source_timeout_seconds,
+                ingestion_max_items_per_source=ingestion_max_items_per_source,
                 recommendation_limit=recommendation_limit,
                 source_daily_limit=source_daily_limit,
                 generation_timeout_seconds=generation_timeout_seconds,

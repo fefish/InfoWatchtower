@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { DownloadCloud, GitCompareArrows, PackageCheck, RefreshCw } from "lucide-vue-next";
-import { onMounted, ref } from "vue";
+import { onMounted, ref, watch } from "vue";
 
 import { createSyncRun, fetchSyncPackageDownload, fetchSyncRuns, type SyncRunRecord } from "../api/operations";
+import { useWorkspaceStore } from "../stores/workspace";
 
+const workspace = useWorkspaceStore();
 const runs = ref<SyncRunRecord[]>([]);
 const loading = ref(false);
 const creating = ref(false);
@@ -70,6 +72,7 @@ function manifestValue(run: SyncRunRecord, key: string) {
   return typeof value === "string" || typeof value === "number" ? String(value) : "";
 }
 
+watch(() => workspace.currentCode, loadRuns);
 onMounted(loadRuns);
 </script>
 
@@ -124,7 +127,7 @@ onMounted(loadRuns);
           </button>
         </div>
       </article>
-      <p v-if="!loading && runs.length === 0" class="empty-state">暂无同步运行。</p>
+      <p v-if="!loading && runs.length === 0" class="empty-state">暂无同步运行，点击“导出同步包”生成第一份跨环境同步记录。</p>
     </section>
   </section>
 </template>

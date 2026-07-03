@@ -55,6 +55,7 @@ INGESTION_SCHEDULER_WORKSPACE_CODE=planning_intel
 INGESTION_SCHEDULER_SOURCE_TYPES=rss,paper_rss,page_manual,page_monitor,wiseflow
 INGESTION_CONCURRENCY=8
 INGESTION_SOURCE_TIMEOUT_SECONDS=25
+INGESTION_MAX_ITEMS_PER_SOURCE=100
 SCHEDULER_JOB_MODE=daily_pipeline
 DAILY_PIPELINE_RUN_INGESTION=true
 DAILY_PIPELINE_CREATE_DAILY_DRAFT=true
@@ -69,7 +70,9 @@ MINIMAX_GENERATION_ENABLED=false
 
 如果要限制单次调度处理源数量，可设置 `INGESTION_SCHEDULER_LIMIT=10`。
 
-若生产环境希望日报结构化稿调用 MiniMax，设置 `MINIMAX_GENERATION_ENABLED=true`、`MINIMAX_API_KEY`，并使用旧参考脚本已验证的中国区 OpenAI-compatible 地址 `MINIMAX_BASE_URL=https://api.minimaxi.com/v1`；未显式设置 `MINIMAX_BASE_URL` 时也会默认走该地址。旧 `.env` 中可能残留的 `MINIMAX_ANTHROPIC_BASE_URL` 只保留兼容读取，不会覆盖主链路。单条生成默认 45 秒超时；未启用、超时或调用失败时会使用规则 fallback，不阻塞日报流水线；但 fallback 会标记为 `fallback_needs_review`，标准公司 SQL 导出会拒绝，必须通过日报草稿重跑 MiniMax 或人工编辑后再导出。
+如果要限制每个源单次最多保留多少条抓取结果，设置 `INGESTION_MAX_ITEMS_PER_SOURCE=100`。
+
+若生产环境希望日报结构化稿调用 MiniMax，设置 `MINIMAX_GENERATION_ENABLED=true`、`MINIMAX_API_KEY`，并使用旧参考脚本已验证的中国区 OpenAI-compatible 地址 `MINIMAX_BASE_URL=https://api.minimaxi.com/v1`；未显式设置 `MINIMAX_BASE_URL` 时也会默认走该地址。旧 `.env` 中可能残留的 `MINIMAX_ANTHROPIC_BASE_URL` 只保留兼容读取，不会覆盖主链路。单条生成默认 45 秒超时；未启用、超时或调用失败时会使用规则 fallback，不阻塞日报流水线；但 fallback 会标记为 `fallback_needs_review`，标准公司 SQL 导出会拒绝，必须通过日报草稿重跑 MiniMax 或人工编辑后再导出。配置真实 key 后，先运行 `python3 scripts/validate_minimax_generation_acceptance.py`，确认十分类、五段 `content_json`、`insight_json` 要点/总结和 HTML 污染门禁通过，再执行生产日报流水线。
 
 如果只想执行抓取、不生成日报草稿，可设置 `SCHEDULER_JOB_MODE=ingestion_only`。
 
@@ -130,8 +133,23 @@ postgres 不映射宿主机 5432
 
 ```text
 AUTH_MODE=public_password
+AUTH_SESSION_SECRET=<long random value>
+AUTH_SESSION_COOKIE_SECURE=true
+AUTH_SESSION_TTL_SECONDS=43200
 AUTH_AUTO_PROVISION=false
+AUTH_DEFAULT_ROLE=viewer
+AUTH_BOOTSTRAP_ADMIN_PASSWORD=
 ```
+
+`AUTH_MODE=public_password` 时，API 启动会检查 `AUTH_SESSION_SECRET`；为空会直接退出并给出
+修复指引。`APP_ENV=production` 时还会检查 `DATABASE_URL`。生产环境不要使用占位值，
+建议由 `openssl rand -hex 32` 生成。默认建议把 `AUTH_BOOTSTRAP_ADMIN_PASSWORD` 留空，
+首次访问会进入 `/setup` 创建首个超级管理员；无人值守部署才填 bootstrap 密码。
+
+公网建号默认走管理员邀请：超级管理员登录 `/users`，在“邀请”页生成邀请链接；用户接受
+邀请后会写入本地用户、全局角色和工作台 membership。用户忘记密码且未接 SMTP 时，
+管理员在 `/users` 对该用户执行“重置”，系统只返回一次临时密码，并强制用户下次登录后先
+到 `/account` 修改密码。
 
 公网服务器安全组建议只开放：
 
@@ -214,8 +232,10 @@ DATABASE_URL=postgresql+psycopg://infowatchtower:CHANGE_ME@postgres:5432/infowat
 REDIS_URL=redis://redis:6379/0
 AUTH_MODE=public_password
 AUTH_SESSION_SECRET=CHANGE_ME_LONG_RANDOM
+AUTH_SESSION_TTL_SECONDS=43200
 AUTH_AUTO_PROVISION=false
 AUTH_DEFAULT_ROLE=viewer
+AUTH_BOOTSTRAP_ADMIN_PASSWORD=
 ```
 
 如果接入 OpenAI 或其他模型服务，再加对应 API key。所有 key 都只放服务器环境变量。
@@ -271,22 +291,112 @@ DEPLOY_PATH=/srv/infowatchtower/app
 
 ### 8.3 部署动作
 
-GitHub Actions 在 `main` 分支 push 后执行：
+仓库提供开箱部署脚本。首次生产部署推荐：
+
+```text
+cd deploy
+./install.sh --domain your-domain.example
+```
+
+本地演练：
+
+```text
+cd deploy
+./install.sh --local
+```
+
+脚本会生成 `.env`（生产为 `/srv/infowatchtower/.env.production`，本地为 `deploy/.env`）、
+生成随机 `POSTGRES_PASSWORD` 和 `AUTH_SESSION_SECRET`、执行 `docker compose up -d --build`、
+轮询 `/healthz`，最后打印首访地址。默认不写 bootstrap 管理员密码，首次访问由 `/setup`
+创建管理员。
+生产域名安装默认写入 `AUTH_SESSION_COOKIE_SECURE=true`；`--local` 本地 HTTP 演练默认写入
+`AUTH_SESSION_COOKIE_SECURE=false`，否则浏览器和验收脚本不会在 HTTP 上回传 Secure cookie。
+
+如果本机已经有 PostgreSQL、Redis、后端或前端开发服务占用默认端口，本地演练可以使用
+独立 env 文件和端口，不需要停止现有服务：
+
+```text
+cd deploy
+COMPOSE_PROJECT_NAME=infowatchtower_acceptance \
+INFOWATCHTOWER_ENV_FILE=/tmp/infowatchtower-acceptance.env \
+POSTGRES_PORT=55432 \
+REDIS_PORT=56379 \
+BACKEND_PORT=18080 \
+FRONTEND_PORT=15173 \
+  ./install.sh --local
+```
+
+`docker-compose.local.yml` 只在本地演练暴露这些端口；生产 Compose 仍不暴露
+PostgreSQL/Redis。
+
+升级脚本：
+
+```text
+cd deploy
+./upgrade.sh
+```
+
+本地升级演练使用 `./upgrade.sh --local`。回滚流程是恢复升级前备份，并 checkout 旧 tag。
+
+如果仍由 GitHub Actions 通过 SSH 触发，动作可简化为：
 
 ```text
 ssh deploy@$DEPLOY_HOST
 cd /srv/infowatchtower/app
 git fetch --prune
 git reset --hard origin/main
-docker compose -f deploy/docker-compose.prod.yml --env-file /srv/infowatchtower/.env.production build
-docker compose -f deploy/docker-compose.prod.yml --env-file /srv/infowatchtower/.env.production run --rm backend alembic upgrade head
-docker compose -f deploy/docker-compose.prod.yml --env-file /srv/infowatchtower/.env.production up -d --remove-orphans
+INFOWATCHTOWER_ENV_FILE=/srv/infowatchtower/.env.production \
+  docker compose --env-file /srv/infowatchtower/.env.production \
+  -f deploy/docker-compose.prod.yml up -d --build --remove-orphans
 docker image prune -f
 ```
 
-这不是严格零停机蓝绿发布，但对第一版足够简单可靠。后端重启通常只有短暂停顿，前端静态文件基本无感。
+API 镜像入口会先执行 `alembic upgrade head` 再启动 uvicorn；worker、scheduler 和
+reverse proxy 等 backend healthcheck 通过后再启动。这不是严格零停机蓝绿发布，但对第一版
+足够简单可靠。后端重启通常只有短暂停顿，前端静态文件基本无感。
 
-### 8.4 生产配置检查
+### 8.4 端到端验收脚本
+
+部署后可用同一个脚本留存全链路证据：
+
+```text
+python3 scripts/run_full_acceptance.py \
+  --base-url http://127.0.0.1:8000 \
+  --admin-username <setup-or-existing-admin> \
+  --admin-password <password> \
+  --rss-bind-host 0.0.0.0 \
+  --rss-public-host host.docker.internal
+```
+
+脚本会创建一次性验收工作台，完成邀请用户、启用共享源、自建 RSS 源、自定义标签策略、
+注册自定义周报格式、跑日报流水线、发布日报/周报、导出 MD/HTML、生成公司 SQL 预览并
+调用 `scripts/validate_company_sql.py`。如果当前环境变量中 `DATABASE_URL` 是 PostgreSQL，
+脚本还会调用 `scripts/backup_db.sh` 并把备份路径写入证据。
+
+对上面的自定义端口本地演练，可在宿主机读取同一份 env 后指定宿主可访问的数据库地址：
+
+```text
+set -a
+source /tmp/infowatchtower-acceptance.env
+set +a
+DATABASE_URL="postgresql+psycopg://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:${POSTGRES_PORT:-55432}/${POSTGRES_DB:-infowatchtower}" \
+INFOWATCHTOWER_ENV_FILE=/tmp/infowatchtower-acceptance.env \
+INFOWATCHTOWER_COMPOSE_FILE=deploy/docker-compose.local.yml \
+COMPOSE_PROJECT_NAME=infowatchtower_acceptance \
+  python3 scripts/run_full_acceptance.py \
+    --base-url http://127.0.0.1:${BACKEND_PORT:-18080} \
+    --admin-username <setup-or-existing-admin> \
+    --admin-password <password> \
+    --rss-bind-host 0.0.0.0 \
+    --rss-public-host host.docker.internal
+```
+
+证据目录默认写到 `outputs/acceptance/<timestamp>/`，可用
+`ACCEPTANCE_EVIDENCE_DIR=/path/to/evidence` 或 `--evidence-dir` 指定。对 Docker 后端从宿主机
+跑脚本时，RSS feed 需要用 `--rss-public-host host.docker.internal` 暴露给容器；本机
+TestClient 或同网络命名空间运行时可省略这两个 RSS 参数。
+
+### 8.5 生产配置检查
 
 仓库提供生产 env 模板和部署检查脚本：
 
@@ -316,6 +426,7 @@ python3 scripts/check_prod_deploy.py --env-file /srv/infowatchtower/.env.product
 - `APP_ENV=production`，`ENABLE_DOCS=false`。
 - 生产密钥不能使用 `change_me`、`password`、`secret` 等开发默认值。
 - 规划部日报定时任务时区必须是 `Asia/Shanghai`。
+- backend 必须有 healthcheck；worker/scheduler/reverse_proxy 依赖 backend healthy。
 
 CI 也会运行该检查，避免生产部署文件和文档口径漂移。
 
@@ -334,11 +445,33 @@ CI 也会运行该检查，避免生产部署文件和文档口径漂移。
 
 ## 10. 备份
 
-最低每天备份 PostgreSQL：
+最低每天备份 PostgreSQL。仓库提供脚本：
 
 ```text
-pg_dump "$DATABASE_URL" > /srv/infowatchtower/backups/infowatchtower_YYYYMMDD.sql
+INFOWATCHTOWER_ENV_FILE=/srv/infowatchtower/.env.production \
+  scripts/backup_db.sh
 ```
+
+本地 Compose 演练可显式指定本地 env 和 compose 文件：
+
+```text
+INFOWATCHTOWER_ENV_FILE=deploy/.env \
+INFOWATCHTOWER_COMPOSE_FILE=deploy/docker-compose.local.yml \
+BACKUP_DIR="$(mktemp -d)" \
+  scripts/backup_db.sh
+```
+
+脚本行为：
+
+- 默认读取 `/srv/infowatchtower/.env.production`，也可用 `INFOWATCHTOWER_ENV_FILE` 指定。
+- 默认通过 `deploy/docker-compose.prod.yml` 的 `postgres` 容器兜底；本地或自定义部署可用
+  `INFOWATCHTOWER_COMPOSE_FILE` 指定 compose 文件。
+- 默认写入 `/srv/infowatchtower/backups/infowatchtower_YYYYMMDDTHHMMSSZ.sql.gz`。
+- 默认保留最近 14 份，可用 `BACKUP_KEEP=30` 调整。
+- 优先使用本机 `pg_dump`；如果本机没有或不可用，会通过 compose 中的 `postgres` 容器执行。
+- `DATABASE_URL=postgresql+psycopg://...` 会在调用 `pg_dump/psql` 前规范化为
+  `postgresql://...`，与应用侧 SQLAlchemy 驱动配置兼容。
+- 备份使用 `--clean --if-exists --no-owner --no-privileges`，方便恢复到同名数据库。
 
 建议保留：
 
@@ -347,6 +480,31 @@ pg_dump "$DATABASE_URL" > /srv/infowatchtower/backups/infowatchtower_YYYYMMDD.sq
 - 每次数据库迁移前临时备份。
 
 备份文件不要提交 GitHub。
+
+恢复脚本：
+
+```text
+INFOWATCHTOWER_ENV_FILE=/srv/infowatchtower/.env.production \
+  scripts/restore_db.sh /srv/infowatchtower/backups/infowatchtower_YYYYMMDDTHHMMSSZ.sql.gz
+```
+
+恢复脚本同样支持 `INFOWATCHTOWER_COMPOSE_FILE`。恢复脚本会要求输入 `RESTORE` 确认；
+无人值守演练可显式设置 `RESTORE_CONFIRM=yes`。
+恢复后重启 `backend`、`worker` 和 `scheduler`，再访问 `/healthz` 和前端页面确认服务可用。
+
+生产演练记录模板：
+
+```text
+日期：
+环境：
+备份命令：
+备份文件：
+恢复命令：
+恢复后 /healthz：
+恢复后登录检查：
+回滚/清理：
+结论：
+```
 
 ## 11. 内网迁移
 

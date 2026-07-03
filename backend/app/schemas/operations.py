@@ -130,6 +130,7 @@ class SyncPackageImportRead(BaseModel):
     applied: int
     skipped: int
     failed: int
+    conflicts: int = 0
     errors: list[str] = Field(default_factory=list)
 
 

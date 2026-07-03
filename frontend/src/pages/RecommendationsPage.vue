@@ -206,7 +206,7 @@ onMounted(loadRuns);
           <strong>{{ run.run_key }}</strong>
           <span>{{ run.status }} · {{ formatDateTime(run.completed_at) }}</span>
         </button>
-        <p v-if="!loading && runs.length === 0" class="empty-state">暂无推荐运行。</p>
+        <p v-if="!loading && runs.length === 0" class="empty-state">暂无推荐运行，先完成抓取、标准化和去重，再创建推荐 run。</p>
       </aside>
 
       <article class="module-card run-detail">

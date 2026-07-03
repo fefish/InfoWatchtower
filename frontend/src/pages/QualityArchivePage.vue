@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { CheckCircle2, ClipboardCheck, ListFilter, RefreshCw, Search, TriangleAlert, XCircle } from "lucide-vue-next";
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 
 import {
   fetchHistoricalFeedbackItems,
@@ -12,7 +12,9 @@ import {
   type LegacyImportGapItemRecord,
   type QualityArchiveSummaryRecord
 } from "../api/operations";
+import { useWorkspaceStore } from "../stores/workspace";
 
+const workspace = useWorkspaceStore();
 const summary = ref<QualityArchiveSummaryRecord | null>(null);
 const feedbackItems = ref<HistoricalFeedbackItemRecord[]>([]);
 const jobRuns = ref<HistoricalJobRunRecord[]>([]);
@@ -100,6 +102,7 @@ function jobStatusLabel(value: string) {
   return value || "unknown";
 }
 
+watch(() => workspace.currentCode, loadArchive);
 onMounted(loadArchive);
 </script>
 
@@ -155,7 +158,7 @@ onMounted(loadArchive);
         </div>
         <div class="tag-cloud">
           <span v-for="[key, count] in feedbackTypeEntries" :key="key">{{ key }} · {{ count }}</span>
-          <small v-if="feedbackTypeEntries.length === 0">暂无</small>
+          <small v-if="feedbackTypeEntries.length === 0">尚无记录</small>
         </div>
       </article>
       <article class="module-card">
@@ -165,7 +168,7 @@ onMounted(loadArchive);
         </div>
         <div class="tag-cloud">
           <span v-for="[key, count] in qualityReasonEntries" :key="key">{{ key }} · {{ count }}</span>
-          <small v-if="qualityReasonEntries.length === 0">暂无</small>
+          <small v-if="qualityReasonEntries.length === 0">尚无记录</small>
         </div>
       </article>
       <article class="module-card">
@@ -175,7 +178,7 @@ onMounted(loadArchive);
         </div>
         <div class="tag-cloud">
           <span v-for="[key, count] in jobTypeEntries" :key="key">{{ key }} · {{ count }}</span>
-          <small v-if="jobTypeEntries.length === 0">暂无</small>
+          <small v-if="jobTypeEntries.length === 0">尚无记录</small>
         </div>
       </article>
       <article class="module-card">
@@ -185,7 +188,7 @@ onMounted(loadArchive);
         </div>
         <div class="tag-cloud">
           <span v-for="[key, count] in jobStatusEntries" :key="key">{{ jobStatusLabel(key) }} · {{ count }}</span>
-          <small v-if="jobStatusEntries.length === 0">暂无</small>
+          <small v-if="jobStatusEntries.length === 0">尚无记录</small>
         </div>
       </article>
     </section>

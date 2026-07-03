@@ -1,8 +1,10 @@
+import asyncio
 from datetime import UTC, datetime
 
-from app.adapters import create_default_registry
+from app.adapters import AdapterRegistry, RawItemInput, create_default_registry
 from app.adapters.page import _extract_links, _parse_html, _parse_iso_datetime
 from app.adapters.rss import RssFeedAdapter
+from app.models.content import DataSource
 
 
 def test_default_adapter_registry_contains_first_phase_source_types():
@@ -21,6 +23,38 @@ def test_default_adapter_registry_contains_first_phase_source_types():
         "rss",
         "wiseflow",
     ]
+
+
+def test_dummy_adapter_recipe_contract_example():
+    class DummyAdapter:
+        source_type = "dummy"
+
+        async def fetch(self, data_source: DataSource) -> list[RawItemInput]:
+            return [
+                RawItemInput(
+                    entry_key=f"{data_source.source_type}:1",
+                    source_title=f"{data_source.name} item",
+                    source_url=data_source.url,
+                    raw_content="dummy body",
+                    raw_payload_json={"adapter": self.source_type},
+                ),
+            ]
+
+    registry = AdapterRegistry()
+    registry.register(DummyAdapter())
+    source = DataSource(
+        workspace_code="shared",
+        domain_code="hardware",
+        source_type="dummy",
+        name="Dummy feed",
+        url="https://example.com/dummy",
+    )
+
+    raw_items = asyncio.run(registry.get("dummy").fetch(source))
+
+    assert registry.list_types() == ["dummy"]
+    assert raw_items[0].entry_key == "dummy:1"
+    assert raw_items[0].raw_payload_json == {"adapter": "dummy"}
 
 
 def test_rss_adapter_payload_is_json_safe():

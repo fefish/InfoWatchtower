@@ -12,7 +12,16 @@ from app.models.content import (
 )
 from app.models.export import ExportJob, ExportJobItem
 from app.models.feedback import AuditLog, Comment, EditorialAction, Rating, Reaction
-from app.models.identity import Permission, Role, User, role_permissions, user_roles
+from app.models.identity import (
+    LoginAttempt,
+    PasswordResetToken,
+    Permission,
+    Role,
+    User,
+    UserInvite,
+    role_permissions,
+    user_roles,
+)
 from app.models.labels import ContentLabel, Label, LabelSet
 from app.models.legacy import (
     EntityMilestone,
@@ -30,7 +39,12 @@ from app.models.strategy import (
     TopicTask,
 )
 from app.models.sync import SyncConflict, SyncInbox, SyncOutbox, SyncRun
-from app.models.workspace import Workspace, WorkspaceMembership, WorkspaceSection, WorkspaceSourceLink
+from app.models.workspace import (
+    Workspace,
+    WorkspaceMembership,
+    WorkspaceSection,
+    WorkspaceSourceLink,
+)
 
 __all__ = [
     "AuditLog",
@@ -54,7 +68,9 @@ __all__ = [
     "Insight",
     "Label",
     "LabelSet",
+    "LoginAttempt",
     "NewsItem",
+    "PasswordResetToken",
     "Permission",
     "Rating",
     "RawItem",
@@ -72,6 +88,7 @@ __all__ = [
     "TopicTask",
     "TrackedEntity",
     "User",
+    "UserInvite",
     "WeeklyReport",
     "WeeklyReportItem",
     "Workspace",

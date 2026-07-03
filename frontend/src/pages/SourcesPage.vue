@@ -664,7 +664,7 @@ async function fetchOneSource(source: DataSourceRecord) {
   error.value = "";
   lastImportMessage.value = "";
   try {
-    const result = await fetchSource(source.id);
+    const result = await fetchSource(source.id, workspace.currentCode);
     lastImportMessage.value = `抓取完成：${source.name}，拉取 ${result.fetched}，新增 ${result.created}，更新 ${result.updated}`;
     await loadSources();
   } catch (exc) {
@@ -816,7 +816,7 @@ watch(
         </article>
       </div>
 
-      <p v-if="!loading && sources.length === 0" class="empty-state">暂无数据源，可先导入旧种子源。</p>
+      <p v-if="!loading && sources.length === 0" class="empty-state">这里会展示当前工作台的信息源，点击“新建源”添加 RSS / API 源，或导入种子源建立第一批抓取目标。</p>
       </div>
 
       <aside class="control-rail">

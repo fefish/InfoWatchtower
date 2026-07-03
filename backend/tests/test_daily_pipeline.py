@@ -157,7 +157,7 @@ def test_scheduler_defaults_to_daily_pipeline_job():
     assert job.id == "job-1"
     function, args, kwargs = queue.calls[0]
     assert function is run_daily_pipeline_job
-    assert args == ("planning_intel", ["rss"], 10, 8, 25, 15, 2, True, True)
+    assert args == ("planning_intel", ["rss"], 10, 8, 25, None, 15, 2, True, True)
     assert kwargs["job_timeout"] == 60 * 60 * 3
 
 
@@ -196,6 +196,7 @@ def test_scheduler_passes_offset_day_key_to_daily_pipeline_job():
         None,
         16,
         20,
+        None,
         10,
         2,
         True,

@@ -23,6 +23,7 @@ class RssFeedAdapter:
         async with httpx.AsyncClient(
             timeout=20.0,
             follow_redirects=True,
+            trust_env=False,
             headers=BROWSER_FETCH_HEADERS,
         ) as client:
             response = await client.get(data_source.url)

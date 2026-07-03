@@ -99,6 +99,8 @@ report_renditions                     某报告按某格式渲染出的成稿（
 1. MiniMax prompt v2：在现有五段 + category 输出之外，额外要求输出
    `board / bullet_points / takeaway / tag_line`，写入 `insight_json`。
    现有五段结构和 category 约束不变，SQL 兼容性零影响。
+   配置真实 key 后运行 `python3 scripts/validate_minimax_generation_acceptance.py`
+   做结构验收；pytest 使用 `--fixture-response-json` 复用同一套断言。
 2. 规则降级（未配 MiniMax key 或生成失败）：
    - `board`：按来源 `board_relevance_json` 最高项，缺省按 category 反查
      `business_boards.json` 的映射。
@@ -151,7 +153,7 @@ PATCH  /api/daily-report-items/{id}             （增加 is_headline）
 | P1 后端骨架 | business_boards taxonomy、insight_json + is_headline 模型、格式注册表模型/种子/API、rendition 生成（规则降级路径）、MD 导出 | pytest 全绿；对已导入的演示周数据能生成技术洞察版 MD，结构对齐样例文件 |
 | P2 编审体验 | 编审页双版 tab、头条勾选、HTML 导出 | 两版在页面可切换阅读，导出 HTML 可直接内网挂载 |
 | P3 自定义格式 | 格式管理面板（新建/编辑/启停自定义格式） | 不改代码注册第三种格式并出稿 |
-| P4 周报 + 生成升级 | 周报双版；配 MiniMax key 后 insight 字段切换为模型产出 | 周报双版可导出；模型产出的要点/总结质量对齐快报 |
+| P4 周报 + 生成升级 | 周报双版；配 MiniMax key 后 insight 字段切换为模型产出 | 周报双版可导出；`validate_minimax_generation_acceptance.py` 通过；模型产出的要点/总结质量对齐快报 |
 
 ## 9. 风险与控制
 

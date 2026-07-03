@@ -163,6 +163,30 @@
     "markdown_report": "outputs/tech_insight_loop/tech_insight_loop_import_execution_report.md",
     "purpose": "run small-batch or full real-database import acceptance and emit the same coverage/gap summary used by /api/legacy-import/summary and /api/legacy-import/gaps"
   },
+  "legacy_import_acceptance": {
+    "script": "scripts/validate_tech_import_acceptance.py",
+    "default_input": "outputs/tech_insight_loop/tech_insight_loop_import_execution_report.json",
+    "default_requires_check_only_report": true,
+    "accepted_gaps_flag": "--accepted-gaps-json",
+    "latest_isolated_full_import_acceptance": {
+      "evidence_dir": "outputs/tech_insight_loop/postgres_full_import_20260703T050653Z/",
+      "check_only_report": "outputs/tech_insight_loop/tech_insight_loop_import_execution_report.json",
+      "accepted_gaps_json": "outputs/tech_insight_loop/tech_insight_loop_import_accepted_gaps.json",
+      "status": "passed in an isolated temporary PostgreSQL application database; production database execution still requires operator-run evidence"
+    },
+    "accepted_gap_required_fields": [
+      "kind",
+      "legacy_id",
+      "ref_type",
+      "accepted_unresolved_count",
+      "reason"
+    ],
+    "pass_conditions": [
+      "all coverage metrics are complete against the frozen baseline",
+      "current daily reports, weekly reports, generated_news and standard company SQL guardrails are false",
+      "unresolved legacy refs are either zero or fully documented in accepted gaps JSON"
+    ]
+  },
   "migration_identity_rule": "legacy_table + legacy primary identifier -> tech_insight_loop:{legacy_table}:{legacy_id}",
   "target_mappings": {
     "articles": {
@@ -170,6 +194,7 @@
       "identity": "article_id, falling back to id",
       "required_lineage": "raw_items.raw_payload_json.legacy_tech_insight_loop",
       "default_status": "historical_imported",
+      "nul_byte_policy": "legacy SQLite text may contain NUL bytes; importer stores PostgreSQL-safe \\u0000 markers and records legacy_import.nul_sanitized_fields",
       "must_not": [
         "auto-enter recommendation_runs",
         "auto-create SQL-ready generated_news",
@@ -196,13 +221,13 @@
     "ai_entities": {
       "target": "tracked_entities",
       "identity": "id",
-      "status": "model_and_import_script_ready; real database execution pending",
+      "status": "model_and_import_script_ready; isolated PostgreSQL full import acceptance passed; production database execution pending",
       "lineage": "full legacy row is preserved in metadata_json.legacy_tech_insight_loop"
     },
     "entity_milestones": {
       "target": "entity_milestones",
       "identity": "id",
-      "status": "model_and_import_script_ready; real database execution pending",
+      "status": "model_and_import_script_ready; isolated PostgreSQL full import acceptance passed; production database execution pending",
       "lineage": [
         "entity_id -> ai_entities.id",
         "article_id -> articles.id and imported raw_items when available",
@@ -216,7 +241,7 @@
     },
     "feedback": {
       "target": "historical feedback archive",
-      "status": "model_and_import_script_ready; real database execution pending",
+      "status": "model_and_import_script_ready; isolated PostgreSQL full import acceptance passed; production database execution pending",
       "lineage": "article_id -> articles.id and imported raw_items when available",
       "must_not": [
         "mutate current comments",
@@ -226,7 +251,7 @@
     },
     "article_quality_feedback": {
       "target": "historical quality feedback archive",
-      "status": "model_and_import_script_ready; real database execution pending",
+      "status": "model_and_import_script_ready; isolated PostgreSQL full import acceptance passed; production database execution pending",
       "lineage": "article_id -> articles.id and imported raw_items when available",
       "must_not": [
         "mutate current comments",
@@ -236,7 +261,7 @@
     },
     "jobs": {
       "target": "historical_job_runs archive summary",
-      "status": "model_and_import_script_ready; real database execution pending",
+      "status": "model_and_import_script_ready; isolated PostgreSQL full import acceptance passed; production database execution pending",
       "rule": "migrate statistics and failure reasons only; do not migrate the old task state machine"
     }
   },
@@ -262,8 +287,9 @@
     "import_verification_small_execute_command": "python3 scripts/tech_insight_loop_import_verify.py --execute --article-limit 20 --report-limit 5 --entity-limit 5 --milestone-limit 20",
     "import_verification_small_execute_with_quality_command": "python3 scripts/tech_insight_loop_import_verify.py --execute --include-quality-archive --article-limit 20 --report-limit 5 --entity-limit 5 --milestone-limit 20 --feedback-limit 4 --quality-feedback-limit 4 --job-limit 10",
     "import_verification_full_execute_command": "python3 scripts/tech_insight_loop_import_verify.py --execute --confirm-full-import",
+    "import_acceptance_validation_command": "python3 scripts/validate_tech_import_acceptance.py outputs/tech_insight_loop/tech_insight_loop_import_execution_report.json",
     "unit_tests": [
-      "backend/.venv/bin/python -m pytest backend/tests/test_tech_insight_loop_inventory.py backend/tests/test_tech_insight_loop_legacy_import.py backend/tests/test_tech_insight_loop_entity_import.py backend/tests/test_tech_insight_loop_quality_import.py"
+      "backend/.venv/bin/python -m pytest backend/tests/test_tech_insight_loop_inventory.py backend/tests/test_tech_insight_loop_legacy_import.py backend/tests/test_tech_insight_loop_entity_import.py backend/tests/test_tech_insight_loop_quality_import.py backend/tests/test_tech_import_acceptance_validator.py"
     ],
     "sql_contract_regression": "python3 scripts/validate_company_sql.py"
   }

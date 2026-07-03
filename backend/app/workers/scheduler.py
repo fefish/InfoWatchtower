@@ -63,6 +63,7 @@ def _enqueue_and_log(queue: Queue, settings, now: datetime | None = None) -> Non
 
 
 def _enqueue_scheduled_job(queue: Queue, settings, now: datetime | None = None):
+    max_items_per_source = getattr(settings, "ingestion_max_items_per_source", None)
     if settings.scheduler_job_mode == "ingestion_only":
         return queue.enqueue(
             run_workspace_ingestion_job,
@@ -71,6 +72,7 @@ def _enqueue_scheduled_job(queue: Queue, settings, now: datetime | None = None):
             settings.ingestion_scheduler_limit,
             settings.ingestion_concurrency,
             settings.ingestion_source_timeout_seconds,
+            max_items_per_source,
             job_timeout=60 * 60 * 2,
             result_ttl=60 * 60 * 24,
             failure_ttl=60 * 60 * 24 * 7,
@@ -82,6 +84,7 @@ def _enqueue_scheduled_job(queue: Queue, settings, now: datetime | None = None):
         settings.ingestion_scheduler_limit,
         settings.ingestion_concurrency,
         settings.ingestion_source_timeout_seconds,
+        max_items_per_source,
         settings.daily_pipeline_recommendation_limit,
         settings.daily_pipeline_source_daily_limit,
         settings.daily_pipeline_create_daily_draft,

@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { RefreshCw, ShieldCheck } from "lucide-vue-next";
-import { onMounted, ref } from "vue";
+import { onMounted, ref, watch } from "vue";
 
 import { fetchAuditLogs, type AuditLogRecord } from "../api/operations";
+import { useWorkspaceStore } from "../stores/workspace";
 
+const workspace = useWorkspaceStore();
 const logs = ref<AuditLogRecord[]>([]);
 const loading = ref(false);
 const error = ref("");
@@ -25,6 +27,7 @@ function detailLine(log: AuditLogRecord) {
   return detail === "{}" ? "无额外详情" : detail;
 }
 
+watch(() => workspace.currentCode, loadLogs);
 onMounted(loadLogs);
 </script>
 
@@ -60,7 +63,7 @@ onMounted(loadLogs);
           </div>
         </div>
       </article>
-      <p v-if="!loading && logs.length === 0" class="empty-state">暂无审计日志。</p>
+      <p v-if="!loading && logs.length === 0" class="empty-state">暂无审计日志，发布、导出、同步或权限变更后会在这里留痕。</p>
     </section>
   </section>
 </template>

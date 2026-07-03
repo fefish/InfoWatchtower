@@ -17,7 +17,12 @@ def _b64decode(value: str) -> bytes:
     return base64.urlsafe_b64decode((value + padding).encode("ascii"))
 
 
-def create_session_token(user_id: str, secret: str, ttl_seconds: int) -> str:
+def create_session_token(
+    user_id: str,
+    secret: str,
+    ttl_seconds: int,
+    session_version: str | None = None,
+) -> str:
     if not secret:
         raise ValueError("AUTH_SESSION_SECRET is required")
 
@@ -26,6 +31,8 @@ def create_session_token(user_id: str, secret: str, ttl_seconds: int) -> str:
         "iat": int(time.time()),
         "exp": int(time.time()) + ttl_seconds,
     }
+    if session_version:
+        payload["sv"] = session_version
     payload_text = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
     payload_part = _b64encode(payload_text)
     signature = hmac.new(secret.encode("utf-8"), payload_part.encode("ascii"), hashlib.sha256)

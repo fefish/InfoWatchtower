@@ -32,6 +32,24 @@
     "generated_news.insight_json (MiniMax prompt v2 output, validated against business_boards.json)",
     "rule fallback: board from source board_relevance_json else category mapping; bullets from eventSummary+technologyAndInnovation; takeaway from valueAndImpact/effects; tag_line from board+category+expert route"
   ],
+  "minimax_acceptance": {
+    "script": "scripts/validate_minimax_generation_acceptance.py",
+    "default_output": "outputs/minimax/minimax_generation_acceptance.json",
+    "latest_live_output": "outputs/minimax/minimax_generation_acceptance.json",
+    "live_mode_requires": [
+      "MINIMAX_GENERATION_ENABLED=true",
+      "MINIMAX_API_KEY"
+    ],
+    "fixture_flag_for_tests": "--fixture-response-json",
+    "checks": [
+      "generated_by starts with minimax:",
+      "category is one of config/taxonomy/news_categories.json categories",
+      "content_json has the five company SQL fields and no HTML/script pollution",
+      "key_points are short keyword phrases",
+      "insight_json has board, useful bullet_points, takeaway and tag_line for tech_insight_v1",
+      "numeric claims such as percentages, P95/P99, multiples and latency/memory figures must already appear in the source"
+    ]
+  },
   "api": [
     "GET/POST /api/report-formats, PATCH/DELETE /api/report-formats/{id} (locked: enabled-only; builtin: no delete)",
     "GET /api/daily-reports/{id}/renditions",
