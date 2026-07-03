@@ -61,7 +61,7 @@ def normalize_news_items(
 
 @router.get("/news-items", response_model=list[NewsItemRead])
 def list_news_items(
-    workspace_code: str = Query(default="planning_intel"),
+    workspace_code: str = Query(...),
     active: bool | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     current_user: User = CURRENT_USER,
@@ -81,7 +81,7 @@ def list_news_items(
 
 @router.get("/dedupe-groups", response_model=list[DedupeGroupRead])
 def list_dedupe_groups(
-    workspace_code: str = Query(default="planning_intel"),
+    workspace_code: str = Query(...),
     limit: int = Query(default=50, ge=1, le=200),
     current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,

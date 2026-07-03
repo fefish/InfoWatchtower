@@ -155,8 +155,8 @@ NUL byte 会转义为 `\u0000` 标记并写入 `legacy_import.nul_sanitized_fiel
 | 部署 | `deploy/docker-compose.{local,prod}.yml`（PG+Redis+API+worker+scheduler+Caddy） |
 | 设计系统 | Apple Liquid Glass（`base.css` :root token + 唯一主题层）、晨报式今日速览、≤1120px 图标栏响应式 |
 
-现状：✅ 工作台模型、三步建台向导、成员管理、导航/分区/格式数据库驱动和 hardware domain pack 样例已落地；✅ 登录限流、邀请建号、改密/重置、会话密钥自检、OIDC Protocol 预留和主要业务 API membership gate 已落地；✅ `install.sh`、启动自动迁移、`/setup`、生产自检和备份/恢复脚本已落地。
-**Gap**：① 干净环境 §9 全量业务验收证据（P0）② 长期覆盖趋势与异常告警（P2）③ 快报 PPT 插件（P2）④ 更多 domain pack 样例（P2，可选扩展）。
+现状：✅ 工作台模型、三步建台向导、成员管理、导航/分区/格式数据库驱动和 hardware domain pack 样例已落地；✅ 登录限流、邀请建号、改密/重置、会话密钥自检、OIDC Protocol 预留和主要业务 API membership gate 已落地；✅ `install.sh`、启动自动迁移、`/setup`、生产自检、备份/恢复脚本和 §9 全量业务验收脚本已落地。干净 Docker 证据已归档到 `outputs/acceptance/20260703T062259Z/`。
+**Gap**：① 长期覆盖趋势与异常告警（P2）② 快报 PPT 插件（P2）③ 更多 domain pack 样例（P2，可选扩展）。
 
 ## 4. 差距汇总（按优先级）
 
@@ -164,7 +164,7 @@ NUL byte 会转义为 `\u0000` 标记并写入 `legacy_import.nul_sanitized_fiel
 |---|---|---|---|
 | P0 | 生产库执行 Tech 历史资产全量导入验收 | G | 本地隔离 PostgreSQL 全量证据已通过；生产库仍需 `--check-only` 覆盖率对齐冻结基线，`validate_tech_import_acceptance.py` 通过，缺口清零或用 accepted-gaps JSON 归档 |
 | P1 | 更多同步 object_type 与冲突解决 UI | F | `data_sources/raw_items/news_items` 已落业务表；后续扩展 generated_news/report 等对象并提供人工冲突处理 |
-| P0 | 干净环境 §9 全量业务验收证据 | H/F | 按蓝图 §9 留存命令输出或截图；部署脚本、Setup、备份/恢复、建台向导、成员管理和 domain pack 样例已具备自动化验收 |
+| P0 | 干净环境 §9 全量业务验收证据 | H/F | ✅ 已通过；`scripts/run_full_acceptance.py` 输出归档到 `outputs/acceptance/20260703T062259Z/`，覆盖 Setup、邀请、建台、共享源+自建源、标签策略、周报格式、流水线、日报/周报 MD/HTML、公司 SQL 校验和备份 |
 | P0 | MiniMax key 配置后模型版 insight/成稿验收 | D | ✅ `validate_minimax_generation_acceptance.py` live 通过，技术洞察版结构、五段 content_json、短关键词和无编造数值门禁已归档；后续保留生产日报抽检 |
 | P1 | wx:// 公众号 adapter 或替代入口 | A | 31 个待补源可抓取或明确豁免 |
 | P1 | 深度历史补采（归档页/sitemap 深挖） | A | 指定历史日期可恢复候选 |

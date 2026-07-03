@@ -100,6 +100,7 @@ class Settings(BaseSettings):
         default=25.0,
         alias="INGESTION_SOURCE_TIMEOUT_SECONDS",
     )
+    ingestion_max_items_per_source: int | None = Field(default=None, alias="INGESTION_MAX_ITEMS_PER_SOURCE")
     scheduler_job_mode: str = Field(default="daily_pipeline", alias="SCHEDULER_JOB_MODE")
     daily_pipeline_run_ingestion: bool = Field(default=True, alias="DAILY_PIPELINE_RUN_INGESTION")
     daily_pipeline_create_daily_draft: bool = Field(

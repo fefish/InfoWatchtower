@@ -32,6 +32,7 @@ async def create_daily_pipeline_run(
                 ingestion_limit=payload.ingestion_limit,
                 ingestion_concurrency=payload.ingestion_concurrency,
                 ingestion_source_timeout_seconds=payload.ingestion_source_timeout_seconds,
+                ingestion_max_items_per_source=payload.ingestion_max_items_per_source,
                 recommendation_limit=payload.recommendation_limit,
                 source_daily_limit=payload.source_daily_limit,
                 generation_timeout_seconds=payload.generation_timeout_seconds,

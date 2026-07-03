@@ -53,7 +53,7 @@ DB_SESSION = Depends(get_db_session)
 
 @router.get("/daily-reports", response_model=list[DailyReportRead])
 def list_daily_reports(
-    workspace_code: str = Query(default="planning_intel"),
+    workspace_code: str = Query(...),
     limit: int = Query(default=20, ge=1, le=100),
     current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
@@ -155,7 +155,7 @@ def regenerate_daily_report_news(
 
 @router.get("/weekly-reports", response_model=list[WeeklyReportRead])
 def list_weekly_reports(
-    workspace_code: str = Query(default="planning_intel"),
+    workspace_code: str = Query(...),
     limit: int = Query(default=20, ge=1, le=100),
     current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,

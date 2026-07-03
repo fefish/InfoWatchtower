@@ -43,10 +43,10 @@ async function loadExportsPage() {
   try {
     const [nextReports, nextJobs] = await Promise.all([
       fetchDailyReports(workspace.currentCode),
-      fetchExportJobs()
+      fetchExportJobs(workspace.currentCode)
     ]);
     reports.value = nextReports;
-    jobs.value = nextJobs.filter((job) => job.workspace_code === workspace.currentCode);
+    jobs.value = nextJobs;
     if (!selectedReportId.value) {
       selectedReportId.value = exportableReports.value[0]?.id ?? nextReports[0]?.id ?? "";
     }
@@ -220,7 +220,7 @@ onMounted(loadExportsPage);
               {{ loadingTraceJobId === job.id ? "加载中" : "查看追溯" }}
             </button>
           </article>
-          <p v-if="!loading && jobs.length === 0" class="empty-state">暂无导出历史。</p>
+          <p v-if="!loading && jobs.length === 0" class="empty-state">暂无导出历史，先选择已发布日报生成公司 SQL 预览。</p>
         </div>
       </article>
     </section>

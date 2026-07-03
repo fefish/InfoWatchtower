@@ -35,7 +35,6 @@ import {
   type DataSourceRecord
 } from "../api/sources";
 import {
-  fetchWorkspaceLabelPolicy,
   updateWorkspaceLabelPolicy,
   type WorkspaceLabelPolicyUpdate
 } from "../api/workspaces";
@@ -62,12 +61,34 @@ const workspaceForm = reactive({
   name: "",
   description: "",
   default_domain_code: "hardware",
-  policy_preset: "blank" as "planning_intel" | "ai_tools" | "blank",
+  policy_preset: "blank" as "ai_sql" | "ai_tools" | "blank",
   custom_categories: "算力芯片\n端侧设备\n供应链与制造",
   custom_source_name: "",
   custom_source_type: "rss",
   custom_source_url: ""
 });
+
+const companySqlContentFields = [
+  "background",
+  "effects",
+  "eventSummary",
+  "technologyAndInnovation",
+  "valueAndImpact"
+];
+const aiSqlPrimaryCategories = [
+  "AI Infra",
+  "AI 应用",
+  "测评技术",
+  "大厂动态",
+  "模型",
+  "算法",
+  "推理加速",
+  "训练技术",
+  "智能体",
+  "基础竞争力"
+];
+const aiToolPrimaryCategories = ["工具新功能", "工具新案例", "工具新技术"];
+const aiToolSecondaryLabels = ["cursor", "claude code", "opencode", "codex"];
 
 function openWorkspaceForm() {
   workspaceFormError.value = "";
@@ -190,17 +211,30 @@ async function submitWorkspaceForm() {
 }
 
 async function buildWizardPolicyPayload(workspaceCode: string): Promise<WorkspaceLabelPolicyUpdate> {
-  if (workspaceForm.policy_preset !== "blank") {
-    const policy = await fetchWorkspaceLabelPolicy(workspaceForm.policy_preset);
+  if (workspaceForm.policy_preset === "ai_sql") {
     return {
-      label_set_code: policy.label_set_code,
-      news_format_code: policy.news_format_code,
-      export_category_mode: policy.export_category_mode,
-      required_content_fields: policy.required_content_fields,
-      allowed_primary_categories: policy.allowed_primary_categories,
-      secondary_labels_by_primary: policy.secondary_labels_by_primary,
-      default_category: policy.default_category,
-      fallback_category: policy.fallback_category
+      label_set_code: "ai_sql_categories",
+      news_format_code: "company_sql_v1",
+      export_category_mode: "news_primary",
+      required_content_fields: [...companySqlContentFields],
+      allowed_primary_categories: [...aiSqlPrimaryCategories],
+      secondary_labels_by_primary: {},
+      default_category: "AI 应用",
+      fallback_category: "AI 应用"
+    };
+  }
+  if (workspaceForm.policy_preset === "ai_tools") {
+    return {
+      label_set_code: "ai_tools_categories",
+      news_format_code: "tool_intel_v1",
+      export_category_mode: "news_primary",
+      required_content_fields: [...companySqlContentFields],
+      allowed_primary_categories: [...aiToolPrimaryCategories],
+      secondary_labels_by_primary: Object.fromEntries(
+        aiToolPrimaryCategories.map((category) => [category, [...aiToolSecondaryLabels]])
+      ) as Record<string, string[]>,
+      default_category: "工具新功能",
+      fallback_category: "工具新功能"
     };
   }
   const categories = workspaceForm.custom_categories
@@ -213,11 +247,7 @@ async function buildWizardPolicyPayload(workspaceCode: string): Promise<Workspac
     news_format_code: "custom_intel_v1",
     export_category_mode: "news_primary",
     required_content_fields: [
-      "background",
-      "effects",
-      "eventSummary",
-      "technologyAndInnovation",
-      "valueAndImpact"
+      ...companySqlContentFields
     ],
     allowed_primary_categories: categories.length > 0 ? categories : [fallback],
     secondary_labels_by_primary: {},
@@ -469,8 +499,8 @@ async function logout() {
       <section v-else class="wizard-page">
         <div class="wizard-policy-options">
           <label>
-            <input v-model="workspaceForm.policy_preset" type="radio" value="planning_intel" />
-            <span>复制规划部十分类</span>
+            <input v-model="workspaceForm.policy_preset" type="radio" value="ai_sql" />
+            <span>复制 AI 十分类</span>
           </label>
           <label>
             <input v-model="workspaceForm.policy_preset" type="radio" value="ai_tools" />

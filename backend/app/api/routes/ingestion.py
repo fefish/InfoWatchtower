@@ -146,7 +146,7 @@ def get_ingestion_run(
 
 @router.get("/coverage", response_model=IngestionCoverageRead)
 def get_ingestion_coverage(
-    workspace_code: str = Query(default="planning_intel"),
+    workspace_code: str = Query(...),
     day_key: str | None = Query(default=None),
     run_id: str | None = Query(default=None),
     current_user: User = CURRENT_USER,

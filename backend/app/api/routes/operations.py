@@ -77,7 +77,7 @@ SYNC_SECRET_KEY_PARTS = ("secret", "token", "password", "cookie", ".env")
 
 @router.get("/requirements", response_model=list[RequirementRead])
 def list_requirements(
-    workspace_code: str = Query(default="planning_intel"),
+    workspace_code: str = Query(...),
     status_filter: str | None = Query(default=None, alias="status"),
     limit: int = Query(default=50, ge=1, le=200),
     _: User = CURRENT_USER,
@@ -158,7 +158,7 @@ def update_requirement(
 
 @router.get("/topic-tasks", response_model=list[TopicTaskRead])
 def list_topic_tasks(
-    workspace_code: str = Query(default="planning_intel"),
+    workspace_code: str = Query(...),
     status_filter: str | None = Query(default=None, alias="status"),
     limit: int = Query(default=50, ge=1, le=200),
     _: User = CURRENT_USER,
@@ -439,7 +439,7 @@ def list_audit_logs(
 
 @router.get("/legacy-import/summary", response_model=LegacyImportSummaryRead)
 def get_legacy_import_summary(
-    workspace_code: str = Query(default=LEGACY_WORKSPACE_CODE),
+    workspace_code: str = Query(...),
     _: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> LegacyImportSummaryRead:
@@ -449,7 +449,7 @@ def get_legacy_import_summary(
 
 @router.get("/legacy-import/gaps", response_model=list[LegacyImportGapItemRead])
 def list_legacy_import_gaps(
-    workspace_code: str = Query(default=LEGACY_WORKSPACE_CODE),
+    workspace_code: str = Query(...),
     kind: str = Query(default="all", pattern="^(all|historical_reports|entity_milestones|historical_feedback)$"),
     limit: int = Query(default=50, ge=1, le=300),
     _: User = CURRENT_USER,
@@ -461,7 +461,7 @@ def list_legacy_import_gaps(
 
 @router.get("/quality-archive/summary", response_model=QualityArchiveSummaryRead)
 def get_quality_archive_summary(
-    workspace_code: str = Query(default=LEGACY_WORKSPACE_CODE),
+    workspace_code: str = Query(...),
     _: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> QualityArchiveSummaryRead:
@@ -527,7 +527,7 @@ def get_quality_archive_summary(
 
 @router.get("/historical-feedback-items", response_model=list[HistoricalFeedbackListItem])
 def list_historical_feedback_items(
-    workspace_code: str = Query(default=LEGACY_WORKSPACE_CODE),
+    workspace_code: str = Query(...),
     feedback_kind: str | None = Query(default=None),
     feedback_type: str | None = Query(default=None),
     q: str | None = Query(default=None),
@@ -568,7 +568,7 @@ def list_historical_feedback_items(
 
 @router.get("/historical-job-runs", response_model=list[HistoricalJobRunListItem])
 def list_historical_job_runs(
-    workspace_code: str = Query(default=LEGACY_WORKSPACE_CODE),
+    workspace_code: str = Query(...),
     job_type: str | None = Query(default=None),
     status_filter: str | None = Query(default=None, alias="status"),
     q: str | None = Query(default=None),
@@ -601,7 +601,7 @@ def list_historical_job_runs(
 
 @router.get("/historical-reports/summary", response_model=HistoricalReportSummaryRead)
 def get_historical_reports_summary(
-    workspace_code: str = Query(default="legacy_tech_insight_loop"),
+    workspace_code: str = Query(...),
     _: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> HistoricalReportSummaryRead:
@@ -636,7 +636,7 @@ def get_historical_reports_summary(
 
 @router.get("/historical-reports", response_model=list[HistoricalReportListItem])
 def list_historical_reports(
-    workspace_code: str = Query(default="legacy_tech_insight_loop"),
+    workspace_code: str = Query(...),
     report_type: str | None = Query(default=None),
     status_filter: str | None = Query(default=None, alias="status"),
     start_date: date | None = Query(default=None),
@@ -681,7 +681,7 @@ def get_historical_report(
 
 @router.get("/entity-timeline/summary", response_model=EntityTimelineSummaryRead)
 def get_entity_timeline_summary(
-    workspace_code: str = Query(default="legacy_tech_insight_loop"),
+    workspace_code: str = Query(...),
     _: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> EntityTimelineSummaryRead:
@@ -736,7 +736,7 @@ def get_entity_timeline_summary(
 
 @router.get("/tracked-entities", response_model=list[TrackedEntityListItem])
 def list_tracked_entities(
-    workspace_code: str = Query(default="legacy_tech_insight_loop"),
+    workspace_code: str = Query(...),
     entity_type: str | None = Query(default=None),
     rank: str | None = Query(default=None),
     q: str | None = Query(default=None),
@@ -767,7 +767,7 @@ def list_tracked_entities(
 
 @router.get("/entity-milestones", response_model=list[EntityMilestoneListItem])
 def list_entity_milestones(
-    workspace_code: str = Query(default="legacy_tech_insight_loop"),
+    workspace_code: str = Query(...),
     tracked_entity_id: str | None = Query(default=None),
     entity_type: str | None = Query(default=None),
     event_type: str | None = Query(default=None),

@@ -75,7 +75,7 @@ const aiToolPrimaryCategories = ["工具新功能", "工具新案例", "工具�
 const aiToolSecondaryLabels = ["cursor", "claude code", "opencode", "codex"];
 
 const workspacePolicyPresets = {
-  planning_intel: {
+  ai_sql: {
     labelSetCode: "ai_sql_categories",
     newsFormatCode: "company_sql_v1",
     exportCategoryMode: "news_primary",
@@ -171,7 +171,7 @@ const currentPolicyPreset = computed(() => {
   if (workspace.currentCode === "ai_tools") {
     return workspacePolicyPresets.ai_tools;
   }
-  return workspacePolicyPresets.planning_intel;
+  return workspacePolicyPresets.ai_sql;
 });
 
 async function loadWorkspacePolicy() {

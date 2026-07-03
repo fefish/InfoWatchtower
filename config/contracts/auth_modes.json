@@ -97,6 +97,7 @@
     "admin_min_role": "admin",
     "non_member_error": "403 not a workspace member",
     "insufficient_role_error": "403 insufficient workspace role",
+    "explicit_workspace_code_rule": "Business list and mutation APIs that operate on workspace content must receive workspace_code from the caller; they must not silently fall back to a tenant-specific workspace.",
     "route_min_roles": {
       "viewer": [
         "workspace sections and label policy read",
@@ -131,7 +132,7 @@
         "workspace update/disable",
         "legacy seed import",
         "Tech Insight Loop seed import",
-        "global ingestion/recommendation/export lists without workspace_code",
+        "global recommendation/export lists without workspace_code",
         "global user list without workspace_code, role and invite administration"
       ]
     }

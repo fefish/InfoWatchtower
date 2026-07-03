@@ -556,7 +556,7 @@ onMounted(loadRuns);
           <strong>{{ run.run_key }}</strong>
           <span>{{ runTypeLabel(run.run_type) }} · {{ runStatusLabel(run.status) }} · {{ formatDateTime(run.completed_at || run.started_at) }}</span>
         </button>
-        <p v-if="!loading && runs.length === 0" class="empty-state">暂无抓取运行。</p>
+        <p v-if="!loading && runs.length === 0" class="empty-state">暂无抓取运行，点击“新建抓取”或由 scheduler 生成第一次运行。</p>
       </aside>
 
       <article class="module-card run-detail">

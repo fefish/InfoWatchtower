@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 
 class NewsNormalizeCreate(BaseModel):
-    workspace_code: str = "planning_intel"
+    workspace_code: str
     source_types: list[str] = Field(default_factory=list)
     limit: int | None = Field(default=None, ge=0)
 
