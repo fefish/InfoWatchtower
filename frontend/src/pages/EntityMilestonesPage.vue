@@ -124,7 +124,7 @@ onMounted(loadAll);
       <div>
         <p class="eyebrow">Entity Timeline</p>
         <h2>实体大事记</h2>
-        <p>Tech Insight Loop 旧实体和事件的只读归档视图。</p>
+        <p>公司/组织/项目的事件时间线：沉淀关键实体的里程碑事件，支持从旧系统导入，未来从日报采信项持续积累。</p>
       </div>
       <button type="button" class="icon-button secondary" :disabled="loading" @click="loadAll">
         <RefreshCw :size="17" />

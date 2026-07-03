@@ -645,6 +645,7 @@ requirements/tasks/sync/audit v1
 
 ## 15. 附录索引
 
+- `docs/system-blueprint.md`：系统全量蓝图——产品与租户模型、管线语义、每个页面的元素级规格与修改指南、用户扩展模型（自带源/自定义格式）。
 - `docs/architecture-capability-map.md`：能力分块、每块分布架构与目标态差距清单。
 - `docs/target-state-spec.md`：可部署/可扩展/账户完整的目标态实现规格（WP1-WP3，实现级）。
 - `docs/workspace-module-model.md`：工作台、数据源共享与标签模型，含自助建台与自建源。

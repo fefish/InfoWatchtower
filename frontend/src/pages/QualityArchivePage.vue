@@ -109,7 +109,7 @@ onMounted(loadArchive);
       <div>
         <p class="eyebrow">Quality Archive</p>
         <h2>质量归档</h2>
-        <p>只读查看 Tech Insight Loop 旧反馈、质量反馈和任务记录，用于源治理与导入验收。</p>
+        <p>本工作台的质量运营档案：历史反馈、质量复核记录和旧任务运行统计在这里沉淀，用于源治理复盘与导入验收。</p>
       </div>
       <button type="button" class="icon-button secondary" :disabled="loading" @click="loadArchive">
         <RefreshCw :size="17" />

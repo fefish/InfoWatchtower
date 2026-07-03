@@ -125,9 +125,9 @@ onMounted(loadReports);
   <section class="module-page">
     <header class="module-hero">
       <div>
-        <p class="eyebrow">Legacy Archive</p>
-        <h2>历史归档</h2>
-        <p>查看 Tech Insight Loop 历史日报/周报归档、旧反馈引用映射和未解析引用缺口。</p>
+        <p class="eyebrow">Report Library</p>
+        <h2>历史报告库</h2>
+        <p>本工作台的报告资产库：从旧系统或历史批次导入的日报/周报在这里长期可查，每条可追溯到导入前的原始记录。</p>
       </div>
       <button type="button" class="icon-button secondary" :disabled="loading" @click="loadReports">
         <RefreshCw :size="17" />
@@ -141,7 +141,7 @@ onMounted(loadReports);
       <div class="card-title-row">
         <div>
           <p class="eyebrow">Import QA</p>
-          <h3>Tech Insight Loop 导入验收</h3>
+          <h3>旧系统导入验收</h3>
         </div>
         <span class="metric-pill">{{ legacySummary ? formatDate(legacySummary.generated_at) : "未加载" }}</span>
       </div>
@@ -296,7 +296,9 @@ onMounted(loadReports);
           <TriangleAlert v-if="report.unresolved_ref_count > 0" :size="18" class="warning-icon" />
         </article>
         <p v-if="!loading && reports.length === 0" class="empty-state">
-          暂无历史归档。真实导入完成后，这里会展示旧日报/周报。
+          这个工作台还没有历史报告。报告库用于沉淀迁移进来的旧系统资产：运行导入脚本
+          （scripts/tech_insight_loop_import_verify.py --execute）后，旧日报/周报会出现在这里，
+          支持按日期、类型、关键词检索正文，并在上方验收面板核对导入覆盖率与旧引用缺口。
         </p>
       </section>
 

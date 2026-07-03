@@ -4720,9 +4720,38 @@ button:focus-visible {
 
 .rendition-item-head h5 {
   margin: 0;
-  font-size: 14.5px;
-  line-height: 1.5;
+  font-size: 15px;
+  line-height: 1.55;
   font-weight: 700;
+  word-break: break-word;
+}
+
+/* 成稿视图阅读排版：限制行长，标题与正文层级更接近快报 */
+.rendition-view {
+  max-width: 980px;
+}
+
+.rendition-headlines ol li {
+  word-break: break-word;
+}
+
+/* 周报板块 tab 与卡片自适应：长源名/多板块换行不溢出 */
+.weekly-board-tabs {
+  flex-wrap: wrap;
+}
+
+.weekly-board-summary {
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+}
+
+.module-split.weekly-layout {
+  align-items: start;
+}
+
+.weekly-item-source,
+.weekly-board-card strong,
+.run-tab strong {
+  overflow-wrap: anywhere;
 }
 
 .headline-toggle {
@@ -4755,9 +4784,10 @@ button:focus-visible {
 
 .rendition-block {
   margin: 0;
-  font-size: 13.5px;
+  font-size: 14px;
   line-height: 1.7;
   color: var(--color-text);
+  max-width: 78ch;
 }
 
 .rendition-source {
@@ -4857,6 +4887,42 @@ button:focus-visible {
   color: var(--color-muted);
   font-size: 12.5px;
   font-weight: 600;
+}
+
+/* ============================================================
+   运行参数控件：胶囊多选（替代原生 multiple select）
+   ============================================================ */
+
+.run-field {
+  display: grid;
+  gap: 8px;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 800;
+  align-content: start;
+}
+
+.type-toggle-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.type-toggle-group button {
+  border: 1px solid var(--color-border-soft);
+  border-radius: 999px;
+  padding: 6px 14px;
+  background: rgba(255, 255, 255, 0.6);
+  color: var(--color-muted);
+  font-size: 12.5px;
+  font-weight: 700;
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+.type-toggle-group button.active {
+  border-color: var(--color-primary-edge);
+  background: var(--color-primary-soft);
+  color: var(--color-primary-dark);
 }
 
 /* ============================================================

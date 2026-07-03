@@ -38,6 +38,34 @@ const coverageLoading = ref(false);
 const coverageDayKey = ref(todayKey());
 const normalSourceTypes = ref(["rss", "paper_rss"]);
 const backfillSourceTypes = ref(["rss", "paper_rss"]);
+const normalTypeOptions = [
+  ["rss", "RSS"],
+  ["paper_rss", "论文 RSS"],
+  ["page_manual", "页面手工"],
+  ["page_monitor", "页面监控"]
+] as const;
+const backfillTypeOptions = [
+  ["rss", "RSS"],
+  ["paper_rss", "论文 RSS"],
+  ["paper_api", "论文 API"],
+  ["page_manual", "页面手工"],
+  ["page_monitor", "页面监控"]
+] as const;
+
+function toggleTypeIn(current: string[], value: string): string[] {
+  if (current.includes(value)) {
+    return current.length > 1 ? current.filter((item) => item !== value) : current;
+  }
+  return [...current, value];
+}
+
+function toggleNormalType(value: string) {
+  normalSourceTypes.value = toggleTypeIn(normalSourceTypes.value, value);
+}
+
+function toggleBackfillType(value: string) {
+  backfillSourceTypes.value = toggleTypeIn(backfillSourceTypes.value, value);
+}
 const backfillMode = ref("rss_window");
 const normalLimit = ref<number | null>(0);
 const backfillLimit = ref<number | null>(0);
@@ -379,15 +407,20 @@ onMounted(loadRuns);
       </div>
 
       <div v-if="mode === 'ingestion'" class="run-command">
-        <label>
-          源类型
-          <select v-model="normalSourceTypes" multiple>
-            <option value="rss">RSS</option>
-            <option value="paper_rss">论文 RSS</option>
-            <option value="page_manual">页面手工</option>
-            <option value="page_monitor">页面监控</option>
-          </select>
-        </label>
+        <div class="run-field">
+          <span class="run-field-label">源类型</span>
+          <div class="type-toggle-group" role="group" aria-label="源类型">
+            <button
+              v-for="[value, label] in normalTypeOptions"
+              :key="value"
+              type="button"
+              :class="{ active: normalSourceTypes.includes(value) }"
+              @click="toggleNormalType(value)"
+            >
+              {{ label }}
+            </button>
+          </div>
+        </div>
         <label>
           源数量上限
           <input v-model.number="normalLimit" type="number" min="0" placeholder="0 为验收链路" />
@@ -420,16 +453,20 @@ onMounted(loadRuns);
             <option value="manual_import">手工导入</option>
           </select>
         </label>
-        <label>
-          源类型
-          <select v-model="backfillSourceTypes" multiple>
-            <option value="rss">RSS</option>
-            <option value="paper_rss">论文 RSS</option>
-            <option value="paper_api">论文 API</option>
-            <option value="page_manual">页面手工</option>
-            <option value="page_monitor">页面监控</option>
-          </select>
-        </label>
+        <div class="run-field">
+          <span class="run-field-label">源类型</span>
+          <div class="type-toggle-group" role="group" aria-label="补采源类型">
+            <button
+              v-for="[value, label] in backfillTypeOptions"
+              :key="value"
+              type="button"
+              :class="{ active: backfillSourceTypes.includes(value) }"
+              @click="toggleBackfillType(value)"
+            >
+              {{ label }}
+            </button>
+          </div>
+        </div>
         <label>
           源数量上限
           <input v-model.number="backfillLimit" type="number" min="0" placeholder="0 为安全验收" />
