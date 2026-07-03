@@ -217,6 +217,49 @@ def ensure_auth_seed(session: Session, settings: Settings) -> None:
     session.commit()
 
 
+def setup_needed(session: Session) -> bool:
+    return session.scalar(select(User.id).limit(1)) is None
+
+
+def create_initial_super_admin(
+    session: Session,
+    *,
+    username: str,
+    display_name: str,
+    password: str,
+) -> User:
+    if not setup_needed(session):
+        raise RuntimeError("setup_already_completed")
+    permissions = _ensure_permissions(session)
+    roles = _ensure_roles(session, permissions)
+    workspaces = _ensure_workspaces(session)
+    _ensure_default_label_sets(session)
+    user = User(
+        external_provider="local",
+        external_id=username,
+        username=username,
+        display_name=display_name,
+        password_hash=hash_password(password),
+        status="active",
+        roles=[roles["super_admin"]],
+    )
+    session.add(user)
+    session.flush()
+    _ensure_super_admin_workspace_memberships(session, workspaces)
+    for code in workspaces:
+        ensure_report_formats(session, code)
+    write_audit(
+        session,
+        user,
+        action="setup.create_admin",
+        object_type="user",
+        object_id=user.id,
+        detail={"username": username},
+    )
+    session.flush()
+    return user
+
+
 def try_ensure_auth_seed(session_factory, settings: Settings) -> None:
     if session_factory is None:
         return

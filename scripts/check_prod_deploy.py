@@ -5,7 +5,6 @@ import argparse
 import sys
 from pathlib import Path
 
-
 REQUIRED_SERVICES = ("postgres", "redis", "backend", "worker", "scheduler", "reverse_proxy")
 REQUIRED_ENV_KEYS = (
     "APP_ENV",
@@ -16,11 +15,10 @@ REQUIRED_ENV_KEYS = (
     "POSTGRES_PASSWORD",
     "AUTH_MODE",
     "AUTH_SESSION_SECRET",
-    "AUTH_BOOTSTRAP_ADMIN_PASSWORD",
     "INGESTION_SCHEDULER_TIMEZONE",
     "SCHEDULER_JOB_MODE",
 )
-SECRET_KEYS = ("POSTGRES_PASSWORD", "AUTH_SESSION_SECRET", "AUTH_BOOTSTRAP_ADMIN_PASSWORD")
+SECRET_KEYS = ("POSTGRES_PASSWORD", "AUTH_SESSION_SECRET")
 
 
 def parse_env(path: Path) -> dict[str, str]:
@@ -58,6 +56,10 @@ def check_prod_deploy(root: Path, env_file: Path) -> list[str]:
         errors.append("Caddyfile must route /api/* to backend:8000")
     if "try_files {path} /index.html" not in caddy:
         errors.append("Caddyfile must serve Vue history fallback with try_files")
+    if "healthcheck:" not in compose or "/healthz" not in compose:
+        errors.append("backend service must expose a /healthz healthcheck")
+    if "condition: service_healthy" not in compose:
+        errors.append("worker/scheduler/reverse_proxy should depend on backend service_healthy")
 
     for key in REQUIRED_ENV_KEYS:
         if not env.get(key):
@@ -66,7 +68,7 @@ def check_prod_deploy(root: Path, env_file: Path) -> list[str]:
         errors.append("APP_ENV must be production")
     if env.get("ENABLE_DOCS", "").lower() != "false":
         errors.append("ENABLE_DOCS must be false in production")
-    if env.get("AUTH_MODE") not in {"public_password", "intranet_header", "oidc", "intranet_oidc", "saml"}:
+    if env.get("AUTH_MODE") not in {"public_password", "intranet_header", "oidc", "intranet_oidc", "intranet_saml"}:
         errors.append("AUTH_MODE is not one of the supported production modes")
     for key in SECRET_KEYS:
         value = env.get(key, "")
