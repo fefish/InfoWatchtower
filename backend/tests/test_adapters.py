@@ -112,3 +112,29 @@ def test_page_created_hint_parses_iso_datetime_as_utc():
 
     assert parsed is not None
     assert parsed.isoformat() == "2026-04-30T08:00:00+00:00"
+
+
+def test_resolve_feed_url_rewrites_public_rsshub_to_configured_instance(monkeypatch):
+    from app.adapters.rss import resolve_feed_url
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("RSSHUB_BASE_URL", "https://rsshub.internal.example:1200")
+    get_settings.cache_clear()
+    try:
+        assert (
+            resolve_feed_url("https://rsshub.app/twitter/user/openai")
+            == "https://rsshub.internal.example:1200/twitter/user/openai"
+        )
+        assert resolve_feed_url("https://example.com/feed.xml") == "https://example.com/feed.xml"
+    finally:
+        monkeypatch.delenv("RSSHUB_BASE_URL", raising=False)
+        get_settings.cache_clear()
+
+
+def test_resolve_feed_url_keeps_public_rsshub_without_configuration(monkeypatch):
+    from app.adapters.rss import resolve_feed_url
+    from app.core.config import get_settings
+
+    monkeypatch.delenv("RSSHUB_BASE_URL", raising=False)
+    get_settings.cache_clear()
+    assert resolve_feed_url("https://rsshub.app/x/user/openai") == "https://rsshub.app/x/user/openai"

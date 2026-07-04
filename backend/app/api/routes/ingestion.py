@@ -48,6 +48,27 @@ DB_SESSION = Depends(get_db_session)
 BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 
 
+@router.get("/scheduler", response_model=dict)
+def get_scheduler_config(_: User = CURRENT_USER) -> dict:
+    """自动调度当前配置（只读快照）。修改需调整部署 env 并重启 scheduler 服务。"""
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    return {
+        "enabled": settings.ingestion_scheduler_enabled,
+        "daily_time": settings.ingestion_scheduler_daily_time,
+        "timezone": settings.ingestion_scheduler_timezone,
+        "interval_seconds": settings.ingestion_scheduler_interval_seconds,
+        "workspace_code": settings.ingestion_scheduler_workspace_code,
+        "source_types": settings.ingestion_scheduler_source_types,
+        "limit": settings.ingestion_scheduler_limit,
+        "max_items_per_source": settings.ingestion_max_items_per_source,
+        "job_mode": settings.scheduler_job_mode,
+        "day_offset_days": settings.daily_pipeline_day_offset_days,
+        "config_hint": "在部署 .env 中调整 INGESTION_SCHEDULER_* 后重启 scheduler 服务生效",
+    }
+
+
 @router.post("/runs", response_model=IngestionRunRead)
 async def create_ingestion_run(
     payload: IngestionRunCreate,

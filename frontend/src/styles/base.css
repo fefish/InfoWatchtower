@@ -834,16 +834,23 @@ button {
 .run-command {
   display: flex;
   align-items: flex-end;
-  gap: 16px;
+  flex-wrap: wrap;
+  gap: 16px 22px;
+  padding: 8px 6px 12px;
 }
 
 .run-command label {
   display: grid;
-  gap: 6px;
+  gap: 7px;
   min-width: 160px;
   color: #475569;
   font-size: 12px;
   font-weight: 800;
+}
+
+.run-command .muted-line {
+  flex-basis: 100%;
+  margin: 2px 0 0;
 }
 
 .run-command input,
@@ -3481,14 +3488,30 @@ button {
 }
 
 .wizard-steps span {
-  display: grid;
-  min-height: 30px;
-  place-items: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 10px;
   border: 1px solid rgba(148, 163, 184, 0.5);
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.62);
   color: #64748b;
   font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.wizard-steps span i {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(120, 130, 150, 0.18);
+  font-style: normal;
+  font-size: 11px;
   font-weight: 900;
 }
 
@@ -3497,6 +3520,39 @@ button {
   border-color: rgba(10, 132, 255, 0.36);
   background: rgba(10, 132, 255, 0.1);
   color: #0a84ff;
+}
+
+.wizard-steps span.active i,
+.wizard-steps span.done i {
+  background: rgba(10, 132, 255, 0.2);
+}
+
+/* 自动调度状态卡 */
+.scheduler-card {
+  display: grid;
+  gap: 10px;
+  padding: 16px 20px;
+}
+
+.scheduler-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.scheduler-card-head h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.scheduler-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .wizard-page {

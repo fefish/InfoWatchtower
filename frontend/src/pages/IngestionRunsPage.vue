@@ -18,10 +18,12 @@ import {
   fetchIngestionCoverage,
   fetchIngestionRun,
   fetchIngestionRuns,
+  fetchSchedulerConfig,
   type IngestionCoverageRecord,
   type IngestionCoverageSource,
   type IngestionRunRecord,
-  type IngestionSourceSummary
+  type IngestionSourceSummary,
+  type SchedulerConfigRecord
 } from "../api/ingestion";
 import { useWorkspaceStore } from "../stores/workspace";
 
@@ -67,8 +69,9 @@ function toggleBackfillType(value: string) {
   backfillSourceTypes.value = toggleTypeIn(backfillSourceTypes.value, value);
 }
 const backfillMode = ref("rss_window");
-const normalLimit = ref<number | null>(0);
-const backfillLimit = ref<number | null>(0);
+// 空 = 按当前工作台启用源全量抓取；0 = 只验收接口权限（不真实抓取）
+const normalLimit = ref<number | null>(null);
+const backfillLimit = ref<number | null>(null);
 const targetDayStart = ref(todayKey());
 const targetDayEnd = ref(todayKey());
 const includeUndated = ref(false);
@@ -199,7 +202,7 @@ async function runIngestion() {
     const run = await createIngestionRun({
       workspace_code: workspace.currentCode,
       source_types: normalSourceTypes.value,
-      limit: normalLimit.value
+      limit: typeof normalLimit.value === "number" ? normalLimit.value : null
     });
     message.value = `抓取运行已完成：尝试 ${run.source_total} 个源，成功 ${run.source_succeeded}，失败 ${run.source_failed}`;
     await loadRuns();
@@ -225,7 +228,7 @@ async function runBackfill() {
       target_day_start: targetDayStart.value,
       target_day_end: targetDayEnd.value,
       source_types: backfillSourceTypes.value,
-      limit: backfillLimit.value,
+      limit: typeof backfillLimit.value === "number" ? backfillLimit.value : null,
       include_undated: includeUndated.value,
       backfill_mode: backfillMode.value
     });
@@ -269,7 +272,7 @@ function successRate(run: IngestionRunRecord) {
 }
 
 function sourceSummaries(run: IngestionRunRecord): IngestionSourceSummary[] {
-  const sources = run.summary_json.sources;
+  const sources = (run.summary_json ?? {}).sources;
   if (!Array.isArray(sources)) {
     return [];
   }
@@ -279,12 +282,12 @@ function sourceSummaries(run: IngestionRunRecord): IngestionSourceSummary[] {
 }
 
 function summaryNumber(run: IngestionRunRecord, key: string) {
-  const value = run.summary_json[key];
+  const value = (run.summary_json ?? {})[key];
   return typeof value === "number" ? value : 0;
 }
 
 function stringParam(run: IngestionRunRecord, key: string) {
-  const value = run.params_json[key] ?? run.summary_json[key];
+  const value = (run.params_json ?? {})[key] ?? (run.summary_json ?? {})[key];
   return typeof value === "string" ? value : "";
 }
 
@@ -329,12 +332,12 @@ function sourceStatusLabel(status?: string) {
 }
 
 function sourceTypesLine(run: IngestionRunRecord) {
-  const value = run.params_json.source_types;
+  const value = (run.params_json ?? {}).source_types;
   return Array.isArray(value) ? value.join(", ") : "未记录";
 }
 
 function backfillModeLabel(run: IngestionRunRecord) {
-  const value = run.params_json.backfill_mode ?? run.summary_json.backfill_mode;
+  const value = (run.params_json ?? {}).backfill_mode ?? (run.summary_json ?? {}).backfill_mode;
   return typeof value === "string" ? value : "workspace_fetch";
 }
 
@@ -360,7 +363,16 @@ watch(coverageDayKey, () => {
   void loadCoverage();
 });
 
-onMounted(loadRuns);
+const schedulerConfig = ref<SchedulerConfigRecord | null>(null);
+
+async function loadSchedulerConfig() {
+  schedulerConfig.value = await fetchSchedulerConfig().catch(() => null);
+}
+
+onMounted(() => {
+  void loadRuns();
+  void loadSchedulerConfig();
+});
 </script>
 
 <template>
@@ -422,10 +434,10 @@ onMounted(loadRuns);
           </div>
         </div>
         <label>
-          源数量上限
-          <input v-model.number="normalLimit" type="number" min="0" placeholder="0 为验收链路" />
+          本次运行源数上限
+          <input v-model.number="normalLimit" type="number" min="0" placeholder="空 = 全部启用源" />
         </label>
-        <p class="muted-line">limit=0 只验收接口和权限，不触发真实外网抓取；空值表示按当前工作台启用源全量抓取。</p>
+        <p class="muted-line">留空按当前工作台全部启用源真实抓取；填 0 只验收接口和权限（不触发外网抓取）。自动定时抓取见下方「自动调度」卡片。</p>
       </div>
 
       <div v-else class="run-command backfill-command">
@@ -468,8 +480,8 @@ onMounted(loadRuns);
           </div>
         </div>
         <label>
-          源数量上限
-          <input v-model.number="backfillLimit" type="number" min="0" placeholder="0 为安全验收" />
+          本次运行源数上限
+          <input v-model.number="backfillLimit" type="number" min="0" placeholder="空 = 全部启用源" />
         </label>
         <label class="switch-row">
           <input v-model="includeUndated" type="checkbox" />
@@ -479,6 +491,25 @@ onMounted(loadRuns);
           rss_window 只能补回当前 feed 窗口中仍存在的历史条目；sitemap/归档页依赖数据源 fetch_config 中配置的 sitemap_url、archive_url 或 page_url；manual_import 预留后端入口，当前页面暂不上传文件。
         </p>
       </div>
+    </section>
+
+    <section class="module-card compact scheduler-card" aria-label="自动调度">
+      <div class="scheduler-card-head">
+        <div>
+          <p class="eyebrow">Scheduler</p>
+          <h3>自动调度</h3>
+        </div>
+        <span class="report-status" :data-tone="schedulerConfig?.enabled ? 'ok' : 'warn'">
+          {{ schedulerConfig ? (schedulerConfig.enabled ? "已开启" : "未开启") : "未知" }}
+        </span>
+      </div>
+      <div v-if="schedulerConfig" class="scheduler-facts">
+        <span>每日 {{ schedulerConfig.daily_time || "—" }}（{{ schedulerConfig.timezone }}）</span>
+        <span>模式：{{ schedulerConfig.job_mode === "daily_pipeline" ? "抓取→去重→推荐→日报全链路" : "仅抓取" }}</span>
+        <span>目标日偏移：{{ schedulerConfig.day_offset_days }} 天</span>
+        <span>单源上限：{{ schedulerConfig.max_items_per_source ?? "不限" }}</span>
+      </div>
+      <p class="muted-line">{{ schedulerConfig?.config_hint || "固定抓取时间通过部署 env 的 INGESTION_SCHEDULER_* 配置，改后重启 scheduler 服务生效。" }}</p>
     </section>
 
     <section class="module-card compact coverage-overview">

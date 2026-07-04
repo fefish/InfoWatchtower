@@ -144,6 +144,24 @@ export async function fetchIngestionRun(runId: string): Promise<IngestionRunReco
   return requestJson<IngestionRunRecord>(`/api/ingestion/runs/${runId}`);
 }
 
+export interface SchedulerConfigRecord {
+  enabled: boolean;
+  daily_time: string;
+  timezone: string;
+  interval_seconds: number;
+  workspace_code: string;
+  source_types: string;
+  limit: number | null;
+  max_items_per_source: number | null;
+  job_mode: string;
+  day_offset_days: number;
+  config_hint: string;
+}
+
+export async function fetchSchedulerConfig(): Promise<SchedulerConfigRecord> {
+  return requestJson<SchedulerConfigRecord>("/api/ingestion/scheduler");
+}
+
 export async function fetchIngestionCoverage(
   workspaceCode: string,
   dayKey: string,

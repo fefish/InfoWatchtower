@@ -11,7 +11,20 @@ import feedparser
 import httpx
 
 from app.adapters.base import BROWSER_FETCH_HEADERS, RawItemInput
+from app.core.config import get_settings
 from app.models.content import DataSource
+
+PUBLIC_RSSHUB_PREFIX = "https://rsshub.app/"
+
+
+def resolve_feed_url(url: str) -> str:
+    """公共 rsshub.app 对 X/公众号等路由普遍 403；配置 RSSHUB_BASE_URL
+    指向自建 RSSHub 实例后，rsshub.app 前缀的源 URL 会自动改走自建实例，
+    源定义无需逐条修改。"""
+    base = (get_settings().rsshub_base_url or "").strip().rstrip("/")
+    if base and url.startswith(PUBLIC_RSSHUB_PREFIX):
+        return f"{base}/{url[len(PUBLIC_RSSHUB_PREFIX):]}"
+    return url
 
 
 class RssFeedAdapter:
@@ -26,7 +39,7 @@ class RssFeedAdapter:
             headers=BROWSER_FETCH_HEADERS,
             trust_env=False,
         ) as client:
-            response = await client.get(data_source.url)
+            response = await client.get(resolve_feed_url(data_source.url))
             response.raise_for_status()
 
         parsed = feedparser.parse(response.content)
