@@ -48,10 +48,15 @@ MiniMax ready 的条目、category 十分类、`content_json` 五段；业务板
 | 配置 | `config/seeds/`（旧种子 294 + Tech 386）、`contracts/source_fields.json`、`taxonomy/source_tags.json` |
 
 现状：✅ 663 治理记录去重成共享池；自建源/补入口界面化；浏览器 UA 对齐旧系统；单源上限
-参数化；覆盖率漏斗可解释"为什么当天候选少"。
-**Gap**：① 31 个 `wx://` 公众号源无 adapter（P1，需微信渠道方案）② 失败源自动重试与
-告警（P2）③ 超出 RSS 窗口的深度历史补采（归档页分页/sitemap 深挖，P1）④ scheduler
-默认窗口/上限参数化到生产 env（P1，一次配置动作）。
+参数化；覆盖率漏斗可解释"为什么当天候选少"；`GET /api/ingestion/scheduler` + 抓取页
+「自动调度」卡展示调度配置；`RSSHUB_BASE_URL` 配自建 RSSHub 后，`rsshub.app` 前缀源
+自动改走自建实例（X/部分公众号路由的可用通道）。
+**Gap**：① `wx://` 公众号直连 adapter（P1）：旧系统方案是外部 `wx-cli` 工具跑在登录
+微信的 Windows 机器上按日期窗口拉取（`references/参考工具/app.py` `wechat_cli_fetch_windows`），
+纯服务端无法复刻；落地路径 = 在该机器上暴露 wx-cli 桥接（命令或 HTTP），本系统新增
+`wechat` adapter 走 `fetch_config.wx_cli_endpoint`，或走自建 RSSHub 公众号路由。
+② 失败源自动重试与告警（P2）③ 超出 RSS 窗口的深度历史补采（P1）
+④ 自建 RSSHub 实例部署与 `RSSHUB_BASE_URL` 配置（P1 运维动作，X 源可用的前提）。
 
 ### B. 处理主链（raw → news → 去重）
 

@@ -44,6 +44,7 @@ GET  /api/ingestion/runs
 GET  /api/ingestion/runs/{id}
 POST /api/ingestion/backfill-runs
 GET  /api/ingestion/coverage
+GET  /api/ingestion/scheduler
 
 GET  /api/raw-items
 GET  /api/raw-items/{id}
@@ -137,6 +138,8 @@ GET  /api/audit-logs
 成稿多版（renditions）遵循「一次采信，多版成稿」：`report-formats` 是工作台级格式注册表（内置 `company_sql_v1` 锁定 + `tech_insight_v1`，可注册自定义格式），renditions 端点把已采信条目投影成对应格式并支持 MD/HTML 导出；`PATCH /api/daily-report-items/{id}` 支持 `is_headline` 头条勾选。设计与边界见 `docs/report-renditions-design.md` 和 `config/contracts/report_renditions.json`；公司 SQL 出口不受任何格式配置影响。
 
 `POST /api/sources/import-tech-insight-loop` 是第一轮融合入口，只导入 `config/seeds/tech_insight_loop/sources_full_zh.csv` 的源治理字段，不导入 Tech Insight Loop 的历史素材、报告或实体大事记。响应按 CSV 行返回 `total/fetchable/metadata_only`，按去重写入返回 `created/updated`；当前 seed 为 386 行、355 行有入口、31 行待补入口，去重后 363 个共享源。`GET /api/sources` 会额外返回 `source_tier/source_channel_type/expert_routes/metadata_only/needs_entry` 等治理字段。
+
+`GET /api/ingestion/scheduler` 返回自动调度配置只读快照（enabled/daily_time/timezone/job_mode/day_offset/单源上限），供抓取页「自动调度」卡展示；修改需调整部署 env 的 `INGESTION_SCHEDULER_*` 并重启 scheduler。抓取页运行参数中「本次运行源数上限」留空 = 按当前工作台全部启用源真实抓取，填 0 = 仅验收接口权限；源类型为胶囊多选。`RSSHUB_BASE_URL` 配置自建 RSSHub 实例后，`rsshub.app` 前缀源 URL 在抓取时自动改走自建实例（X 等路由可用的前提）；微信公众号直连依赖旧系统同款 wx-cli 外部工具桥接，方案见能力地图 A 块。
 
 `GET /api/ingestion/coverage` 按 `workspace_code + day_key + 可选 run_id` 返回目标日覆盖漏斗：启用源、本次运行源、成功/失败源、目标日 raw、news、dedupe winner、recommendation candidate/selected、generated ready 和日报采信项；每源明细同时返回 fetched、created/updated、in/out target、missing published_at、news、winner、推荐和采信计数。
 

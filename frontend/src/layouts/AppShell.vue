@@ -424,12 +424,16 @@ async function logout() {
 
     <div v-if="!wizardFinished" class="workspace-wizard">
       <div class="wizard-steps" aria-label="创建步骤">
-        <span :class="{ active: wizardStep === 1, done: wizardStep > 1 }">1</span>
-        <span :class="{ active: wizardStep === 2, done: wizardStep > 2 }">2</span>
-        <span :class="{ active: wizardStep === 3 }">3</span>
+        <span :class="{ active: wizardStep === 1, done: wizardStep > 1 }"><i>1</i>基本信息</span>
+        <span :class="{ active: wizardStep === 2, done: wizardStep > 2 }"><i>2</i>选择信息源</span>
+        <span :class="{ active: wizardStep === 3 }"><i>3</i>标签策略</span>
       </div>
 
       <section v-if="wizardStep === 1" class="wizard-page">
+        <p class="workspace-form-hint">
+          给新工作台起名。「标识」是系统内部代号（小写英文，建成后不可改）；「默认主题域」
+          用于给内容打主题归属（如 ai / hardware / policy），不确定就保留 ai。
+        </p>
         <div class="config-grid">
           <label>
             <span>标识（英文小写）</span>
@@ -451,6 +455,10 @@ async function logout() {
       </section>
 
       <section v-else-if="wizardStep === 2" class="wizard-page">
+        <p class="workspace-form-hint">
+          选这个工作台要抓取的信息源：可勾选共享池里已有的源（此处仅展示部分，建成后可在
+          「数据源管理」启用更多），也可以现场自建一个新源。本步可跳过。
+        </p>
         <div class="wizard-section-title">
           <strong>共享源</strong>
           <span>{{ selectedWizardSourceIds.size }} 已选</span>
@@ -497,6 +505,10 @@ async function logout() {
       </section>
 
       <section v-else class="wizard-page">
+        <p class="workspace-form-hint">
+          标签策略决定这个工作台成品新闻的一级分类口径（影响日报分组与导出）。
+          可先复制一套预设，建成后随时在「数据源管理」右侧策略面板调整。
+        </p>
         <div class="wizard-policy-options">
           <label>
             <input v-model="workspaceForm.policy_preset" type="radio" value="ai_sql" />
