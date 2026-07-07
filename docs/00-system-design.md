@@ -268,15 +268,25 @@ data_sources 共享源池
 - 标准公司 SQL 只导出已发布日报中 `daily_report_items.adoption_status = 2` 的条目。
 - 任意内部需求必须能追溯回触发它的外部原始信号。
 
-模板驱动生成（目标态，设计已定稿）：自定义报告格式可携带 JSON/XML 声明式生成模板
+模板驱动生成（目标态，设计已定稿；2026-07-08 语义修订 D-2026-07-08-TPL）：
+自定义报告格式可携带 JSON/XML 声明式生成模板
 （`report_formats.generation_template`），但模板不改变主链路——基稿（五段
-`content_json` + category + `insight_json`）仍只生成一次；模板字段能映射到基稿
-超集的一律投影，仅当模板含基稿没有的字段时才追加生成，增量产出只写
-`generated_news.template_extras_json`，永不进入 `content_json`、`category`、去重、
-推荐和公司 SQL。内置 `company_sql_v1` 锁死、`tech_insight_v1` 不受模板影响。
-事实源：`docs/backend/reports-editorial-design.md` §8.1 与
-`docs/backend/report-renditions-design.md` §10；契约：
+`content_json` + category + `insight_json`）仍只生成一次；带模板的格式在生成
+阶段对**每条新闻 × 每个启用格式**带该格式的模板 JSON 调用一次 LLM，模板字段
+全部由模型按板式填充（`map_from` 只是提示上下文与降级兜底来源），整桶写
+`generated_news.template_extras_json[format_code]`，投影只排版；模板产出永不
+进入 `content_json`、`category`、去重、推荐和公司 SQL，格式化调用计入工作台
+每日生成预算并有降级路径。内置 `company_sql_v1` 锁死、`tech_insight_v1`
+不受模板影响。事实源：`docs/backend/reports-editorial-design.md` §8.1 与
+`docs/backend/report-renditions-design.md` §10（§10.8 决策变更记录）；契约：
 `config/contracts/report_renditions.json` `generation_template`。
+
+报告消费侧（目标态，2026-07-08 设计定稿）：日报/周报页自身承担本工作台报告的
+时间线（按月分组时间轴 + 全量历史回溯）、按标签筛选和关键词过滤；
+`/historical-reports` 重定位为跨来源归档（旧系统导入资产 + 跨来源统计对比），
+已发布报告在归档侧只留轻量索引与深链。事实源：
+`docs/product/frontend-product-design.md` §13、
+`docs/backend/archive-knowledge-design.md` §5.1。
 
 ## 6. 核心对象
 
@@ -347,8 +357,13 @@ workspace_source_links  某工作台启用了哪些共享源以及如何配置
   基本信息、导航分区启停、标签策略、报告策略（`report_policy.auto_publish_daily`
   自动发布）、成员管理和报告格式都在工作台内配置，不依赖全局管理员；viewer
   反馈策略仍在 `/users` 策略视图编辑。可见性与加入码（§6 加入码条目）、自动化
-  （`schedule_policy`，§11 调度分层）、生成模型（`generation_policy`，key 只在
-  实例 env、界面永不回显）三张配置卡已实现（2026-07-08）。
+  （`schedule_policy`，§11 调度分层）、生成模型（`generation_policy`）三张配置卡
+  已实现（2026-07-08）。生成模型密钥存放按决策变更 D-2026-07-08-KEY（设计定稿、
+  待实现）：除实例 env 兜底外，允许 super_admin 在 UI 把 key **加密落库**
+  `llm_provider_credentials`（Fernet at rest，界面只回显 masked 后 4 位，明文
+  永不进 Git/同步包/API 响应），并配 provider 预设目录下拉；事实源
+  `docs/backend/generation-provider-design.md` §8-§9，契约
+  `config/contracts/llm_providers.json`。
 - 用户组（`user_groups`）是运营分组，不是第三层权限：只用于按组批量把成员加入
   工作台（`POST /api/workspaces/{code}/members/bulk`）和任务协作视图的组织单位，
   权限仍由全局角色与 workspace membership 决定。
@@ -488,6 +503,8 @@ recommendation_reason
 - R：噪声或离题内容，默认不进入日报。
 
 评分会提升 AI 软件与基础设施、模型工程、推理/训练、RAG、多智能体、Agent 记忆、评测基准、开源框架、硬件厂商技术路线、友商技术动态、AI 芯片、GPU 集群、数据中心架构、通信系统和标准进展等信号。数据源侧方向标签只能作为弱先验，不能因为“这个源是厂商源/硬件源”就直接入日报；单条内容仍必须出现架构、推理、模型服务、芯片、数据中心、通信系统、标准或工程实现证据。融资、财报、股价、采购/中标/集采、消费硬件、活动预告、宣传推广会/品牌行动、泛商业合作、纯营销、航天火箭等离题工程新闻、纯市场新闻、法律/版权元讨论、标题党、社会/教育离题内容和离题生物医学/纯学术论文默认降权。日报选择还会限制单源、论文源（默认约 10%）和单一内容池的占比，`P2` 只作为无噪声且有明确技术信号的补位项，`P2 paper_rss` 默认不进入日报，避免内容被某一类来源刷屏。用户反馈、需求结论和管理员采信可反哺 `heat_score/feedback_score/source_score`。
+
+推荐排序的目标态是三层管线：规则粗排（现状保留，作为无导向时的行为基线）→ 可选 embedding 语义层（去重增强与主题聚类，默认关闭）→ 按工作台「内容导向 rubric」的 LLM listwise 精排（只对粗排 top-M，预算闸门与失败/预算耗尽降级为纯粗排，run 摘要显式标记）。工作台管理员用自然语言描述内容导向（想要什么/不要什么/加分信号），经「编译」生成结构化 rubric，预览确认后版本化生效并审计；不配置导向时排序必须与纯粗排现状一致。头条候选、候选池、日报选择与今日速览一律按 `final_score` 降序展示；无评分数据时不得展示“0.0 平均评分”类空指标。设计事实源见 `docs/backend/recommendation-scoring-design.md`，机器契约见 `config/contracts/recommendation_ranking.json`。
 
 ## 9. 分类与板块扩展
 

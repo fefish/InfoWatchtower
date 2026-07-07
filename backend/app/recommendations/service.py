@@ -1816,7 +1816,7 @@ def _create_or_replace_daily_draft(
             domain_code=workspace.default_domain_code,
             day_key=day_key,
             title=f"{day_key} {workspace.name} 日报",
-            summary="由阶段 5 推荐链路生成的日报草稿。",
+            summary="基于当日采集与推荐结果自动生成，可在此采信、编辑与发布。",
             status="draft",
         )
         session.add(report)
@@ -1827,7 +1827,7 @@ def _create_or_replace_daily_draft(
         # 重跑对既有 draft 走增量合并：报告层是唯一可编辑层，
         # adoption_status/is_headline/editor 覆盖不因 pipeline 重跑被整表重建。
         report.title = f"{day_key} {workspace.name} 日报"
-        report.summary = "由阶段 5 推荐链路生成的日报草稿。"
+        report.summary = "基于当日采集与推荐结果自动生成，可在此采信、编辑与发布。"
         existing_items = list(
             session.scalars(
                 select(DailyReportItem)

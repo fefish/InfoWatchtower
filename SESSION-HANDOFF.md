@@ -1,6 +1,6 @@
 # InfoWatchtower · 用户 Journal
 
-> 更新时间：2026-07-07。
+> 更新时间：2026-07-08。
 > 本文件用于跨 session 快速恢复上下文，记录用户当前口径、已完成实现、
 > 验证结果和下一步。权威事实仍以 `docs/00-system-design.md`、
 > `docs/implementation/implementation-handoff.md`、`docs/implementation/01-implementation-plan.md`
@@ -401,6 +401,60 @@ W3 收口（2026-07-08 本波）：
   快照，未切 `GET /api/pipeline/scheduler/status`（page-specs §7.3）。
 - 延续项：`install.sh` env 默认时刻 09:00 vs 代码默认 12:00；
   `GET /api/entity-timeline/summary` 缺 workspace membership 断言。
+
+### 3.9 2026-07-08 第四轮设计定稿轮（只改设计文档与机器契约，零实现代码）
+
+背景：用户对推荐系统的严厉批评（"我看你现在的推荐系统做的很烂""不应该是 AI
+做推荐吗""挑选导向应该让用户描述，然后格式化成指标""每个新闻格式化的时候，
+带着不同格式的 json 去格式化"）。四轨设计 + 交叉评审完成，全部达到实现级规格，
+**代码一行未写**；实施拆包见 `docs/implementation/01-implementation-plan.md` §18
+（WP4-A…WP4-F，含依赖图与公共门禁）。
+
+- **R1 AI 推荐核心**（`docs/backend/recommendation-scoring-design.md` 全面重写
+  19 节 + 新契约 `config/contracts/recommendation_ranking.json`）：§2 基于真实
+  代码审计的现状诚实评估（推荐决策 0 次 LLM 参与、`content_scorer_v2.json`
+  `prompt_template` 是死配置、文档/代码公式漂移、三处排序违例）；三层管线——
+  L1 规则粗排原样保留为 `coarse_score`（回归红线：无导向时排序与现状逐位一致）、
+  L2 embedding 语义层默认关闭、L3 LLM listwise 分窗精排（确定性洗牌、锚点校准、
+  缓存、漂移监控）；`recommendation_policy` 自然语言导向 → rubric 编译（幂等
+  预览 + fingerprint 生效 + 版本化审计）；`final_score` 融合与排序一致性契约；
+  预算分桶（`generation_daily_usage` 加 `purpose` 列：generation/rerank/
+  rubric_compile 互不挤占）与八条降级路径；反馈按日再估计源先验/主题权重
+  （`feedback-heat-scoring.md` §10，旧建议公式作废）。
+- **R2 provider 目录 + 密钥落库**（`generation-provider-design.md` §8-§10 +
+  新契约 `config/contracts/llm_providers.json`）：9 个 provider 预设目录
+  （openai/anthropic/deepseek/moonshot/zhipu_glm/minimax/openrouter/ollama/
+  custom 兜底，同一 OpenAI-compatible 客户端）；**决策变更 D-2026-07-08-KEY**
+  显式推翻"key 只在 env"：`llm_provider_credentials` Fernet 加密落库（HKDF 自
+  `AUTH_SESSION_SECRET` 派生、MultiFernet 轮换、masked 后 4 位回显、整表排除
+  同步/导出）；解析优先级凭据 → env；"enabled 且 env 无 key" 拒启降级 WARNING。
+- **R4 逐条模板格式化**（reports-editorial §8.1 + report-renditions §10）：
+  **决策变更 D-2026-07-08-TPL** 推翻首版"投影优先"——每条新闻 × 每个启用模板
+  格式带模板 JSON 调一次 LLM，模板字段全 AI 填充、`map_from` 降级为提示上下文 +
+  降级兜底、投影只排版；预算公式 `N×(1+F_daily)+W×F_weekly` 入生成预算闸门；
+  §10.7 验收断言修订版为实现重对齐基准。
+- **R3 报告页 IA + 文案审计**（frontend-product-design §13/§14 + page-specs +
+  archive-knowledge-design §5.1 + `frontend_control_governance.json`
+  `copy_audit_rule`）：ReportTimeline 组件规范（按月分组时间轴/无限滚动/跳月/
+  草稿权限，v1 零新增后端，复用 `GET /api/report-archive`）；日报/周报页
+  「list* + 时间轴侧栏」IA 与顶部纯前端筛选条；详情区 spacing 逐元素 token 修正
+  （根因 `.daily-report-card` 无 padding）；`/historical-reports` 重定位为跨来源
+  归档（已发布条目深链跳报告页）；文案审计规则 + 8 条现存违例清单（7 前端 +
+  1 后端 preflight）。
+- **交叉评审修正**（本轮收口）：R1 精排/编译改为显式走 R2 统一解析链
+  `resolve_generation_config`（凭据 → env），删除与 D-2026-07-08-KEY 矛盾的
+  "key 永不进 DB"表述；R3 Dashboard 头条断言对齐 R1 契约
+  `ordering_consistency.dashboard_headline_candidates`（今日集合 top 6 按
+  `final_score` 降序，废除今日/历史两层混排——含非今日候选不渲染断言）；
+  /news 候选池默认 `score_desc` 补进 page-specs §8；R4 预算与 R1 purpose 分桶
+  互引补齐（renditions/generation-provider/workspace_model 四处）；
+  00-system-design §5 模板段落与 §6 生成模型卡描述从旧语义更新为两条决策变更；
+  SDD §5.3/§5.4 同口径增量。
+
+实施待启动状态：**下一轮直接按 §18 的 WP4-A…WP4-F 领任务实现**；WP4-D/F 前端
+可先行，WP4-A 可在 WP4-B 前按纯 env 链先行，WP4-C 与 WP4-A 共享 purpose 迁移。
+实现时同步迁移契约状态位（`recommendation_ranking.json`、`llm_providers.json`、
+`report_renditions.json` `generation_template`、`copy_audit_rule`）。
 
 ## 4. 用户发现的问题与闭环状态
 

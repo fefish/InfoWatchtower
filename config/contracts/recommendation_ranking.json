@@ -1,0 +1,217 @@
+{
+  "schema_version": 1,
+  "status": "design_final_pending_implementation",
+  "description": "AI recommendation core: three-layer ranking pipeline (rule coarse ranking -> optional semantic layer -> LLM listwise rerank), workspace recommendation_policy with editorial-guidance rubric compilation, final_score fusion, ordering consistency, budget gates and degradation paths. Design doc: docs/backend/recommendation-scoring-design.md",
+  "core_rule": "LLM rerank only produces ranking signals. It never changes admission_level/admission_pool/noise_types/reject_reasons, never writes raw_items/news_items/dedupe_groups, and never blocks the pipeline: any failure, disabled policy or exhausted budget degrades to pure coarse ranking (final_score = coarse_score). When recommendation_policy is absent or llm_rerank_enabled=false, item ordering must be bit-for-bit identical to the current rule-only implementation (regression red line).",
+  "pipeline_layers": {
+    "l1_coarse": {
+      "rule": "Current rule/keyword scoring is retained unchanged as the coarse layer and behavioral baseline.",
+      "coarse_score_formula": "coarse_score = admission_score*0.35 + quality_score*0.15 + topic_score*0.20 + freshness_score*0.10 + source_score*0.10 + heat_score*0.10 + feedback_score*0.05 + diversity_score; caps: admission=R -> min(coarse_score,25), admission=P3 -> min(coarse_score,44)",
+      "source_prior": "source_score adds source_prior_delta from the latest source_score_snapshots row (0 when no snapshot exists, preserving current behavior)"
+    },
+    "l2_semantic": {
+      "enabled_by_default": false,
+      "activation": "EMBEDDING_ENABLED=true at instance level AND recommendation_policy.semantic_layer_enabled=true AND provider probe succeeds; otherwise zero calls, zero table writes",
+      "uses": [
+        "near-duplicate advisory: cosine >= 0.92 within same workspace+day_key recorded in scorer_breakdown_json.semantic_duplicate_of; never mutates dedupe_groups",
+        "topic clustering (greedy, threshold 0.85) recorded in run summary_json.semantic_clusters for diversity and UI grouping"
+      ],
+      "env_family": "EMBEDDING_ENABLED / EMBEDDING_BASE_URL / EMBEDDING_API_KEY(_REF) / EMBEDDING_MODEL / EMBEDDING_DIM; secret rules identical to GENERATION_API_KEY (credential_ref, startup fail-fast, redaction, never in DB/Git/sync/API)"
+    },
+    "l3_llm_rerank": {
+      "trigger": "llm_rerank_enabled=true AND rubric_status=active AND generation provider usable AND rerank budget not exhausted",
+      "input_set": "top-M candidates by coarse_score desc among admission_level in (P0,P1,P2); R and P3 never enter rerank",
+      "top_m_default": 60,
+      "window": {
+        "size_default": 12,
+        "anchor_overlap": 2,
+        "stride": "window_size - anchor_overlap",
+        "partition": "candidates ordered by coarse_score desc as c1..cM; window k covers indices [k*stride, k*stride+W-1] until all M covered; last window may be short",
+        "shuffle": "in-window prompt order shuffled deterministically with seed sha256(run_key + ':' + window_index); output aligned by candidate id, never by position"
+      },
+      "prompt_version": "rerank_prompt_v1",
+      "output_per_item": {
+        "relevance_score": "integer 0..100",
+        "rubric_hits": "list of rubric topic/exclusion/boost codes",
+        "reason": "one sentence <= 60 chars"
+      },
+      "calibration": "delta_0=0; for k>=1 delta_k = mean(prev_calibrated_anchor_score - raw_anchor_score) (carry delta_{k-1} if anchors missing or previous window failed); calibrated = clamp(round(raw + delta_k), 0, 100); anchor items keep the score from their first window",
+      "failure_policy": "JSON parse failure or id mismatch -> retry same window once (retry counts against budget); still failing -> window items llm_rerank_status=window_failed and fall back to coarse; failed windows > 1/2 of total -> run llm_rerank.status=failed and all items fall back",
+      "hard_exclusion_effect": "rubric exclusion with severity=hard hit -> llm_relevance_score capped at 20; admission_level unchanged",
+      "result_cache": "same news_item_id + rubric_version + prompt_version scored within 7 days is reused as llm_rerank_status=cached with zero calls",
+      "drift_monitoring": "run summary records llm_score_mean/llm_score_std; std<5 -> low_variance=true; |mean - mean(last 7 scored runs)|>15 -> drift_alert=true; v1 alerts only, no score reshaping"
+    }
+  },
+  "final_score_fusion": {
+    "formula_with_llm": "final_score = round(fusion_weights.llm * llm_relevance_score + fusion_weights.coarse * coarse_score, 2)",
+    "formula_without_llm": "final_score = coarse_score",
+    "default_weights": { "llm": 0.6, "coarse": 0.4 },
+    "weights_constraint": "each in 0..1 and sum must equal 1.0 (tolerance 0.001), otherwise PATCH answers 422",
+    "explainable_fields": [
+      "coarse_score",
+      "llm_relevance_score",
+      "llm_rerank_status",
+      "llm_rerank_reason",
+      "rubric_hits_json",
+      "rubric_version",
+      "final_score",
+      "recommendation_reason"
+    ]
+  },
+  "recommendation_policy": {
+    "stored_at": "workspaces.config_json.recommendation_policy (same level as label_policy/feedback_policy/report_policy/schedule_policy/generation_policy)",
+    "default": {
+      "guidance": { "want": "", "avoid": "", "boost": "" },
+      "active_rubric": null,
+      "rubric_version": 0,
+      "rubric_status": "none",
+      "llm_rerank_enabled": false,
+      "rerank_top_m": 60,
+      "rerank_window_size": 12,
+      "daily_rerank_call_budget": 60,
+      "fusion_weights": { "llm": 0.6, "coarse": 0.4 },
+      "semantic_layer_enabled": false
+    },
+    "field_rules": [
+      "guidance.want/avoid/boost: str <= 2000 chars each; natural-language editorial guidance (what we want / what we do not want / bonus signals).",
+      "active_rubric: null or rubric JSON matching rubric_schema; writable only via the activate-rubric action, never via plain PATCH.",
+      "rubric_version: int >= 0, incremented by 1 on each activation; 0 means never activated.",
+      "rubric_status: none|active (previews are not persisted into the policy).",
+      "llm_rerank_enabled: bool, default false; false forces final_score = coarse_score (regression baseline).",
+      "rerank_top_m: int 10..200; rerank_window_size: int 6..20; daily_rerank_call_budget: null|int 1..500 (null = unlimited, not recommended).",
+      "Out-of-range values answer 422; payloads hitting secret-like detection (privacy.py) answer 422; every write is audited as workspace.recommendation_policy.update with before/after snapshots.",
+      "Policies never leak across workspaces; rubric topic codes are never written to generated_news.category or company SQL category (planning_intel stays on the 10 AI categories)."
+    ]
+  },
+  "rubric_schema": {
+    "schema_version": 1,
+    "fields": {
+      "topics": "3..12 items of {code: ^[a-z0-9_]{2,32}$ unique, label: str, weight: float 0.0..5.0, keywords_hint: [str]}",
+      "exclusions": "0..10 items of {code, rule: natural language, severity: hard|soft}; hard hit caps llm_relevance_score at 20",
+      "boost_signals": "0..8 items of {code, description, bonus: int 1..10}",
+      "scoring_dimensions": "must include relevance; codes from relevance|evidence|impact|timeliness|actionability; weights sum to 1.0",
+      "language": "zh|en",
+      "source_guidance_fingerprint": "sha256 of canonical guidance input"
+    },
+    "validation": "compiled output is strictly validated: unknown keys stripped, missing required keys reject the compile result (retry once, then 502)"
+  },
+  "rubric_compile": {
+    "endpoint": "POST /api/workspaces/{code}/recommendation-policy/compile-rubric (workspace admin+)",
+    "fingerprint": "sha256(canonical_json(guidance) + rubric schema_version + compile_prompt_v1)",
+    "idempotent_preview": "same guidance compiles to the same fingerprint and rubric; a cache hit in recommendation_rubric_compiles returns the stored artifact with zero model calls and never changes active_rubric or rubric_version",
+    "budget": "compile calls are metered as generation_daily_usage purpose=rubric_compile with a fixed non-configurable cap of 20 per workspace per day",
+    "response": { "rubric": "object", "fingerprint": "sha256:...", "persistence": "not_persisted", "cached": "bool" }
+  },
+  "rubric_activate": {
+    "endpoint": "POST /api/workspaces/{code}/recommendation-policy/activate-rubric (workspace admin+)",
+    "rule": "fingerprint must match a compile record of this workspace created within 7 days, otherwise 422; on success active_rubric is replaced, rubric_version += 1, rubric_status=active",
+    "audit": "workspace.recommendation_rubric.activate with before/after {rubric_version, fingerprint}"
+  },
+  "default_guidance": {
+    "planning_intel": {
+      "want": "AI 工程能力与基础设施、模型训练/推理与服务加速、智能体平台、AI/通算硬件与芯片、核心网与通信系统架构、标准与产业联盟进展、厂商技术路线",
+      "avoid": "融资/财报/股价等纯商业新闻、消费电子与个人数码、活动报名与营销宣传、航天火箭等离题工程、生物医学与纯学术离题论文、法律/版权元讨论、标题党与未经证实爆料",
+      "boost": "一手技术证据（论文/官方工程博客/benchmark）、架构与成本/能耗/性能量化数据、开源可复现产物、厂商官方技术白皮书",
+      "compiled_artifact": "config/scoring/rubrics/planning_intel_default.json (generated and human-reviewed during implementation)",
+      "compatibility": "llm_rerank_enabled defaults to false, so planning_intel ordering without explicit opt-in stays identical to the current rule-only behavior"
+    }
+  },
+  "ordering_consistency": {
+    "rule": "final_score desc is the single ordering key for every candidate-facing surface; ties broken by news_item_id asc (stable)",
+    "surfaces": {
+      "dashboard_headline_candidates": "set = latest run candidates with day_key=today and admission in (P0,P1,P2), top 6 by final_score desc; the current today-first mixed sort is abolished (non-today candidates simply do not enter the set)",
+      "candidate_pool": "GET /api/news-items/dedupe-groups default sort becomes score_desc (final_score desc); other sorts only on explicit selection",
+      "daily_report_selection": "daily draft item sort_order is assigned by final_score desc over the selected set",
+      "today_overview": "all candidate-type cards on the dashboard order by final_score desc",
+      "recommendation_run_items": "rank = ordinal of final_score desc"
+    },
+    "empty_metrics": "score-like metrics with no data must be hidden, never rendered as zero: rating_count=0 hides the average-rating metric entirely (current '0.0 平均评分' is a violation); missing final_score renders as 未评分, not 0.0",
+    "frontend_guard": "assertions live in DashboardPage.spec.ts / NewsPage.spec.ts / DailyReportsPage.spec.ts / RecommendationsPage.spec.ts"
+  },
+  "budget_and_degradation": {
+    "accounting": {
+      "table": "generation_daily_usage",
+      "change": "add column purpose String(24) default 'generation'; unique constraint becomes (workspace_code, day_key, purpose); existing rows backfilled purpose='generation'",
+      "purposes": {
+        "generation": "quota from generation_policy.daily_generation_budget (unchanged)",
+        "rerank": "quota from recommendation_policy.daily_rerank_call_budget (default 60); every window call and retry counts, success or failure",
+        "rubric_compile": "fixed cap 20 per workspace per day, not configurable"
+      },
+      "isolation": "the three purpose buckets never consume each other's quota"
+    },
+    "degradation_paths": [
+      { "case": "policy absent or llm_rerank_enabled=false", "behavior": "pure coarse ranking", "summary_mark": "llm_rerank.status=disabled" },
+      { "case": "no active rubric", "behavior": "pure coarse ranking", "summary_mark": "llm_rerank.status=disabled, reason=no_active_rubric" },
+      { "case": "provider unusable", "behavior": "zero calls, pure coarse ranking", "summary_mark": "llm_rerank.status=skipped, skip_reason=provider_unavailable" },
+      { "case": "budget exhausted before run", "behavior": "zero calls, pure coarse ranking", "summary_mark": "llm_rerank.status=skipped, skip_reason=budget_exhausted" },
+      { "case": "budget exhausted mid-run", "behavior": "scored windows kept, remaining fall back to coarse", "summary_mark": "llm_rerank.status=partial, skip_reason=budget_exhausted" },
+      { "case": "single window failed after retry", "behavior": "window items fall back to coarse", "summary_mark": "windows_failed incremented" },
+      { "case": "failed windows > 1/2", "behavior": "all items fall back to coarse", "summary_mark": "llm_rerank.status=failed" },
+      { "case": "compile output invalid twice", "behavior": "502, active rubric untouched", "summary_mark": "n/a (no run involved)" }
+    ],
+    "non_blocking_rule": "no degradation path may block the recommendation run or daily draft creation"
+  },
+  "data_model_deltas": {
+    "recommendation_items_new_columns": [
+      "coarse_score Float default 0.0 (backfill existing rows with final_score)",
+      "llm_relevance_score Float nullable",
+      "llm_rerank_status String(24) default 'not_run' enum not_run|scored|cached|window_failed|skipped|disabled",
+      "llm_rerank_reason Text default ''",
+      "rubric_hits_json JSON default []",
+      "rubric_version Integer default 0"
+    ],
+    "recommendation_runs_summary_json_keys": "llm_rerank: {status: scored|partial|skipped|disabled|failed, skip_reason, windows_total, windows_failed, calls_used, rubric_version, llm_score_mean, llm_score_std, low_variance, drift_alert}",
+    "new_tables": [
+      "recommendation_rubric_compiles(id, workspace_code, fingerprint unique-with-workspace, guidance_json, rubric_json, prompt_version, model_called, created_by, created_at)",
+      "source_score_snapshots(id, workspace_code, data_source_id, window, recommended_count, adopted_count, rejected_count, like_count, adopt_rate, reject_rate, like_rate, source_prior_delta, day_key, computed_at; unique(workspace_code, data_source_id, window, day_key))",
+      "rubric_topic_priors(id, workspace_code, rubric_version, topic_code, pos_count, neg_count, effective_weight, day_key, computed_at; unique(workspace_code, rubric_version, topic_code, day_key))",
+      "news_item_embeddings(id, news_item_id, model, dim, vector_json, created_at; unique(news_item_id, model); written only when L2 enabled)"
+    ]
+  },
+  "feedback_reestimation": {
+    "job": "feedback_reaggregate_daily at 02:00 Asia/Shanghai over a trailing 14-day window; idempotent (same day_key rerun overwrites that day's snapshots)",
+    "source_prior_formula": "adopt_rate = adopted(adoption_status=2 in published reports)/max(1,recommended); reject_rate = rejected(adoption_status=3)/max(1,recommended); like_rate = min(1, likes/max(1,recommended)); source_prior_delta = clamp(8*adopt_rate - 6*reject_rate + 2*like_rate, -6.0, +6.0)",
+    "topic_weight_formula": "effective_weight = clamp(authored_weight * (1 + 0.1*(pos-neg)/max(5,pos+neg)), 0.5*authored_weight, 1.5*authored_weight); counters reset when rubric_version changes",
+    "anti_oscillation": "full re-estimation daily (never cumulative); deltas and multipliers are hard-bounded; authored rubric weights are never rewritten",
+    "prohibitions": [
+      "recommendation module never mutates comments, notifications or strategy-loop state",
+      "feedback never writes back into the authored rubric or guidance"
+    ]
+  },
+  "api": {
+    "read_policy": "GET /api/workspaces/{code}/recommendation-policy (workspace viewer+; response adds resolved {llm_rerank_available, provider_usable, rerank_calls_used_today, rerank_budget, active_rubric_version, semantic_layer_available}; never any key material)",
+    "update_policy": "PATCH /api/workspaces/{code}/recommendation-policy (workspace admin+ or super_admin; 422 on range/secret-like violations; audited)",
+    "compile_rubric": "POST /api/workspaces/{code}/recommendation-policy/compile-rubric (workspace admin+; persistence=not_persisted)",
+    "activate_rubric": "POST /api/workspaces/{code}/recommendation-policy/activate-rubric (workspace admin+; fingerprint gate; audited)",
+    "run_items_response_additions": [
+      "coarse_score",
+      "llm_relevance_score",
+      "llm_rerank_status",
+      "llm_rerank_reason",
+      "rubric_hits",
+      "rubric_version"
+    ]
+  },
+  "secrets_boundary": {
+    "rerank_and_compile": "reuse the unified generation provider resolution chain via resolve_generation_config (workspace generation_policy.credential_id credential row -> GENERATION_* instance env; see llm_providers.json resolution_priority; degrades to the pure env chain before D-2026-07-08-KEY lands). The recommendation module introduces no new secret fields; plaintext keys never enter recommendation_policy, Git, sync feeds or API responses (at-rest keys only as llm_provider_credentials Fernet ciphertext governed by R2); credential disabled/undecryptable counts as provider unusable (skip_reason=provider_unavailable)",
+    "embedding": "EMBEDDING_API_KEY(_REF) is instance env only, same credential_ref/fail-fast/redaction rules as GENERATION_API_KEY; disabled by default",
+    "guidance": "guidance text is business configuration, not a secret, but all policy payloads pass secret-like detection (422 on hit) and guidance/rubric never enter company SQL or exports"
+  },
+  "acceptance_assertions": [
+    "baseline_no_guidance: with recommendation_policy absent or llm_rerank_enabled=false, recommendation_items rank sequence and final_score on a fixed fixture are identical to the current rule-only implementation",
+    "budget_exhausted_degrade: when the rerank budget is exhausted the run completes, llm_rerank.status in (skipped, partial) with skip_reason=budget_exhausted, and non-reranked items keep final_score=coarse_score",
+    "provider_down_degrade: with provider unusable there are zero outbound calls, llm_rerank.status=skipped(provider_unavailable), and the run completes",
+    "rubric_compile_idempotent_preview: compiling identical guidance twice returns the same fingerprint and rubric, the second call makes zero model calls (cache hit), and active_rubric/rubric_version are unchanged",
+    "rubric_activate_versioned_audited: activation bumps rubric_version by 1 and writes audit action workspace.recommendation_rubric.activate with before/after version+fingerprint; unknown or expired fingerprints answer 422",
+    "window_deterministic: for a fixed run_key the window partition, anchors and in-window shuffled order are exactly reproducible",
+    "window_failed_fallback: a window failing after one retry marks its items llm_rerank_status=window_failed with final_score=coarse_score; more than half failed windows marks the run llm_rerank.status=failed with full fallback",
+    "fusion_formula: scored items satisfy final_score = round(0.6*llm_relevance_score + 0.4*coarse_score, 2) under default weights; PATCH with fusion weights not summing to 1.0 answers 422",
+    "ordering_consistency: dashboard headline candidates, candidate pool default sort, daily draft sort_order and today-overview cards all order by final_score desc, guarded by frontend specs",
+    "empty_metric_hidden: rating_count=0 renders no average-rating metric (no '0.0 平均评分'); missing final_score renders 未评分 instead of 0.0",
+    "rerank_never_changes_admission: L3 leaves admission_level/admission_pool/noise_types/reject_reasons untouched, never writes raw/news/dedupe, and R/P3 items never enter the rerank input set (caps 25/44 preserved)",
+    "feedback_reestimate_bounded: source_prior_delta stays within [-6,6], effective topic weights within [0.5w,1.5w], daily re-estimation is a full recompute, and authored rubric weights are never rewritten",
+    "budget_buckets_isolated: rerank calls increment generation_daily_usage purpose=rerank without touching purpose=generation counts, and vice versa; rubric_compile is capped at 20/day",
+    "secrets_boundary: recommendation-policy endpoints answer 422 on secret-like payloads, responses contain no key material, and no new secret fields are introduced by rerank/compile",
+    "existing_guarantees_hold: runs only process target-day active winners; admission, score breakdowns and reject reasons are persisted; candidates trace news_items -> raw_items -> data_sources; source daily limit is enforced with recorded reasons; old run snapshots are never overwritten by new feedback; workspace policies never cross-contaminate; scorer-policy/scorer-preview/observation-pool-review v1 behavior is unchanged"
+  ]
+}

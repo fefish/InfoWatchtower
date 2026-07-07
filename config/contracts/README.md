@@ -36,7 +36,9 @@ contracts 管“代码必须长什么样”
 - `search.json`：全局检索 API、对象类型、权限过滤、runtime capability 和顶部搜索出现条件。
 - `frontend_control_governance.json`：全局前端控件、按钮/RouterLink 行为、假控件扫描和测试证据规则。
 - `label_model.json`：可配置标签集、标签和内容标签绑定。
-- `report_renditions.json`：成稿格式注册表、rendition 投影字段和导出边界（rendition 是投影不是副本）。
+- `report_renditions.json`：成稿格式注册表、rendition 投影字段和导出边界（rendition 是投影不是副本）；`generation_template` 逐条格式化语义（决策变更 D-2026-07-08-TPL）。
+- `llm_providers.json`：LLM provider 预设目录（市面常用 8 家 + custom 兜底）、`llm_provider_credentials` 密钥加密落库契约、解析优先级与 masked 回显规则（决策变更 D-2026-07-08-KEY，状态 designed 待实现）。
+- `recommendation_ranking.json`：AI 推荐核心——三层推荐管线（规则粗排/可选语义层/LLM listwise 精排）、工作台 `recommendation_policy` 与内容导向 rubric 编译、final_score 融合、排序一致性、预算闸门与降级路径（状态 `design_final_pending_implementation`）。
 - `extension_points.json`：数据源、推荐、生成、导出、登录、板块、同步的扩展点。
 - `strategic_loop.json`：外部信号到洞察、需求、任务的规划部闭环。
 - `sync_strategy.json`：公网/内网多环境同步策略、同步表和同步包格式。

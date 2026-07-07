@@ -775,3 +775,176 @@ WP3-G 的 Modal 落位依赖 WP3-E（功能可先行）
 
 契约共享文件（`workspace_model.json` 被 A/B/G 同时修改状态位）合并时以
 capability-map §4.3 行的迁移为准，避免互相覆盖。
+
+## 18. 第四轮实施工作包（2026-07-08 设计定稿 → 待实现）
+
+2026-07-08 设计轮（R1 AI 推荐核心 / R2 provider 目录与密钥落库 / R3 报告页 IA
+与文案审计 / R4 逐条模板格式化）+ 交叉评审已把四轨能力按实现级规格定稿，本章
+拆成可并行领取的实施工作包。规则与 §17 相同：
+
+- 每个 WP 的唯一验收基准是「设计事实源 §号 + 契约键」，不得实现成与设计有出入
+  的"看起来可用"版本；实现后把 `api-and-ui-implementation.md` 待实现端点移入
+  已实现表、把 capability-map 对应缺口行移入已实现区、把 page-specs 对应
+  「未做」改「已做」。
+- 契约状态位同步：实现落地时把 `recommendation_ranking.json`
+  （`design_final_pending_implementation`）、`llm_providers.json`（designed 待
+  实现）、`report_renditions.json` `generation_template`（修订待重对齐）、
+  `frontend_control_governance.json` `copy_audit_rule`（design finalized）的
+  状态改为实现事实；`deployment_modes.json` `startup_failfast_rules` 与
+  `deploy_checks.py` 保持 1:1（WP4-B 改动拒启规则时同步）。
+- 两条决策变更已显式记录，实现不得回退：D-2026-07-08-KEY（密钥可加密落库，
+  `generation-provider-design.md` §9.1）、D-2026-07-08-TPL（逐条 × 逐格式
+  AI 格式化，`report-renditions-design.md` §10.8）。
+- 公共门禁（每个 WP 提交前必跑）：
+
+```bash
+cd backend && .venv/bin/python -m pytest -q        # 严禁在仓库根跑
+cd frontend && npx vitest run && npm run build
+python3 scripts/validate_docs_governance.py
+python3 scripts/validate_frontend_controls.py
+for f in config/contracts/*.json; do python3 -m json.tool "$f" > /dev/null; done
+scripts/validate_company_sql.py 相关用例（WP4-A/C 必跑）
+git diff --check
+```
+
+### WP4-A 推荐精排 + 内容导向编译（后端）
+
+- 范围：`generation_daily_usage` 加 `purpose` 列与 unique 约束迁移（存量回填
+  `purpose='generation'`）；`recommendation_items` 六个新列（`coarse_score`
+  回填 = `final_score`、`llm_relevance_score`、`llm_rerank_status`、
+  `llm_rerank_reason`、`rubric_hits_json`、`rubric_version`）；新表
+  `recommendation_rubric_compiles` / `source_score_snapshots` /
+  `rubric_topic_priors`（`news_item_embeddings` 仅 L2 启用需要，可留迁移位）；
+  `recommendation_policy` 读写 + `compile-rubric` + `activate-rubric` 四端点
+  （校验/审计/幂等预览/fingerprint 门禁）；L3 listwise 分窗精排（确定性洗牌、
+  锚点校准、失败重试、结果缓存、漂移监控）与 `final_score` 融合；选择遍历顺序
+  切 `(admission_order, -final_score)`；每日 job `feedback_reaggregate_daily`
+  （源先验 + 主题权重快照）；默认 rubric 编译产物人工 review 后固化
+  `config/scoring/rubrics/planning_intel_default.json`；`content_scorer_v2.json`
+  `prompt_template` 标注 deprecated。
+- 事实源/契约：`docs/backend/recommendation-scoring-design.md` §4-§11/§17、
+  `docs/backend/feedback-heat-scoring.md` §10；
+  `config/contracts/recommendation_ranking.json`（全部键）。
+- 文件域：`backend/app/recommendations/`、`backend/app/scoring/`、
+  `backend/app/llm/budget.py`（purpose 分桶）、`backend/app/api/routes/
+  {recommendations,workspaces}.py`、`backend/app/workers/scheduler.py`（每日
+  job）、`backend/app/models/`、`backend/alembic/versions/`、`backend/tests/`、
+  `config/scoring/rubrics/`。
+- 验收：recommendation-scoring-design §18 断言 1-15 全部有对应 pytest；
+  断言 1（无导向时 rank 序列与现状逐位一致）必须用固定 fixture 先写、先绿，
+  再动排序链路；精排/编译走 `resolve_generation_config` 统一解析链
+  （凭据 → env，见 §17 D1）。
+
+### WP4-B Provider 预设目录 + 密钥落库 + 生成模型卡（前后端）
+
+- 范围：`llm_provider_credentials` 表/迁移；`backend/app/core/crypto.py`
+  （HKDF-SHA256 派生 + MultiFernet + 启动重加密）；`GET /api/generation/
+  providers` 目录投影；credentials CRUD（super_admin，masked 回显，审计）；
+  `resolve_generation_config` 凭据层（credential → env，`key_source` 值域，
+  `credential_missing` 不回落 env）；`generation_policy.credential_id`；ping
+  支持 `credential_id`；`GENERATION_PROVIDER` 值域扩展 + 「enabled 且 env 无
+  key」从拒启降级 WARNING（同步 `deployment_modes.json`
+  `startup_failfast_rules`）；`/workspace-settings`「生成模型」卡改造为
+  provider 下拉 + base_url 预填 + key 写入 + 模型下拉 + 凭据选择 + 测试连通。
+- 事实源/契约：`docs/backend/generation-provider-design.md` §8-§10；
+  `config/contracts/llm_providers.json`、`config/contracts/workspace_model.json`
+  `generation_policy`、`config/contracts/deployment_modes.json`。
+- 文件域：`backend/app/core/{crypto,config,deploy_checks,credentials}.py`、
+  `backend/app/llm/provider.py`、`backend/app/api/routes/generation.py`、
+  `backend/app/models/`、`backend/alembic/versions/`、`backend/tests/`、
+  `frontend/src/pages/WorkspaceSettingsPage.vue` 及 spec、`frontend/src/api/`。
+- 验收：generation-provider-design §10 断言 1-8 全绿（含密钥轮换回归与
+  sync/导出 grep 不到凭据表断言）；§7 基线断言不改仍绿。
+
+### WP4-C 逐条模板格式化重对齐（后端）
+
+- 范围：按 D-2026-07-08-TPL 重对齐 `backend/app/reports/generation_template.py`
+  （判定函数 → 格式化/降级判定、`generate_template_extras` 全字段 outputSchema
+  + map_from `reference`、`render_template_item` 只排版）；周报逐条格式化；
+  `validate-template` 响应字段语义与成本提示；`test_generation_template.py`
+  按 §10.7 修订断言重写。
+- 事实源/契约：`docs/backend/reports-editorial-design.md` §8.1、
+  `docs/backend/report-renditions-design.md` §10（§10.7 修订断言、§10.8）；
+  `config/contracts/report_renditions.json` `generation_template`。
+- 文件域：`backend/app/reports/`、`backend/app/llm/`、
+  `backend/app/api/routes/{reports,renditions}.py`、`backend/tests/`。
+- 验收：report-renditions-design §10.7 修订版断言 1-10 全绿；断言 5（公司 SQL
+  逐字节不变）与 `scripts/validate_company_sql.py` 必须有负向用例；调用计数
+  断言（1/6/9 条）用 fixture transport 精确核对。
+
+### WP4-D 报告页时间轴 + 筛选 + 余量修正（前端）
+
+- 范围：`frontend/src/components/ReportTimeline.vue`（按月分组、组头吸顶、
+  状态点/条数徽章、无限滚动、快速跳月、失败重试行、空态）；日报/周报页迁移
+  「list* + 时间轴侧栏」IA（已发布层 `GET /api/report-archive`、草稿层现有
+  reports API、viewer 不渲染草稿节点）；顶部筛选条（标签胶囊/板块/关键词，
+  纯前端过滤）；详情区 spacing 逐元素修正（§13.3 token 表，删
+  `.editorial padding-right: 0`）；文案违例 #1-#7 前端替换。
+- 事实源/契约：`docs/product/frontend-product-design.md` §13/§14、
+  `docs/product/page-specs/frontend-page-specs.md` §10/§12、
+  `docs/backend/archive-knowledge-design.md` §5.1；
+  `config/contracts/frontend_control_governance.json` `copy_audit_rule`。
+- 文件域：`frontend/src/components/ReportTimeline.vue`（新增）及 spec、
+  `frontend/src/pages/{DailyReportsPage,WeeklyReportsPage}.vue` 及 spec、
+  `frontend/src/pages/WorkspaceSettingsPage.vue`（违例 #7）、
+  `frontend/src/pages/ExportsPage.vue`（违例 #6）、`frontend/src/api/`、
+  `frontend/src/styles/base.css`。
+- 验收：产品设计 §13.5 断言全绿（分组/滚动/跳月/权限/过滤只读/贴边余量）；
+  `npx vitest run && npm run build` 通过。
+
+### WP4-E 排序一致性 + 空指标 + 文案审计看护（前后端）
+
+- 范围：Dashboard 头条候选集合与排序改契约口径（只取 `day_key=今日` 且
+  admission P0/P1/P2 的 top 6 按 `final_score` 降序，非今日候选不入集合，
+  无今日候选渲染空态）；`GET /api/news-items/dedupe-groups` 默认 `sort`
+  切 `score_desc`；日报 draft `sort_order` 按 `final_score` 降序赋值核验；
+  空指标隐藏（`rating_count=0` 不渲染「0.0 平均评分」、`final_score` 缺失
+  显示「未评分」、归档页均值空样本隐藏）；
+  `test_blueprint_page_audit.py` 新增
+  `test_blueprint_user_copy_bans_implementation_terms`（banned_terms/
+  banned_patterns + exemptions + known_violations 收缩基线）；后端 preflight
+  文案违例 #8 替换（错误码与门禁逻辑不动）。
+- 事实源/契约：`config/contracts/recommendation_ranking.json`
+  `ordering_consistency`（排序键名一字不差）、
+  `config/contracts/frontend_control_governance.json` `copy_audit_rule`、
+  page-specs §4.4/§8.3/§10.4。
+- 文件域：`frontend/src/pages/{DashboardPage,NewsPage,DailyReportsPage,
+  HistoricalReportsPage}.vue` 及 spec、`backend/app/api/routes/news.py`、
+  `backend/app/exports/company_sql.py`（仅 345 行文案）、
+  `backend/tests/test_blueprint_page_audit.py`。
+- 验收：契约 `acceptance_assertions` 的 `ordering_consistency` 与
+  `empty_metric_hidden` 两条对应的前端 spec 全绿；文案审计断言以
+  `known_violations` 为只减不增基线，D/E 替换完成后清零收紧。
+
+### WP4-F 历史报告库重定位（前端为主）
+
+- 范围：`/historical-reports` 页头改跨来源定位文案；已发布条目打开动作改
+  深链 `/daily-reports?report_id=...` / `/weekly-reports?report_id=...`（页内
+  不再读当前报告正文）；月份导航收敛为 legacy 视图筛选；summary 卡改
+  current vs legacy 对比形态（空样本隐藏均值）；可选后端增量：
+  `GET /api/report-archive/summary` 支持 `report_type`/`origin` 过滤（做则
+  同步 `config/contracts/archive_knowledge.json`）。
+- 事实源：`docs/product/frontend-product-design.md` §13.4、
+  `docs/product/page-specs/frontend-page-specs.md` §13、
+  `docs/backend/archive-knowledge-design.md` §5.1/§10。
+- 文件域：`frontend/src/pages/HistoricalReportsPage.vue` 及 spec；可选
+  `backend/app/api/routes/operations.py`、`backend/tests/`。
+- 验收：page-specs §13.4 重定位断言全绿（深链跳转/legacy 页内正文/月份导航
+  只在 legacy 视图/页头文案/空样本无 `0.0` 占位）；报告页时间轴不出现
+  legacy 节点（archive-knowledge-design §11 只读断言）。
+
+### 并行与依赖关系
+
+```text
+WP4-B ──（凭据解析链就绪）──→ WP4-A（可先行：B 未落地时精排/编译退化为纯 env 链）
+WP4-A ──（purpose 分桶迁移共享）──→ WP4-C（C 可先行：A 未落地时按现状单桶计数，
+                                     迁移落地后无需改 C 的调用点）
+WP4-A ──（final_score/llm_* 解释列）──→ WP4-E 的推荐页解释字段展示
+        （WP4-E 的排序/空指标/文案部分不依赖 A：final_score 列现已存在）
+WP4-D ──（文案违例 #1-#7 替换）──→ WP4-E 的文案审计断言收紧（先落基线断言可并行）
+WP4-F 独立可并行；其深链目标依赖 WP4-D 的报告页时间轴选中定位（可先跳页后定位）
+```
+
+冲突提示：`generation_daily_usage` 的 purpose 迁移只在 WP4-A 出一份 Alembic
+版本，WP4-C 复用；`workspace_model.json`/`recommendation_ranking.json`/
+`llm_providers.json` 状态位迁移分别归 B/A/B，合并时按契约键逐个对，不整段覆盖。

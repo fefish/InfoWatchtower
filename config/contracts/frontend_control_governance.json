@@ -1,6 +1,56 @@
 {
-  "version": 2,
+  "version": 3,
   "purpose": "Prevent decorative frontend controls from entering the product without a real route, API, contract or test-backed behavior.",
+  "copy_audit_rule": {
+    "status": "design finalized 2026-07-08 (R3); fact source docs/product/frontend-product-design.md section 14; enforcement lands with the copy fixes as test_blueprint_user_copy_bans_implementation_terms in backend/tests/test_blueprint_page_audit.py (assertion design in page-specs section 10.4)",
+    "rule": "User-visible copy (page body text, empty states, hints, buttons, options, title/placeholder/aria-label attributes, and backend Chinese messages surfaced verbatim in the UI) must not contain implementation terms: internal field names, raw enum values, scorer/generator version codes, construction-phase numbering, or internal view code names.",
+    "banned_terms": [
+      "adoption_status",
+      "generation_status",
+      "rule_v1",
+      "fallback_needs_review",
+      "SQL 预览回填",
+      "内网版"
+    ],
+    "banned_patterns": [
+      "采信状态为\\s*[0-9]",
+      "本阶段",
+      "阶段[一二三四五六1-9]"
+    ],
+    "scanned_paths": [
+      "frontend/src/pages",
+      "frontend/src/layouts",
+      "frontend/src/components"
+    ],
+    "scanned_scope": "visible text and title/placeholder/aria-label attributes inside the <template> section of .vue files; plus backend user-facing Chinese detail/preflight messages rendered in the UI",
+    "exemptions": [
+      {
+        "file": "frontend/src/pages/WorkspaceSettingsPage.vue",
+        "marker": "placeholder=\"company_sql_v1\"",
+        "reason": "machine-identifier input example for admins configuring report format codes; codes are the value, not copy"
+      },
+      {
+        "file": "backend/app/exports/company_sql.py",
+        "marker": "sql header comment lines (\"-- 导出规则: ...\")",
+        "reason": "company_sql_v1 export artifact is contract-locked (0505 baseline); SQL file comments are not UI copy and must not be changed for copy rules"
+      },
+      {
+        "scope": "code comments, *.spec.ts files, console/log strings",
+        "reason": "not user-visible"
+      }
+    ],
+    "known_violations": [
+      "frontend/src/pages/DailyReportsPage.vue:1037 SQL 预览回填 page description",
+      "frontend/src/pages/DailyReportsPage.vue:1230 内网版视图 empty state",
+      "frontend/src/pages/WeeklyReportsPage.vue:626 采信状态为 2 / 本阶段 helper line",
+      "frontend/src/pages/WeeklyReportsPage.vue:673 SQL 预览回填 empty state",
+      "frontend/src/pages/WeeklyReportsPage.vue:715 adoption_status = 2 empty state",
+      "frontend/src/pages/ExportsPage.vue:536 adoption_status = 2 description",
+      "frontend/src/pages/WorkspaceSettingsPage.vue:1809 fallback_needs_review option label",
+      "backend/app/exports/company_sql.py:345 rule_v1/fallback preflight message surfaced on /exports (error code rule_fallback_blocked and gate logic stay unchanged; only the message text is rewritten)"
+    ],
+    "known_violations_policy": "known_violations is a shrink-only baseline: the audit test may tolerate exactly these entries until each is replaced per docs/product/frontend-product-design.md section 14.2; new violations must never be added, and once the list is empty the test tightens to a full ban."
+  },
   "modal_rule": {
     "status": "enforced (2026-07, WP3-E); fact source docs/product/frontend-product-design.md section 10; scanner active in scripts/validate_frontend_controls.py (validate_modal_rule)",
     "allowed_overlay_forms": [

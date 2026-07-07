@@ -128,6 +128,8 @@ scripts/   SQL 校验、历史导入、数据回填等工具
 
 推荐模块只处理去重 winner。评分由基础分、源质量、内容关键词、主题权重、噪声规则和专家路由组成。推荐结果写入 `recommendation_items`，同时保存结构化字段，便于前端解释和后续复盘。
 
+目标态（2026-07-08 R1 设计定稿，`design_final_pending_implementation`）：推荐排序升级为三层管线——L1 规则粗排（现状实现原样保留为 `coarse_score`，是无导向时的行为基线）→ L2 可选 embedding 语义层（去重增强与主题聚类，默认关闭）→ L3 按工作台「内容导向 rubric」的 LLM listwise 精排（只对粗排 top-M 分窗打分，预算分桶闸门，任何失败/预算尽降级为纯粗排且不阻断 run）。工作台管理员用自然语言导向经编译生成版本化 rubric，采信/驳回/点赞按日再估计源先验与主题权重；`final_score` 是一切展示排序的唯一键。事实源 `docs/backend/recommendation-scoring-design.md`，契约 `config/contracts/recommendation_ranking.json`。
+
 关键输出：
 
 - `admission_level`
@@ -169,17 +171,27 @@ scripts/   SQL 校验、历史导入、数据回填等工具
   实例总闸与 `DEPLOY_MODE` 能力开关；全部工作台无策略时行为与现状一致。
   事实源：`docs/backend/pipeline-jobs-design.md` §6/§8；契约：
   `config/contracts/workspace_model.json` `schedule_policy`。
-- **模板驱动生成链**：自定义报告格式可携带 JSON/XML 声明式模板
-  （`report_formats.generation_template`，XML 安全解析后统一存规范形），判定规则
-  「投影优先、仅基稿没有的字段追加生成」；增量字段只写
-  `generated_news.template_extras_json[format_code]`，永不进入
+- **模板驱动生成链**（2026-07-08 语义修订 D-2026-07-08-TPL，修订后待实现重对齐）：
+  自定义报告格式可携带 JSON/XML 声明式模板
+  （`report_formats.generation_template`，XML 安全解析后统一存规范形）；生成阶段
+  对每条新闻 × 每个启用模板格式带模板 JSON 调用一次 LLM，模板字段全部由模型
+  按板式填充（`map_from` 降级为提示上下文 + 降级兜底来源），整桶写
+  `generated_news.template_extras_json[format_code]`，投影只排版；模板产出永不进入
   `content_json`/`insight_json`/`category`/去重/推荐/公司 SQL，任何降级都不阻塞
-  `company_sql_v1` 链路与采信。生成 provider 分层配置（key 只在实例 env、工作台
-  `generation_policy` 管模型参数与预算、`POST /api/generation/ping` 连通性自检）
-  见 `docs/backend/generation-provider-design.md`。模板事实源：
+  `company_sql_v1` 链路与采信。生成 provider 分层配置（工作台 `generation_policy`
+  管模型参数与预算、`POST /api/generation/ping` 连通性自检；密钥按决策变更
+  D-2026-07-08-KEY 允许 Fernet 加密落库 `llm_provider_credentials`，实例 env 为
+  兜底，明文永不回显——设计定稿待实现）见
+  `docs/backend/generation-provider-design.md`。模板事实源：
   `docs/backend/reports-editorial-design.md` §8.1、
   `docs/backend/report-renditions-design.md` §10；契约：
-  `config/contracts/report_renditions.json` `generation_template`。
+  `config/contracts/report_renditions.json` `generation_template`、
+  `config/contracts/llm_providers.json`。
+- **报告页时间轴**（2026-07-08 R3 设计定稿，待实现）：日报/周报页自身承担本工作台
+  报告的按月时间轴、标签/板块/关键词筛选与历史全量回溯（已发布层复用
+  `GET /api/report-archive` 只读索引，零新增后端）；`/historical-reports` 重定位为
+  跨来源归档。事实源：`docs/product/frontend-product-design.md` §13、
+  `docs/backend/archive-knowledge-design.md` §5.1。
 
 关键文件：
 

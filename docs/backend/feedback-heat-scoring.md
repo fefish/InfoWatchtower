@@ -165,6 +165,11 @@ decayed_heat_score = heat_score * exp(-age_hours / half_life_hours)
 - 日报推荐 half-life：48 小时。
 - 周报候选 half-life：168 小时。
 
+> 现状（2026-07 R1 审计）：`news_heat_snapshots` 与 `source_score_snapshots`
+> 两张表尚未落地——当前实现对每条候选 live 查询 reactions/comments/ratings
+> （`backend/app/recommendations/service.py` `_heat_score`/`_feedback_score`）。
+> 快照化随 `feedback_reaggregate_daily` job（§10）一并实施。
+
 ## 7. 推荐评分
 
 推荐评分表：`recommendation_items`
@@ -177,22 +182,16 @@ feedback_score
 diversity_score
 source_score
 heat_score
-final_score
+coarse_score              粗排分（2026-07 R1 新增）
+llm_relevance_score       LLM 精排分（可空，2026-07 R1 新增）
+final_score               融合总分（一切排序的唯一依据）
 recommendation_reason
 ```
 
-建议第一阶段总分：
-
-```text
-final_score =
-  quality_score * 0.25
-  + topic_score * 0.25
-  + freshness_score * 0.15
-  + source_score * 0.15
-  + heat_score * 0.10
-  + feedback_score * 0.10
-  + diversity_score
-```
+分数公式的事实源已移至 `docs/backend/recommendation-scoring-design.md`：
+粗排 `coarse_score` 公式见其 §4.2（即当前代码实现的公式），LLM 精排与
+`final_score` 融合公式见其 §6。本文旧版的
+`quality*0.25 + topic*0.25 + ...` 建议公式与代码实现不一致，**已作废**。
 
 说明：
 
@@ -242,6 +241,14 @@ source_score =
 - 进入后续推荐的 `source_score`。
 - 帮管理员发现低质源、失效源、刷屏源。
 
+2026-07 R1 落地版以推荐反哺所需字段为准（机器契约
+`config/contracts/recommendation_ranking.json` `data_model_deltas` 是字段事实源）：
+`workspace_code`、`data_source_id`、`window(14d)`、`recommended_count`、
+`adopted_count`、`rejected_count`、`like_count`、`adopt_rate`、`reject_rate`、
+`like_rate`、`source_prior_delta`、`day_key`、`computed_at`。上表中的
+fetch/extract 成功率等运营指标是后续扩展列，不在 R1 范围。
+`source_prior_delta` 的计算见 §10.1，由推荐粗排层叠加进 `source_score`。
+
 ## 9. 闭环
 
 闭环路径：
@@ -279,3 +286,54 @@ requirements.metadata_json.recommendation_feedback 或 resolved/closed/rejected 
 该路径只把内部需求结论作为后续推荐输入，不覆盖 `raw_items`、`news_items`、评论或已有成稿。
 
 这样系统不是只按抓取内容推荐，而是逐步学习“哪些新闻真的被用户和管理员认为有价值”。
+
+## 10. 周期再估计：源先验与主题权重（2026-07 R1）
+
+设计事实源：`docs/backend/recommendation-scoring-design.md` §8；机器契约：
+`config/contracts/recommendation_ranking.json` `feedback_reestimation`。
+本节是公式细节附录。
+
+执行载体：每日 job `feedback_reaggregate_daily`（scheduler 注册，02:00
+Asia/Shanghai，trailing 14 天窗口，幂等：同 `day_key` 重跑覆盖当日快照）。
+简化的 preference aggregation：周期批量再估计，**不引入在线训练依赖**。
+
+### 10.1 源先验增量（进粗排 `source_score`）
+
+对每个 `(workspace, data_source)`，统计窗口内曾进入推荐的条目：
+
+```text
+adopt_rate  = 被采信条目数(adoption_status=2 且日报已发布) / max(1, 推荐条目数)
+reject_rate = 被剔除条目数(adoption_status=3)              / max(1, 推荐条目数)
+like_rate   = min(1.0, 点赞数 / max(1, 推荐条目数))
+source_prior_delta = clamp(8*adopt_rate - 6*reject_rate + 2*like_rate, -6.0, +6.0)
+```
+
+写入 `source_score_snapshots`；粗排 `_source_score` 读取最新快照叠加
+`source_prior_delta`，叠加后仍 clamp 0..100。**每日全量重估、非累加**，
+delta 有硬界，不会漂移发散；无快照时 delta=0，行为与现状一致。
+
+### 10.2 主题权重乘子（进 LLM 精排 prompt）
+
+仅对 `rubric_status=active` 的工作台。对 rubric 每个 topic code `t`，统计
+窗口内 `rubric_hits_json` 含 `t` 的条目：
+
+```text
+pos_t = 其中被采信的条目数
+neg_t = 其中被剔除的条目数
+effective_weight_t = clamp(
+    authored_weight_t * (1 + 0.1 * (pos_t - neg_t) / max(5, pos_t + neg_t)),
+    0.5 * authored_weight_t,
+    1.5 * authored_weight_t)
+```
+
+- 单次再估计幅度 ≤ ±10%，累计钳制在 authored weight 的 [0.5, 1.5] 倍；
+  用户写的导向是锚，反馈只微调，防振荡。
+- 写入 `rubric_topic_priors` 快照，审计可回溯；`active_rubric` 里的
+  authored weight **永不被改写**。
+- `rubric_version` 变更时统计清零重来。
+
+### 10.3 禁止事项
+
+- 反馈不得直接改写 rubric authored 字段或 guidance 文本。
+- 再估计不得修改历史 `recommendation_items` 快照。
+- 推荐模块不得反向修改评论、通知或 Strategy Loop 状态。

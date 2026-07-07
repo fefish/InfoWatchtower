@@ -219,7 +219,32 @@ GET  /api/audit-logs?workspace_code=...&action=...&object_type=...
 - `POST /api/report-formats/validate-template`：模板干跑校验 + 投影/增量字段划分 +
   preview_item（不落库）；`POST/PATCH /api/report-formats` body 增加
   `generation_template`（locked/builtin 400，契约 `report_renditions.json`
-  `generation_template`）。
+  `generation_template`）。注：2026-07-08 决策变更 D-2026-07-08-TPL 后，响应
+  字段划分语义重定义为「降级可兜底 / 纯生成」并需附成本提示（wire key 不变），
+  随 WP4-C 重对齐。
+
+待实现端点（2026-07-08 第四轮设计定稿，`docs/implementation/01-implementation-plan.md`
+§18；实现后移入上表）：
+
+```text
+# WP4-A 推荐精排 + 内容导向（契约 recommendation_ranking.json）
+GET   /api/workspaces/{code}/recommendation-policy            workspace viewer+
+PATCH /api/workspaces/{code}/recommendation-policy            workspace admin+ 或 super_admin
+POST  /api/workspaces/{code}/recommendation-policy/compile-rubric    workspace admin+
+POST  /api/workspaces/{code}/recommendation-policy/activate-rubric   workspace admin+
+# 既有端点行为增量：GET /api/recommendation/runs/{id}/items 响应增加
+# coarse_score/llm_relevance_score/llm_rerank_status/llm_rerank_reason/
+# rubric_hits/rubric_version；GET /api/news-items/dedupe-groups 默认 sort 切 score_desc
+
+# WP4-B provider 目录 + 凭据落库（契约 llm_providers.json）
+GET    /api/generation/providers                              登录即可读（静态目录）
+GET    /api/generation/credentials                            super_admin 或 editor_admin（masked）
+POST   /api/generation/credentials                            super_admin
+PATCH  /api/generation/credentials/{id}                       super_admin
+DELETE /api/generation/credentials/{id}                       super_admin（软删）
+# 既有端点行为增量：POST /api/generation/ping 增加可选 credential_id；
+# GET generation-policy resolved 增加 key_source/credential_id/credential_options
+```
 
 `POST /api/ingestion/runs` 支持 `concurrency`、`source_timeout_seconds` 和 `max_items_per_source`（单源条数上限，对齐 Tech Insight Loop 的单源上限行为，截断按 feed 新在前顺序）；默认值来自 `INGESTION_CONCURRENCY=8`、`INGESTION_SOURCE_TIMEOUT_SECONDS=25`。RSS/页面/论文 API 适配器统一使用浏览器 User-Agent（`app/adapters/base.py` 的 `BROWSER_FETCH_HEADERS`，与旧系统一致），降低站点反爬 403。`POST /api/ingestion/runs/{id}/retry-failed-sources` 只抽取原 run 中失败源，按低并发长超时重跑，并在新 run 的 `params_json.retry_of_run_id/source_ids` 中记录追溯；无失败源或失败源已停用返回 409，不生成 0 源成功记录。已注册但尚未实现的 stub adapter 会返回每源 `status=skipped_unimplemented` 和 run 汇总 `source_skipped_unimplemented`，不计入成功或失败，前端显示“尚未实现”。`POST /api/ingestion/backfill-runs` 支持 `rss_window/paper_api/archive_page/sitemap/manual_import` 模式；其中 `paper_api` 已支持 arXiv v1、OpenAlex Works v1 和 Semantic Scholar v1，历史补采会把目标日期窗口传给 adapter，并分别生成 arXiv submittedDate 查询、OpenAlex `from_publication_date/to_publication_date` filter 或 Semantic Scholar `publicationDateOrYear` filter；`manual_import` 已支持前端上传/粘贴 CSV/SQL、`POST /api/ingestion/manual-import-preview` 后端预览、逐行错误报告和 API `manual_items` 提交，后端拒绝空条目、缺归属源、非本次启用源和空内容行。第一版仍只承诺把补采结果先写入 `raw_items`，后续复用标准化、去重、推荐和日报链路。
 
