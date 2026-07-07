@@ -29,6 +29,14 @@ from app.models.reports import (
     WeeklyReport,
     WeeklyReportItem,
 )
+from app.models.workspace import Workspace
+from app.reports.generation_template import (
+    build_projection_context,
+    has_generated_fields,
+    render_template_item,
+    template_body_meta,
+    template_fields,
+)
 from app.workspaces.policy import (
     BoardTaxonomy,
     ai_board_taxonomy,
@@ -270,12 +278,45 @@ def build_weekly_rendition(
     return _upsert_rendition(session, context, fmt, adopted)
 
 
+def _maybe_backfill_template_extras(
+    session: Session,
+    workspace_code: str,
+    fmt: ReportFormat,
+    items: list[ReportItem],
+) -> int:
+    """rendition 投影前对缺失/过期的模板增量字段惰性补齐（§10.4.1）。
+
+    provider 未启用/未配 key/预算尽时静默跳过——投影照常产出并标记
+    template_fallback，`regenerate` 在 provider 恢复后走同一入口补齐。
+    """
+    if not has_generated_fields(fmt.generation_template):
+        return 0
+    news_list = [item.generated_news for item in items if item.generated_news is not None]
+    if not news_list:
+        return 0
+    # 延迟导入避免 app.llm <-> app.reports 循环依赖
+    from app.llm.budget import GenerationRuntime
+    from app.llm.provider import resolve_generation_config
+    from app.reports.generation_template import backfill_template_extras
+
+    workspace = session.scalar(select(Workspace).where(Workspace.code == workspace_code))
+    config = resolve_generation_config(workspace=workspace)
+    if not (config.enabled and config.key_configured):
+        return 0
+    runtime = GenerationRuntime(session=session, workspace_code=workspace_code, config=config)
+    generated_total = backfill_template_extras(fmt, news_list, runtime)
+    if generated_total:
+        session.flush()
+    return generated_total
+
+
 def _upsert_rendition(
     session: Session,
     context: RenditionContext,
     fmt: ReportFormat,
     items: list[ReportItem],
 ) -> ReportRendition:
+    _maybe_backfill_template_extras(session, context.workspace_code, fmt, items)
     boards = board_taxonomy_for_workspace(session, context.workspace_code)
     snapshots = [_item_snapshot(item, fmt, boards) for item in items]
     groups = _group_snapshots(snapshots, fmt, boards)
@@ -306,15 +347,24 @@ def _upsert_rendition(
     rendition.title = f"{context.period_key} {context.workspace_name} {fmt.name}"
     rendition.status = "draft"
     rendition.summary_json = _build_summary_json(context, snapshots, board_distribution, headlines)
-    rendition.body_json = {
+    # 带模板的格式：item_fields 由模板字段序派生，body 附模板元数据
+    # 供 MD/HTML 按 label 渲染小节（report-renditions-design §10.4.4）。
+    if fmt.generation_template:
+        item_fields = [str(field["key"]) for field in template_fields(fmt.generation_template)]
+    else:
+        item_fields = list((fmt.item_fields or {}).get("fields") or [])
+    body_json = {
         "format_code": fmt.format_code,
         "group_by": fmt.group_by,
         "board_taxonomy_source": boards.source,
-        "item_fields": list((fmt.item_fields or {}).get("fields") or []),
+        "item_fields": item_fields,
         "headlines": [snapshot["item_id"] for snapshot in headlines],
         "groups": groups,
         "items": {snapshot["item_id"]: snapshot for snapshot in snapshots},
     }
+    if fmt.generation_template:
+        body_json["template"] = template_body_meta(fmt.generation_template)
+    rendition.body_json = body_json
     rendition.generated_by = "rule_projection_v1"
     rendition.generated_at = utc_now()
     session.flush()
@@ -375,7 +425,7 @@ def _item_snapshot(item: ReportItem, fmt: ReportFormat, boards: BoardTaxonomy | 
     insight = resolve_insight(item, boards)
     content = news.content_json or {}
     news_item = news.news_item
-    return {
+    snapshot = {
         "item_id": item.id,
         "generated_news_id": news.id,
         "title": item.editor_title or news.title,
@@ -396,6 +446,40 @@ def _item_snapshot(item: ReportItem, fmt: ReportFormat, boards: BoardTaxonomy | 
         "is_headline": bool(getattr(item, "is_headline", False)),
         "generation_status": news.generation_status,
     }
+    if fmt.generation_template:
+        # 编辑覆盖优先级不变：editor override -> template_extras/generated_news
+        # -> news_items（report-renditions-design §10.4.5）。
+        editor_content = dict(getattr(item, "editor_content_json", None) or {})
+        effective_content = {
+            **{key: str(value or "") for key, value in content.items()},
+            **{key: str(value) for key, value in editor_content.items() if str(value or "").strip()},
+        }
+        context = build_projection_context(
+            title=str(snapshot["title"] or ""),
+            summary=str(snapshot["summary"] or ""),
+            key_points=str(getattr(item, "editor_key_points", None) or news.key_points or ""),
+            category=str(news.category or ""),
+            content=effective_content,
+            insight={
+                "board": insight["board"],
+                "bullet_points": insight["bullet_points"],
+                "takeaway": insight["takeaway"],
+                "tag_line": insight["tag_line"],
+            },
+            source_link=str(news.source_url or ""),
+            published_at=(
+                news_item.published_at.isoformat()
+                if news_item is not None and news_item.published_at
+                else ""
+            ),
+            score=float(snapshot["score"] or 0),
+        )
+        extras_bucket = dict((news.template_extras_json or {}).get(fmt.format_code) or {})
+        rendered = render_template_item(fmt.generation_template, context, extras_bucket)
+        snapshot["template_values"] = rendered["values"]
+        snapshot["template_fallback"] = rendered["template_fallback"]
+        snapshot["missing_fields"] = rendered["missing_fields"]
+    return snapshot
 
 
 def _group_snapshots(
@@ -477,6 +561,7 @@ def render_markdown(rendition: ReportRendition) -> str:
                 lines.append(f"- [{snapshot['title']}](#item-{item_id[:8]})")
                 lines.append("")
 
+    template = body.get("template") or None
     for group in groups:
         lines.append("---")
         lines.append("")
@@ -488,6 +573,21 @@ def render_markdown(rendition: ReportRendition) -> str:
                 continue
             lines.append(f"### {index}、{snapshot['title']} {{#item-{item_id[:8]}}}")
             lines.append("")
+            if template:
+                # 模板格式：按模板字段序 + label 渲染小节（纯投影，无模板求值）
+                template_values = snapshot.get("template_values") or {}
+                for field in template.get("fields") or []:
+                    value = template_values.get(str(field.get("key")))
+                    if value in (None, "", []):
+                        continue
+                    if isinstance(value, list):
+                        value = "；".join(str(entry) for entry in value)
+                    lines.append(f"**{field.get('label')}**：{value}")
+                if snapshot.get("template_fallback"):
+                    missing = "、".join(snapshot.get("missing_fields") or [])
+                    lines.append(f"> 增量字段待补齐（template_fallback）：{missing}")
+                lines.append("")
+                continue
             if "tag_line" in fields and snapshot.get("tag_line"):
                 lines.append(" ".join(f"【{tag}】" for tag in snapshot["tag_line"]))
                 lines.append("")

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -11,11 +10,17 @@ import httpx
 import json_repair
 
 from app.core.config import Settings, get_settings
+from app.llm.provider import (
+    DEFAULT_MINIMAX_BASE_URL,
+    ResolvedGenerationConfig,
+    chat_completions_url,
+    request_chat_completion,
+    resolve_generation_config,
+)
 from app.models.content import NewsItem
 from app.news_keywords import coerce_key_points, fallback_key_points
 from app.reports.renditions import board_order, fallback_board
 
-DEFAULT_MINIMAX_BASE_URL = "https://api.minimaxi.com/v1"
 SQL_EFFECTS_FALLBACK = (
     "该信号可能影响规划部对技术路线、产品节奏、竞争态势或内部需求转化的"
     "后续判断，需要结合业务场景继续观察。"
@@ -47,9 +52,17 @@ def generate_news_with_minimax(
     recommendation_reason: str,
     settings: Settings | None = None,
     timeout_seconds: float | None = None,
+    config: ResolvedGenerationConfig | None = None,
 ) -> GeneratedNewsDraft | None:
+    """基稿生成入口（历史名保留）：provider 由 resolved 配置决定。
+
+    config 未显式传入时按实例 env（含 MINIMAX_* 兼容回退、无工作台 policy）
+    解析——仅配 MINIMAX_* 时行为与现状字节一致。
+    """
     settings = settings or get_settings()
-    if not settings.minimax_generation_enabled or not settings.minimax_api_key:
+    if config is None:
+        config = resolve_generation_config(settings)
+    if not config.enabled or not config.key_configured:
         return None
 
     system_prompt = (
@@ -66,7 +79,9 @@ def generate_news_with_minimax(
         recommendation_reason=recommendation_reason,
     )
     try:
-        content = _request_completion(settings, system_prompt, user_prompt, timeout_seconds)
+        # 经模块级 _request_completion 走请求（scripts/validate_minimax_generation_acceptance.py
+        # 依赖该注入点做 fixture/诊断替换）。
+        content = _request_completion(settings, system_prompt, user_prompt, timeout_seconds, config)
         parsed = _normalize_generation_payload(_parse_json_object(content))
     except (httpx.HTTPError, KeyError, TypeError, ValueError, json.JSONDecodeError):
         return None
@@ -90,7 +105,6 @@ def generate_news_with_minimax(
     content_json = _coerce_content(parsed.get("content"), news_item, recommendation_reason)
     if not _passes_generation_quality(title, summary, key_points, content_json):
         return None
-    model_name = settings.minimax_model[:48]
     return GeneratedNewsDraft(
         category=category,
         title=title,
@@ -98,7 +112,7 @@ def generate_news_with_minimax(
         key_points=key_points,
         content_json=content_json,
         insight_json=_coerce_insight(parsed.get("insight")),
-        generated_by=f"minimax:{model_name}"[:64],
+        generated_by=config.generated_by,
     )
 
 
@@ -172,12 +186,8 @@ def _build_user_prompt(
 
 
 def _chat_completions_url(settings: Settings) -> str:
-    base_url = (settings.minimax_base_url or DEFAULT_MINIMAX_BASE_URL).rstrip("/")
-    if base_url.endswith("/chat/completions"):
-        return base_url
-    if not base_url.endswith("/v1") and "/api/v1" not in base_url:
-        base_url = f"{base_url}/v1"
-    return f"{base_url}/chat/completions"
+    """兼容 shim：MINIMAX_*（回退 GENERATION_*）口径的 chat/completions URL。"""
+    return chat_completions_url(settings.generation_base_url_effective or DEFAULT_MINIMAX_BASE_URL)
 
 
 def _request_completion(
@@ -185,49 +195,12 @@ def _request_completion(
     system_prompt: str,
     user_prompt: str,
     timeout_seconds: float | None,
+    config: ResolvedGenerationConfig | None = None,
 ) -> str:
-    payload = {
-        "model": settings.minimax_model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "temperature": settings.minimax_temperature,
-        "max_tokens": settings.minimax_max_tokens,
-        "stream": False,
-    }
-    retry_times = max(settings.minimax_retry_times, 1)
-    request_timeout = max(float(timeout_seconds or 180.0), 5.0)
-    with httpx.Client(timeout=request_timeout, trust_env=False) as client:
-        for attempt in range(1, retry_times + 1):
-            response = client.post(
-                _chat_completions_url(settings),
-                headers={
-                    "Authorization": f"Bearer {settings.minimax_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-            )
-            if response.status_code == 529 and attempt < retry_times:
-                time.sleep(settings.minimax_retry_backoff_seconds * attempt)
-                continue
-            response.raise_for_status()
-            return _choice_content(response.json())
-    raise RuntimeError("MiniMax completion request did not return a response")
-
-
-def _choice_content(data: dict[str, Any]) -> str:
-    message = data["choices"][0]["message"]["content"]
-    if isinstance(message, str):
-        return message
-    if isinstance(message, list):
-        parts = []
-        for item in message:
-            if isinstance(item, dict):
-                text = item.get("text") or item.get("content") or ""
-                parts.append(str(text))
-        return "".join(parts)
-    return str(message)
+    """兼容注入点（验收脚本 fixture/诊断替换用）：委托 resolved provider 客户端。"""
+    if config is None:
+        config = resolve_generation_config(settings)
+    return request_chat_completion(config, system_prompt, user_prompt, timeout_seconds=timeout_seconds)
 
 
 def _parse_json_object(value: str) -> dict[str, Any]:

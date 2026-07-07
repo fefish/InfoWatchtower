@@ -43,6 +43,10 @@ KNOWN_INGESTION_SOURCE_TYPES = (
     "internal",
     "wechat",
 )
+# 生成 provider 预设（generation-provider-design §3.1）：两者共用同一
+# OpenAI-compatible chat/completions 客户端；minimax 只是带默认 base_url 与
+# 默认模型名的预设，openai_compatible 必须显式给 GENERATION_BASE_URL。
+GENERATION_PROVIDERS = ("openai_compatible", "minimax")
 # 与 config/contracts/deployment_modes.json 的 modes.*.capabilities 保持一致
 MODE_CAPABILITIES: dict[str, dict[str, bool]] = {
     "standalone": {
@@ -279,6 +283,13 @@ class Settings(BaseSettings):
         alias="DAILY_PIPELINE_SOURCE_DAILY_LIMIT",
     )
     daily_pipeline_day_offset_days: int = Field(default=0, alias="DAILY_PIPELINE_DAY_OFFSET_DAYS")
+    # scheduler 重启/停摆后错过触发点的补跑窗口（秒）：错过不超过该窗口的任务
+    # 在恢复后的下一个 tick 补投；超过则跳过、只从下一个触发点继续
+    # （docs/backend/pipeline-jobs-design.md §8.3，错过的日期由管理员手动补）。
+    scheduler_missed_window_seconds: int = Field(
+        default=3600,
+        alias="SCHEDULER_MISSED_WINDOW_SECONDS",
+    )
 
     minimax_generation_enabled: bool = Field(default=False, alias="MINIMAX_GENERATION_ENABLED")
     minimax_api_key: str = Field(default="", alias="MINIMAX_API_KEY")
@@ -292,6 +303,100 @@ class Settings(BaseSettings):
         default=8.0,
         alias="MINIMAX_RETRY_BACKOFF_SECONDS",
     )
+
+    # 生成 provider 分层配置（GENERATION_* env 族，事实源
+    # docs/backend/generation-provider-design.md §3.1，契约 deployment_modes.json
+    # related_env）。过渡期兼容：GENERATION_* 未配置时逐字段回退读同名 MINIMAX_*
+    # （见 *_effective property），两者都配时 GENERATION_* 优先；MINIMAX_* 标记
+    # deprecated。base_url 与 key 是实例级安全边界，永不进工作台 generation_policy。
+    generation_enabled: bool | None = Field(default=None, alias="GENERATION_ENABLED")
+    generation_provider: str = Field(default="minimax", alias="GENERATION_PROVIDER")
+    generation_base_url: str = Field(default="", alias="GENERATION_BASE_URL")
+    generation_api_key: str = Field(default="", alias="GENERATION_API_KEY")
+    # credential_ref 语法（env:VAR / file:/path，复用 app/core/credentials.py）；
+    # 与 GENERATION_API_KEY 同配时 REF 优先，REF 解析失败按未配置处理（启动自检拒启）。
+    generation_api_key_ref: str = Field(default="", alias="GENERATION_API_KEY_REF")
+    generation_model: str = Field(default="", alias="GENERATION_MODEL")
+    generation_max_tokens: int | None = Field(default=None, alias="GENERATION_MAX_TOKENS")
+    generation_temperature: float | None = Field(default=None, alias="GENERATION_TEMPERATURE")
+    generation_timeout_seconds: float | None = Field(
+        default=None,
+        alias="GENERATION_TIMEOUT_SECONDS",
+    )
+    generation_retry_times: int | None = Field(default=None, alias="GENERATION_RETRY_TIMES")
+    generation_retry_backoff_seconds: float | None = Field(
+        default=None,
+        alias="GENERATION_RETRY_BACKOFF_SECONDS",
+    )
+
+    @property
+    def generation_enabled_effective(self) -> bool:
+        if self.generation_enabled is not None:
+            return self.generation_enabled
+        return self.minimax_generation_enabled
+
+    @property
+    def generation_provider_effective(self) -> str:
+        return (self.generation_provider or "minimax").strip().lower()
+
+    @property
+    def generation_base_url_effective(self) -> str:
+        return (self.generation_base_url or self.minimax_base_url).strip()
+
+    @property
+    def generation_api_key_effective(self) -> str:
+        """解析后的生成 API key：REF 优先（解析失败=空），否则 GENERATION_API_KEY
+        回退 MINIMAX_API_KEY。密钥永不落库/落审计/落 API 响应。"""
+        ref = self.generation_api_key_ref.strip()
+        if ref:
+            from app.core.credentials import resolve_credential
+
+            return resolve_credential(ref) or ""
+        return (self.generation_api_key or self.minimax_api_key).strip()
+
+    @property
+    def generation_api_key_source(self) -> str:
+        """key 来源标注（不含 key 本体）：credential_ref / env / 空串（未配置）。"""
+        if self.generation_api_key_ref.strip():
+            return "credential_ref" if self.generation_api_key_effective else ""
+        if (self.generation_api_key or self.minimax_api_key).strip():
+            return "env"
+        return ""
+
+    @property
+    def generation_model_effective(self) -> str:
+        return (self.generation_model or self.minimax_model).strip()
+
+    @property
+    def generation_max_tokens_effective(self) -> int:
+        if self.generation_max_tokens is not None:
+            return self.generation_max_tokens
+        return self.minimax_max_tokens
+
+    @property
+    def generation_temperature_effective(self) -> float:
+        if self.generation_temperature is not None:
+            return self.generation_temperature
+        return self.minimax_temperature
+
+    @property
+    def generation_timeout_seconds_effective(self) -> float:
+        # 无 MINIMAX_* 同名 env：默认 45（现 pipeline 传 45.0 的参数化）。
+        if self.generation_timeout_seconds is not None:
+            return self.generation_timeout_seconds
+        return 45.0
+
+    @property
+    def generation_retry_times_effective(self) -> int:
+        if self.generation_retry_times is not None:
+            return self.generation_retry_times
+        return self.minimax_retry_times
+
+    @property
+    def generation_retry_backoff_seconds_effective(self) -> float:
+        if self.generation_retry_backoff_seconds is not None:
+            return self.generation_retry_backoff_seconds
+        return self.minimax_retry_backoff_seconds
 
     @model_validator(mode="after")
     def _sync_session_secret_rotation(self) -> "Settings":
