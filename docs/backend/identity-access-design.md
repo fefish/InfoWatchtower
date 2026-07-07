@@ -216,6 +216,45 @@ POST /api/auth/guest-login # 开启后签发共享只读 guest 会话（CSRF 豁
 - `GET /api/meta/runtime` 下发 `auth_guest_enabled`，登录页据此渲染
   「以游客身份浏览」按钮；游客会话顶栏身份显示「游客」。
 
+### 4.4 资料自助编辑（2026-07 定稿，待实现）
+
+回答「账号没有修改姓名等的地方」。选型决策：新增独立 self 路径
+`PATCH /api/auth/me`，不复用 `PATCH /api/users/{id}`——admin 路径的权限门是
+`super_admin`、审计动作是 `users.patch`，self 路径的权限语义（本人 + 本地账号）
+和审计语义（`auth.profile.update`）都不同，混用会把管理员字段（`is_active` 等）
+暴露进自助面。契约见 `config/contracts/auth_modes.json` `profile_self_service`。
+
+请求/响应与规则：
+
+```text
+PATCH /api/auth/me
+  body: {display_name?, department?, email?}   # 至少一个字段
+  response: 同 GET /api/auth/me 的用户投影
+```
+
+- 只允许 `external_provider=local` 的本地账号；OIDC/intranet_header 等外部身份
+  返回 400 `Profile is managed externally`（与改密边界同一语义，资料以 provider
+  claims / 网关 header 登录时同步为准）。
+- `display_name` trim 后必填，1-128 字符；`department` 可空可清空，≤128；
+  `email` 可空可清空，≤255，格式校验；与现状一致不做唯一性约束
+  （`users.email` 无 unique 约束，与 `PATCH /api/users/{id}` 同口径）。
+- `username`、角色、`is_active`、workspace membership 一律不可经此端点变更；
+  body 出现未知字段按 422 拒绝。
+- 游客会话被中央 guest 门 403（unsafe method）；`must_change_password` 用户
+  维持既有白名单（me/logout/password change），改密完成前不可编辑资料。
+- 审计：`auth.profile.update`，`detail_json` 记 display_name/department/email
+  的 before/after 快照。
+- 前端行为见 `docs/product/frontend-product-design.md` §11 与
+  `docs/product/page-specs/frontend-page-specs.md` §25。
+
+验收标准：
+
+- 本地账号 PATCH 三字段成功且 `GET /api/auth/me` 返回新值；审计含 before/after。
+- OIDC/header 用户 PATCH 返回 400 `Profile is managed externally`。
+- 游客 PATCH 返回 403 注册提示；must_change_password 用户改密前 PATCH 被拒。
+- `display_name` 空串或纯空白返回 422。
+- 保存后顶部用户胶囊显示新姓名（前端组件测试）。
+
 ## 5. 权限模型
 
 权限分两层：
@@ -291,6 +330,7 @@ POST /api/auth/login
 POST /api/auth/guest-login
 POST /api/auth/logout
 GET  /api/auth/me
+PATCH /api/auth/me            # 本地账号资料自助编辑（§4.4，待实现）
 GET  /api/auth/oidc/start
 GET  /api/auth/oidc/callback
 
@@ -326,10 +366,15 @@ DELETE /api/workspaces/{code}/members/{user_id}
 GET    /api/workspaces/{code}/auth-membership-mapping
 PATCH  /api/workspaces/{code}/auth-membership-mapping
 
-GET    /api/workspaces/discover
+GET    /api/workspaces/discover            # 支持 ?q= 名称/描述搜索（待实现）
 POST   /api/workspaces/{code}/subscribe
 DELETE /api/workspaces/{code}/subscribe
 PATCH  /api/workspaces/{code}/visibility
+
+GET    /api/workspaces/{code}/join-code    # 加入码：读取/生成轮换/停用（待实现，
+POST   /api/workspaces/{code}/join-code    # 事实源 docs/backend/workspace-configuration-design.md §14，
+DELETE /api/workspaces/{code}/join-code    # 契约 workspace_model.json join_code）
+POST   /api/workspaces/join-by-code        # 已登录用户凭码自助入台（待实现）
 
 GET  /api/identity/permission-changes
 POST /api/identity/permission-rollbacks
@@ -368,6 +413,8 @@ workspace `owner` 不会被回滚掉，owner 降权/移出仍需显式 `confirm_
 |---|---|
 | 真实 provider 证据缺失 | 至少一类 provider 完成登录、建号、membership、登出验收 |
 | `/users` 策略运营深化 | 前端已有用户、邀请、成员、策略四块入口、部署层自动开通规则只读展示、当前工作台部门映射编辑、权限审计摘要、成员角色影响提示、最后 owner 前后端守护、owner 移出/降权二次确认、viewer 反馈策略编辑、权限变更 diff 解释和批量回滚；后续补真实 provider/内网门户实机验收 |
+| 资料自助编辑未实现 | `PATCH /api/auth/me` 按 §4.4 验收标准通过（本地可改、外部只读 400、游客 403、审计快照） |
+| 工作台加入码未实现 | join-code 三端点 + join-by-code 按 `docs/backend/workspace-configuration-design.md` §14 验收标准通过 |
 
 ## 10. 验收设计
 

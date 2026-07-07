@@ -159,6 +159,28 @@ scripts/   SQL 校验、历史导入、数据回填等工具
 
 周报第一版不自动生成长文，只管理采信项版本。周报草稿从已发布日报中 `adoption_status = 2` 的条目生成，按成品新闻一级标签形成板块。
 
+2026-07-07 设计已定稿待实现的两项增量（本节只收敛口径，实现级规格见对应事实源）：
+
+- **分层调度**：每日流水线的触发时刻、day_offset、run 级失败自动重试
+  （backoff、重试链 `retry_of_run_id` 可追溯、`partial` 永不触发）和周报草稿节拍
+  由「实例 env 基线 + 工作台 `workspaces.config_json.schedule_policy`」两层决定，
+  scheduler 每 60s tick 读 DB per-workspace 触发并写 `scheduler_heartbeats` 心跳；
+  调度状态经 `GET /api/pipeline/scheduler/status` 在界面自证。工作台策略不能越过
+  实例总闸与 `DEPLOY_MODE` 能力开关；全部工作台无策略时行为与现状一致。
+  事实源：`docs/backend/pipeline-jobs-design.md` §6/§8；契约：
+  `config/contracts/workspace_model.json` `schedule_policy`。
+- **模板驱动生成链**：自定义报告格式可携带 JSON/XML 声明式模板
+  （`report_formats.generation_template`，XML 安全解析后统一存规范形），判定规则
+  「投影优先、仅基稿没有的字段追加生成」；增量字段只写
+  `generated_news.template_extras_json[format_code]`，永不进入
+  `content_json`/`insight_json`/`category`/去重/推荐/公司 SQL，任何降级都不阻塞
+  `company_sql_v1` 链路与采信。生成 provider 分层配置（key 只在实例 env、工作台
+  `generation_policy` 管模型参数与预算、`POST /api/generation/ping` 连通性自检）
+  见 `docs/backend/generation-provider-design.md`。模板事实源：
+  `docs/backend/reports-editorial-design.md` §8.1、
+  `docs/backend/report-renditions-design.md` §10；契约：
+  `config/contracts/report_renditions.json` `generation_template`。
+
 关键文件：
 
 - `backend/app/pipeline/daily.py`
@@ -244,6 +266,15 @@ full；契约：`config/contracts/deployment_modes.json` `install_presets`）：
   让登录用户自助订阅公开工作台为 viewer 成员（幂等、不降级已有角色）；private
   工作台对非成员不泄露存在。契约：`config/contracts/workspace_model.json`
   `discovery_and_subscription`。
+- **工作台加入码与公开形态矩阵（2026-07-07 设计已定稿待实现）**：公开的上限是
+  「`internal_public` + 游客只读」，不提供匿名公开写入；`private` 工作台的团队
+  自助入口是工作台加入码（`workspace_join_codes`：每工作台至多一个 active 码、
+  只授 viewer/member、可轮换/停用/限期限次；`join-by-code` 幂等不降级、统一失效
+  400 防枚举、按用户+IP 限流），与面向未注册个人的全局邀请码互补；发现搜索
+  `discover?q=` 只覆盖 `internal_public`。事实源：
+  `docs/backend/workspace-configuration-design.md` §14；契约：
+  `config/contracts/workspace_model.json` `join_code`、
+  `config/contracts/auth_modes.json` `identity_audit_actions`。
 - **用户组与批量入台**：`user_groups`/`user_group_members` 是运营分组而非第三层
   权限；super_admin/editor_admin 管组，workspace admin 通过
   `POST /api/workspaces/{code}/members/bulk` 按组幂等批量入台（不升降级已有角色、

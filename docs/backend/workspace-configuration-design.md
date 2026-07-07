@@ -252,6 +252,8 @@ pack 是解析时读取的模板而非一次性快照：工作台标签策略（
 | 修改 label_policy | admin/owner |
 | 修改 feedback_policy | admin/owner |
 | 管理 source links | admin/owner |
+| 管理加入码（§14） | owner/admin 或 super_admin |
+| 凭码加入（§14） | 任意已登录用户（游客 403） |
 
 ## 11. API 目标态
 
@@ -273,6 +275,12 @@ PATCH /api/workspaces/{code}/feedback-policy
 GET    /api/workspaces/{code}/members
 POST   /api/workspaces/{code}/members
 DELETE /api/workspaces/{code}/members/{user_id}
+
+GET    /api/workspaces/discover?q=...      # 发现搜索（§14.1，待实现）
+GET    /api/workspaces/{code}/join-code    # 加入码（§14.2，待实现）
+POST   /api/workspaces/{code}/join-code
+DELETE /api/workspaces/{code}/join-code
+POST   /api/workspaces/join-by-code
 ```
 
 ## 12. 当前缺口
@@ -284,6 +292,8 @@ DELETE /api/workspaces/{code}/members/{user_id}
 | 建台向导第 3 步未接 `GET /api/domain-packs` | 向导可动态列出 pack 并按 pack 初始化标签策略（前端待办） |
 | 工作台配置审计不足 | 策略、成员、源 link 修改都写 audit |
 | 内网部门映射工作台 | Identity 按部门自动 membership 使用本模块配置 |
+| 发现搜索与加入码未实现 | `discover?q=` 与 join-code/join-by-code 按 §14 验收标准通过 |
+| visibility 页面入口缺失 | `/workspace-settings` 「可见性与加入码」卡可切换 visibility 并带影响确认 |
 
 ## 13. 验收设计
 
@@ -293,3 +303,95 @@ DELETE /api/workspaces/{code}/members/{user_id}
 - viewer 反馈入口受 `feedback_policy` 控制。
 - 停用工作台后不出现在普通列表，历史数据不删除。
 - 修改 label policy 不影响其他工作台。
+- 发现搜索与加入码按 §14.4 验收。
+
+## 14. 发现搜索与工作台加入码（2026-07 定稿，待实现）
+
+回答「工作台怎么搜索」「管理员邀请有没有平替」。产品设计见
+`docs/product/frontend-product-design.md` §12，契约见
+`config/contracts/workspace_model.json` 的 `discovery_and_subscription` 与
+`join_code`。加入码与全局邀请码（`user_invites`）互补：邀请码面向未注册的具体
+个人（建号 + 全局角色 + 多工作台），加入码面向已注册用户的团队自助入台
+（不建号、不改全局角色、只授 viewer/member）。
+
+### 14.1 发现搜索
+
+- `GET /api/workspaces/discover` 增加可选 `q` 参数：对 `name` 与 `description`
+  做大小写不敏感 contains 过滤；过滤范围仍严格限于 enabled 且
+  `visibility=internal_public` 的工作台，private 工作台对任何关键词都不出现
+  （不泄露存在性）。
+- 响应结构不变（name/description/member_count/joined/workspace_role）。
+
+### 14.2 数据模型增量（新增 alembic 迁移，不改已有列）
+
+```text
+workspace_join_codes
+  id / global_id / created_at / updated_at（沿用 IdMixin/TimestampMixin 风格）
+  workspace_id    fk workspaces.id
+  code            str(16) unique       # 8 位大写字母+数字，剔除易混字符 0/O/1/I
+  default_role    str(16)              # viewer | member，默认 viewer
+  expires_at      datetime(tz) nullable  # null = 长期有效
+  max_uses        int nullable           # null = 不限次数
+  use_count       int default 0
+  status          str(16)              # active | disabled
+  created_by_id   fk users.id
+  disabled_at     datetime(tz) nullable
+```
+
+约束：每个工作台同一时刻至多一个 `status=active` 的加入码；「轮换」= 单事务内
+将旧 active 码置 disabled 并生成新码。历史码保留不删（审计追溯）。
+
+### 14.3 API 与语义
+
+```text
+GET    /api/workspaces/{code}/join-code    (workspace admin/owner；super_admin 绕过)
+  → 当前 active 码 {code, default_role, expires_at, max_uses, use_count,
+    created_at, created_by} 或 null
+
+POST   /api/workspaces/{code}/join-code    (workspace admin/owner；super_admin 绕过)
+  body: {default_role?=viewer, expires_in_days?, max_uses?}
+  → 新码；已有 active 码时视为轮换（旧码同事务置 disabled）
+  default_role 只允许 viewer|member；admin/owner 必须走成员管理单人流程
+
+DELETE /api/workspaces/{code}/join-code    (workspace admin/owner；super_admin 绕过)
+  → 204，幂等停用当前 active 码
+
+POST   /api/workspaces/join-by-code        (任意已登录用户；游客中央门 403)
+  body: {code}
+  → {workspace_code, workspace_name, workspace_role, joined}
+```
+
+`join-by-code` 语义：
+
+- 码不存在 / disabled / 过期 / 达到 `max_uses`：统一 400「加入码无效或已失效」，
+  同一响应体，不区分原因、不泄露目标工作台存在性（防枚举）。
+- 成功：幂等 upsert membership——已有 enabled membership 保持原角色不降级
+  （响应 `joined=false`）；disabled membership 以码上 `default_role` 重新启用；
+  非成员按 `default_role` 建 membership。仅真实新增或重新启用时 `use_count += 1`。
+- private 与 internal_public 工作台都可凭码加入；停用（enabled=false）的工作台
+  按码无效处理。
+- 失败尝试按「用户 + IP」限流：15 分钟窗口内 10 次失败后同窗口 429
+  （复用 `login_attempts` 表机制或同构实现），防止码枚举。
+- 审计动作（含 before/after membership 快照，纳入
+  `config/contracts/auth_modes.json` `identity_audit_actions`）：
+  `workspace.join_code.create`（生成与轮换均记此动作，轮换在 detail 中标注
+  rotated_from）、`workspace.join_code.disable`、`workspace.member.join_by_code`。
+- 加入码只是 membership 入口，不改变任何全局角色、RBAC 或部署形态语义；
+  intranet/extranet 形态下同样可用（属工作台运营配置，不属采集/同步能力）。
+
+前端入口：`/workspace-settings` 「可见性与加入码」设置卡（规格见
+`docs/product/page-specs/frontend-page-specs.md` §19.5）与发现工作台 Modal 的
+「凭码加入」区（§2 AppShell 与产品设计 §12.2）。
+
+### 14.4 验收标准
+
+- `discover?q=` 命中 name/description，任何关键词都不返回 private 工作台。
+- admin 生成码 → 另一用户凭码加入 private 工作台成功、角色等于 default_role、
+  `use_count=1`；重复加入幂等且不再计数、不降级已有角色。
+- 轮换后旧码立即 400；停用后 400；过期与用尽同文案 400。
+- default_role 传 admin/owner 返回 422。
+- 游客凭码加入 403 并提示注册。
+- 连续失败触发 429 限流。
+- 生成/轮换/停用/加入全部可在 `/audit-logs` 查到；`workspace.member.join_by_code`
+  审计含 before/after membership 快照（与 `workspace.member.subscribe` 同口径，
+  不进入 permission-rollback 支持清单）。

@@ -117,9 +117,61 @@
     ],
     "rules": [
       "GET /api/workspaces/discover lists enabled internal_public workspaces for any logged-in user with name/description/member_count/joined/workspace_role; private workspaces never appear (no existence leak).",
+      "GET /api/workspaces/discover accepts an optional q parameter (design_final_pending_implementation, 2026-07): case-insensitive contains filter on name and description; the filter scope stays strictly enabled internal_public workspaces, so no keyword can surface a private workspace.",
       "POST /api/workspaces/{code}/subscribe lets a logged-in user self-join an internal_public workspace as a viewer member, idempotently: an existing enabled membership keeps its role, a disabled membership is re-enabled as viewer. Private or unknown workspaces answer 404 with the same body. Audited as workspace.member.subscribe with before/after snapshots.",
       "DELETE /api/workspaces/{code}/subscribe disables the caller own viewer membership idempotently (204 even when not subscribed); roles above viewer answer 400 and stay managed through the member-management endpoints (protects the last-owner rule). Audited as workspace.member.unsubscribe.",
-      "Guest sessions (AUTH_GUEST_ENABLED, see auth_modes.json guest_access) never hold memberships: they browse enabled internal_public workspaces through an implicit viewer perspective and every write, including subscribe, is rejected 403 by the central guest gate with a register-first hint."
+      "Guest sessions (AUTH_GUEST_ENABLED, see auth_modes.json guest_access) never hold memberships: they browse enabled internal_public workspaces through an implicit viewer perspective and every write, including subscribe, is rejected 403 by the central guest gate with a register-first hint.",
+      "The frontend discovery entry is a centered modal (frontend-product-design sections 10 and 12): search box on top (discover?q=), join-by-code block at the bottom."
+    ],
+    "visibility_matrix": {
+      "description": "Who sees what, per workspace visibility and deployment overlay. Answers the platform-publicity question: public platform = internal_public plus AUTH_GUEST_ENABLED (guest read-only is the publicity ceiling); team-only = private, entered via join code, invite or member management.",
+      "private": {
+        "anonymous": "invisible (login page only)",
+        "guest_session": "invisible; never listed, direct access 404",
+        "logged_in_non_member": "not discoverable, direct access 404; may enter via workspace join code",
+        "member": "full access per workspace role"
+      },
+      "internal_public": {
+        "anonymous": "invisible until login or guest entry",
+        "guest_session": "read-only published content through implicit viewer; every write 403 with register-first hint",
+        "logged_in_non_member": "discoverable and self-subscribable as viewer; a join code may grant the code default_role instead",
+        "member": "full access per workspace role"
+      }
+    }
+  },
+  "join_code": {
+    "status": "design_final_pending_implementation (2026-07); fact source docs/backend/workspace-configuration-design.md section 14",
+    "purpose": "Lightweight self-service team entry for already-registered users; complements user_invites (which target unregistered individuals, create accounts and bind global roles). Join codes never create accounts and never change global roles.",
+    "table": {
+      "workspace_join_codes": [
+        "id / global_id / created_at / updated_at",
+        "workspace_id (fk workspaces.id)",
+        "code (str16 unique, 8 chars uppercase letters+digits excluding 0/O/1/I)",
+        "default_role (viewer | member, default viewer)",
+        "expires_at (nullable; null = no expiry)",
+        "max_uses (nullable; null = unlimited)",
+        "use_count (default 0)",
+        "status (active | disabled)",
+        "created_by_id (fk users.id)",
+        "disabled_at (nullable)"
+      ]
+    },
+    "endpoints": [
+      "GET /api/workspaces/{workspace_code}/join-code (workspace admin/owner; super_admin bypasses membership) -> current active code or null",
+      "POST /api/workspaces/{workspace_code}/join-code (workspace admin/owner) body {default_role?, expires_in_days?, max_uses?} -> new code; an existing active code is rotated (disabled in the same transaction)",
+      "DELETE /api/workspaces/{workspace_code}/join-code (workspace admin/owner) -> 204 idempotent disable",
+      "POST /api/workspaces/join-by-code (any logged-in user; guest gate 403) body {code} -> {workspace_code, workspace_name, workspace_role, joined}"
+    ],
+    "rules": [
+      "At most one active join code per workspace; rotation disables the old code and creates the new one in a single transaction; historical codes are kept for audit.",
+      "default_role only accepts viewer or member; admin/owner memberships stay on the single-member management flow with dangerous-change confirmation.",
+      "join-by-code answers one uniform 400 body for unknown/disabled/expired/exhausted codes so codes cannot be enumerated and workspace existence never leaks.",
+      "Joining is idempotent and never downgrades: an enabled membership keeps its role (joined=false), a disabled membership is re-enabled with the code default_role, a new membership gets default_role; use_count increments only on a real add or re-enable.",
+      "Private and internal_public workspaces can both be joined by code (this is the team-only self-service entry); disabled workspaces behave as invalid codes.",
+      "Failed join attempts are rate limited per user+IP (10 failures / 15 minutes -> 429), mirroring the login rate-limit mechanics.",
+      "Audit actions: workspace.join_code.create (rotation logs rotated_from in detail), workspace.join_code.disable, workspace.member.join_by_code with before/after membership snapshots (same convention as workspace.member.subscribe; not part of the permission-rollback supported list).",
+      "Join codes are workspace operations config, independent from deploy-mode capability gates; they change no global role and no RBAC semantics.",
+      "UI entries: /workspace-settings visibility-and-join-code card (admin/owner) and the join-by-code block in the workspace discovery modal."
     ]
   },
   "core_sections": [
@@ -264,6 +316,53 @@
       "Auto publish does not bypass publish guards: fallback drafts stay fallback_needs_review and company SQL export gating is unchanged.",
       "Changing report_policy writes audit_logs with action workspace.report_policy.update.",
       "The policy is edited from the workspace settings center (/workspace-settings); post-publish revision semantics live in docs/backend/reports-editorial-design.md section 7.2."
+    ]
+  },
+  "schedule_policy": {
+    "status": "design_final_pending_implementation (2026-07-07); spec: docs/backend/pipeline-jobs-design.md sections 6.1-6.2 and 8",
+    "endpoint_read": "GET /api/workspaces/{workspace_code}/schedule-policy (workspace viewer+; returns policy + resolved effective values + next_run_at preview)",
+    "endpoint_update": "PATCH /api/workspaces/{workspace_code}/schedule-policy (workspace admin+ or super_admin)",
+    "stored_at": "workspaces.config_json.schedule_policy (same level as label_policy/feedback_policy/report_policy)",
+    "default": {
+      "enabled": null,
+      "daily_time": null,
+      "day_offset": null,
+      "source_types": null,
+      "retry": { "max_attempts": 1, "backoff_seconds": 900 },
+      "weekly": { "enabled": false, "weekly_day": 5, "weekly_time": "17:00" }
+    },
+    "field_rules": [
+      "enabled: null follows the instance master switch INGESTION_SCHEDULER_ENABLED; false opts the workspace out; true is only effective while the instance master switch is on (workspace policy can never override a disabled instance or a DEPLOY_MODE that disables ingestion).",
+      "daily_time: null follows INGESTION_SCHEDULER_DAILY_TIME; otherwise HH:MM in the single instance timezone INGESTION_SCHEDULER_TIMEZONE (workspaces cannot override the timezone).",
+      "day_offset: null follows DAILY_PIPELINE_DAY_OFFSET_DAYS; otherwise int in -7..0.",
+      "source_types: null follows the instance scheduler source types; a non-null list is still filtered by the deployment-level INGESTION_SOURCE_TYPES allowlist.",
+      "retry.max_attempts (0..5, default 1) and retry.backoff_seconds (60..21600, default 900) drive run-level pipeline auto-retry with exponential backoff; partial runs never trigger run-level retry and non-retryable error codes (published_report_conflict, capability_disabled, invalid_parameters, workspace_not_found) go terminal immediately.",
+      "weekly.enabled/weekly_day (ISO 1..7)/weekly_time schedule an idempotent weekly draft build (workspace_code + week_key); weekly publish stays a manual editorial decision.",
+      "Out-of-range values answer 422; changes write audit_logs action workspace.schedule_policy.update with before/after snapshots.",
+      "Scheduler behavior: when no workspace has a schedule_policy the scheduler behaves exactly as today (single INGESTION_SCHEDULER_WORKSPACE_CODE); scheduler heartbeat/next-run/last-runs are observable via GET /api/pipeline/scheduler/status."
+    ]
+  },
+  "generation_policy": {
+    "status": "design_final_pending_implementation (2026-07-07); spec: docs/backend/generation-provider-design.md",
+    "endpoint_read": "GET /api/workspaces/{workspace_code}/generation-policy (workspace viewer+; response adds resolved provider/model/base_url_host/key_configured, never the key itself)",
+    "endpoint_update": "PATCH /api/workspaces/{workspace_code}/generation-policy (workspace admin+ or super_admin)",
+    "ping_endpoint": "POST /api/generation/ping (super_admin or editor_admin; minimal live probe, audited as generation.ping, no secrets in detail)",
+    "stored_at": "workspaces.config_json.generation_policy (same level as label_policy/feedback_policy/report_policy/schedule_policy)",
+    "default": {
+      "model": null,
+      "temperature": null,
+      "max_tokens": null,
+      "timeout_seconds": null,
+      "daily_generation_budget": null,
+      "fallback_behavior": "rule_fallback"
+    },
+    "field_rules": [
+      "null fields inherit the instance env defaults (GENERATION_MODEL/GENERATION_TEMPERATURE/GENERATION_MAX_TOKENS/GENERATION_TIMEOUT_SECONDS).",
+      "Provider, base_url and api key are instance-level env only (GENERATION_PROVIDER/GENERATION_BASE_URL/GENERATION_API_KEY or GENERATION_API_KEY_REF with env:VAR|file:/path); they never enter workspace policy, DB, Git, sync feeds or API responses. Legacy MINIMAX_* env keeps working as per-field fallback during the deprecation window.",
+      "daily_generation_budget (1..1000 or null=unlimited) caps model calls per workspace per day_key; exhaustion is counted as generation_budget_exhausted in the run summary and remaining items follow fallback_behavior.",
+      "fallback_behavior: rule_fallback (default, current behavior: rule_v1 draft with fallback_needs_review, excluded from company SQL) | fail (no fallback draft; generation step failed, item can be regenerated later).",
+      "Secret-like keys inside the policy payload answer 422 (privacy.py detection); changes write audit_logs action workspace.generation_policy.update with before/after snapshots.",
+      "Provider choice never relaxes generation quality gates, the 10-category constraint or company SQL gating."
     ]
   },
   "content_policy_resolution": {

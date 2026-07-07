@@ -120,6 +120,24 @@
     "forgot_password": "Always returns 200; without SMTP it writes audit only and does not create a token.",
     "admin_reset": "Super admins can issue one temporary password and set users.status=must_change_password only for external_provider=local users; external identities are managed by their provider."
   },
+  "profile_self_service": {
+    "status": "design_final_pending_implementation (2026-07); fact source docs/backend/identity-access-design.md section 4.4",
+    "endpoint": "PATCH /api/auth/me (self path; deliberately not reusing the super_admin PATCH /api/users/{id}, whose permission and audit semantics differ)",
+    "editable_fields": ["display_name", "department", "email"],
+    "field_rules": {
+      "display_name": "required non-blank after trim, 1-128 chars",
+      "department": "optional, clearable, max 128 chars",
+      "email": "optional, clearable, max 255 chars, format-validated; no uniqueness constraint (same as users.email today and PATCH /api/users/{id})"
+    },
+    "boundary_rules": [
+      "Only external_provider=local accounts may edit; OIDC/intranet_header and other external identities answer 400 Profile is managed externally (same boundary semantics as change_password) and /account renders the profile card read-only with an externally-managed note.",
+      "username, roles, is_active and workspace memberships can never change through this endpoint; unknown body fields answer 422.",
+      "Guest sessions are rejected 403 by the central guest gate; the profile card is not rendered for guests.",
+      "must_change_password users keep the existing endpoint whitelist (me/logout/password change) and cannot edit the profile before completing the password change.",
+      "Response is the same user projection as GET /api/auth/me; the frontend refreshes the session store so the top user pill shows the new display_name immediately."
+    ],
+    "audit_action": "auth.profile.update with before/after display_name/department/email snapshots in detail_json"
+  },
   "invite_statuses": [
     "pending",
     "accepted",
@@ -285,6 +303,7 @@
   ],
   "identity_audit_actions": [
     "auth.guest_login",
+    "auth.profile.update",
     "invite.accept",
     "invite.create",
     "invite.revoke",
@@ -302,7 +321,10 @@
     "users.patch",
     "users.roles.update",
     "workspace.feedback_policy.update",
+    "workspace.join_code.create",
+    "workspace.join_code.disable",
     "workspace.member.bulk_upsert",
+    "workspace.member.join_by_code",
     "workspace.member.remove",
     "workspace.member.subscribe",
     "workspace.member.unsubscribe",

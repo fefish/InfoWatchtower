@@ -23,6 +23,14 @@
 - 未做：不能假装完成的内容。
 - 测试看护：至少需要哪些组件/E2E/权限/部署形态测试。
 
+### 1.1 布局模板标注（2026-07 起强制）
+
+每个页面必须在 §3 逐页总表声明所属布局模板（`list` 列表页 / `detail` 详情页 /
+`dashboard` 仪表盘 / `settings` 设置页，定义见
+`docs/product/frontend-product-design.md` §9.3）。没有模板标注的新页面不得合入；
+页面间距只允许引用 §9.1 spacing tokens。`/login`、`/setup`、`/invite/:code`
+在 AppShell 之外，标注为 `auth` 居中窄卡布局，不占用四模板。
+
 ## 2. 全局壳 AppShell
 
 ### 2.1 目标态
@@ -62,6 +70,8 @@
 | 通知铃铛 | 已做 | 真实未读数 API 已完成并恢复入口，已有 AppShell 测试 |
 | 用户胶囊账号入口 | 已做 | 已跳转 `/account`，已有 AppShell 测试 |
 | 部署能力解释 | 部分 | intranet 禁采集等状态需在页面入口和按钮处一致体现 |
+| 新建工作台向导迁居中 Modal | 未做 | 现为右上 config-panel 浮层；按产品设计 §10.3 迁居中 Modal md，向导三步不变 |
+| 发现工作台迁居中 Modal + 搜索 + 凭码加入 | 未做 | 现为右侧抽屉；迁居中 Modal md，顶部加 `discover?q=` 搜索框，底部加「凭码加入」（`POST /api/workspaces/join-by-code`），产品设计 §12 |
 | 全局壳测试 | 部分 | 已覆盖 search 结果跳转、真实 notification 入口、账号入口、禁采集导航；还需更多 runtime capability 场景 |
 
 ### 2.4 测试看护
@@ -70,37 +80,59 @@
 - 用户胶囊点击进入 `/account`。
 - `DEPLOY_MODE=intranet` 时采集入口隐藏或禁用并解释。
 - 非成员工作台不出现在切换器。
+- （迁移后）新建工作台向导与发现工作台以 `role="dialog" aria-modal="true"` 居中
+  Modal 渲染；Esc/遮罩点击关闭且脏表单先确认；发现 Modal 搜索只过滤
+  `internal_public`；凭码加入成功后切换到目标工作台，游客提交显示注册提示。
 
 ## 3. 逐页总表
 
-| 页面 | 当前标记 | 关键未做 |
-|---|---|---|
-| `/dashboard` | 部分 | 点击跳转 E2E 和源健康长期趋势 |
-| `/sources` | 部分 | 标签策略错误态和更多 E2E |
-| `/sources/:id` | 部分 | 采信贡献趋势和更细评分贡献 |
-| `/ingestion-runs` | 部分 | 更多补采 provider、邮件/外部告警通道和更长周期趋势 |
-| `/news` | 部分 | 跨页联动深化和 E2E |
-| `/recommendations` | 部分 | 评分器策略编辑/批量重算、观察池运营深化 |
-| `/daily-reports` | 部分 | 富文本/差异、更多对象通知、完整 E2E |
-| `/daily-reports/:id` / `:id/edit` | 部分 | 编辑体验、版本/差异、权限态测试 |
-| `/weekly-reports` | 部分 | LLM 周报摘要模型、热度排序、分页 |
-| `/historical-reports` | 部分 | 生产主库导入验收证据和更多 E2E |
-| `/entity-milestones` | 部分 | 更多 E2E |
-| `/quality-archive` | 部分 | 更多当前反馈/推荐反馈分解释关系和 E2E |
-| `/insights` | 部分 | insight 到 requirement 联动抽屉、批量转需求和当前反馈/归档聚合解释 |
-| `/requirements` | 部分 | 需求与评论/任务联动深化 |
-| `/tasks` | 部分 | 跨对象联动体验、评论和更多归档对象解释关系 |
-| `/sync` | 部分 | 端到端实机证据、生产告警投递/runbook、更多对象 manual_merge |
-| `/exports` | 部分 | 真实内网平台生产联调证据 |
-| `/workspace-settings` | 部分 | visibility 页面入口、E2E |
-| `/users` | 部分 | 真实 provider/内网门户验收 |
-| `/audit-logs` | 部分 | action taxonomy、告警/运行证据联动 |
-| `/login` | 部分 | 真实 provider 验收 |
-| `/setup` | 部分 | 真实空库端到端证据 |
-| `/invite/:code` | 已做 | pending/expired/revoked/accepted 状态体验、前端校验和错误文案已覆盖 |
-| `/account` | 部分 | 会话列表、踢下线；顶部账号入口已完成 |
-| `/notifications` | 部分 | 邮件、更多对象通知生成/提及 |
-| 顶部搜索面板 | 部分 | v1 已接 `/api/search`，覆盖类型分组、键盘选择、本地近期结果、周报条目、导出任务/trace 条目、同步运行/冲突等主要对象锚点；仍缺 E2E |
+模板列含义见 §1.1；`list*` 表示 list 模板的双列变体（仅 `/sources` 标签策略侧栏被允许）。
+
+| 页面 | 模板 | 当前标记 | 关键未做 |
+|---|---|---|---|
+| `/dashboard` | dashboard | 部分 | §4.1 信息架构重排（主列头条候选 + 固定侧栏）、点击跳转 E2E 和源健康长期趋势 |
+| `/sources` | list* | 部分 | 标签策略错误态和更多 E2E；新增源/导入预览弹层迁居中 Modal |
+| `/sources/:id` | detail | 部分 | 采信贡献趋势和更细评分贡献 |
+| `/ingestion-runs` | list | 部分 | 更多补采 provider、邮件/外部告警通道和更长周期趋势 |
+| `/news` | list | 部分 | 跨页联动深化和 E2E |
+| `/recommendations` | list | 部分 | 评分器策略编辑/批量重算、观察池运营深化 |
+| `/daily-reports` | list | 部分 | 富文本/差异、更多对象通知、完整 E2E |
+| `/daily-reports/:id` / `:id/edit` | detail | 部分 | 编辑体验、版本/差异、权限态测试 |
+| `/weekly-reports` | list | 部分 | LLM 周报摘要模型、热度排序、分页 |
+| `/historical-reports` | list | 部分 | 生产主库导入验收证据和更多 E2E |
+| `/entity-milestones` | list | 部分 | 更多 E2E |
+| `/quality-archive` | list | 部分 | 更多当前反馈/推荐反馈分解释关系和 E2E |
+| `/insights` | list | 部分 | insight 到 requirement 联动抽屉、批量转需求和当前反馈/归档聚合解释 |
+| `/requirements` | list | 部分 | 需求与评论/任务联动深化 |
+| `/tasks` | list | 部分 | 跨对象联动体验、评论和更多归档对象解释关系 |
+| `/sync` | list | 部分 | 端到端实机证据、生产告警投递/runbook、更多对象 manual_merge |
+| `/exports` | list | 部分 | 真实内网平台生产联调证据 |
+| `/workspace-settings` | settings | 部分 | 可见性与加入码设置卡（§19.5）、E2E |
+| `/users` | settings | 部分 | 真实 provider/内网门户验收 |
+| `/audit-logs` | list | 部分 | action taxonomy、告警/运行证据联动 |
+| `/login` | auth | 部分 | 真实 provider 验收 |
+| `/setup` | auth | 部分 | 真实空库端到端证据 |
+| `/invite/:code` | auth | 已做 | pending/expired/revoked/accepted 状态体验、前端校验和错误文案已覆盖 |
+| `/account` | settings | 部分 | 资料编辑卡片（§25）、会话列表、踢下线；顶部账号入口已完成 |
+| `/notifications` | list | 部分 | 邮件、更多对象通知生成/提及 |
+| 顶部搜索面板 | —（壳内浮层） | 部分 | v1 已接 `/api/search`，覆盖类型分组、键盘选择、本地近期结果、周报条目、导出任务/trace 条目、同步运行/冲突等主要对象锚点；仍缺 E2E |
+
+### 3.1 弹窗迁移清单（2026-07 定稿，未实施）
+
+全站弹窗规范与判定规则见 `docs/product/frontend-product-design.md` §10；
+契约扫描面见 `config/contracts/frontend_control_governance.json` `modal_rule`。
+迁移状态在此跟踪：
+
+| 弹层 | 处置 | 档位 | 状态 |
+|---|---|---|---|
+| 新建工作台向导（AppShell） | 迁居中 Modal | md | 未做 |
+| 发现工作台（WorkspaceDiscovery，含搜索 + 凭码加入） | 迁居中 Modal | md | 未做 |
+| 新增信息源（SourcesPage） | 迁居中 Modal | md | 未做 |
+| 数据源导入预览（SourcesPage） | 迁居中 Modal | sm | 未做 |
+| 单源配置（SourcesPage） | 保留上下文面板 | — | 无需迁移 |
+| 成稿格式管理（DailyReportsPage） | 保留上下文面板 | — | 无需迁移 |
+| 日报条目详情（DailyReportsPage） | 归入 Modal lg 档 | lg | 已居中 |
+| 任务详情（TopicTasksPage） | 归入 Modal lg 档 | lg | 已居中 |
 
 ## 4. 今日速览 `/dashboard`
 
@@ -113,6 +145,18 @@
 - 最新日报/周报是否可读。
 - 源健康是否异常。
 
+信息架构重排（2026-07 定稿，线框级描述见
+`docs/product/frontend-product-design.md` §9.4）：dashboard 模板，分区顺序与归属固定——
+
+- 页头结论行（全宽单行卡）：日期 + 系统健康点 + 今日日报状态 CTA。
+- 主列（`minmax(0,1fr)`）：① 今日头条候选 Top6 ② 最新日报卡。只放「今天要处理的内容」。
+- 固定侧栏（340px，顺序固定）：① 流水线漏斗（竖排紧凑）② 快捷入口 ③ 最新周报卡
+  ④ 近七日采信趋势 ⑤ 源健康（无异常折叠为一行「源健康正常」，异常展开失败 Top3 + 待补入口）
+  ⑥ 调度心跳卡（§4.3，随自动化轨道后端能力落地后渲染，之前不做占位）。
+- ≤1120px 单列堆叠：页头 → 头条候选 → 最新日报卡 → 侧栏各卡按序。
+- 重排只动布局归属，除侧栏第 6 位调度心跳卡（自动化轨道新增，读
+  `GET /api/pipeline/scheduler/status`）外不引入新后端能力；其余数据来源不变。
+
 ### 4.2 已做
 
 - 晨报式首页已设计并实现为今日速览。
@@ -124,14 +168,24 @@
 
 ### 4.3 未做
 
+- §4.1 信息架构重排未实施：现状为全宽漏斗 hero + 分散模块；需按主列/固定侧栏归属重排，
+  漏斗改竖排收进侧栏，源健康增加折叠态。
 - 头条候选和报告卡的点击跳转需要 E2E 验证。
 - 源健康 TopN 与失败趋势还需接入长期观测。
+- 调度心跳运营卡（设计已定稿待实现，落位为 §4.1 固定侧栏第 6 位）：读
+  `GET /api/pipeline/scheduler/status` 展示 scheduler 在线/离线（心跳 stale 判定）、
+  下次运行时间、最近 N 次 run 结果与失败重试状态；查询失败/心跳过期不得渲染成
+  在线绿色。设计见 `docs/backend/pipeline-jobs-design.md` §8.5。
 
 ### 4.4 测试看护
 
 - 无抓取数据时显示下一步动作；read-only 部署不显示“跑抓取”类动作。
 - 有失败源时展示源健康异常；跳转数据源或抓取页仍需 E2E。
 - health 或 coverage 失败时降级展示，不把后端不可用渲染成绿色正常。
+- （重排后）主列只含头条候选与最新日报卡；漏斗/快捷入口/周报/趋势/源健康（及实现后的
+  调度心跳卡）在固定侧栏；无失败源且无待补入口时源健康渲染折叠单行，有异常时展开。
+- （调度心跳卡实施后）scheduler 心跳过期或 status API 失败渲染为离线/不可用态，
+  不得显示在线绿色（假成功回归）。
 
 ## 5. 数据源管理 `/sources`
 
@@ -224,6 +278,10 @@
 - 深度历史补采 provider 不完整：arXiv v1、OpenAlex Works v1 和 Semantic Scholar v1 已完成，OpenReview 等仍待补。
 - `manual_import` 文件上传、导入预览、SQL v1 解析、逐行校验和错误报告下载已完成；后续仍需更复杂 SQL dialect 和大文件分片。
 - 邮件/外部告警通道和生产 runbook 未闭环；站内告警投递 v1 已完成。
+- 调度卡升级（设计已定稿待实现）：从只读 env 快照（`GET /api/ingestion/scheduler`）
+  升级为读 `GET /api/pipeline/scheduler/status`，展示心跳、per-workspace 下次运行、
+  最近 run 与 run 级重试状态；env 快照保留为"实例基线"展示并注明工作台级策略
+  入口在 `/workspace-settings` 自动化卡（`docs/backend/pipeline-jobs-design.md` §8.4）。
 
 ### 7.4 测试看护
 
@@ -330,6 +388,14 @@
 - 日报评论 @ 提及、requirement 状态通知、周报条目更新通知和日报条目关注者通知已支持页面锚点；邮件和更多对象通知生成仍未完成。
 - 已发布后修订 UI 和审计提示需要增强。
 - 页面级 E2E 不足。
+- 格式管理面板模板能力（2026-07-07 设计已定稿待实现，设计
+  `docs/backend/report-renditions-design.md` §10，契约
+  `config/contracts/report_renditions.json` `generation_template`）：新建/编辑
+  自定义格式时可上传或粘贴 JSON/XML 生成模板，先调
+  `POST /api/report-formats/validate-template` 展示逐字段校验错误、
+  投影/增量字段划分和示例预览（preview_item），校验不通过不能保存；
+  locked/builtin 格式不显示模板入口；带模板格式的成稿视图对
+  `template_fallback=true` 条目显示"模板字段降级"标记而非空白。
 
 ### 10.4 测试看护
 
@@ -689,8 +755,33 @@
 ### 19.5.3 未做
 
 - viewer 反馈策略编辑仍在 `/users` 策略视图，不在本页。
-- 工作台 visibility 切换（`PATCH /api/workspaces/{code}/visibility`）暂无页面入口，
-  当前只有 API。
+- 「可见性与加入码」设置卡（2026-07 定稿，契约 `config/contracts/workspace_model.json`
+  `join_code`）：
+  - 可见性：`private | internal_public` 切换（`PATCH /api/workspaces/{code}/visibility`），
+    切换到 `internal_public` 前必须确认「任何登录用户可发现并以 viewer 订阅」影响提示；
+    该 API 已存在，页面入口未做。
+  - 加入码：显示当前有效码（一键复制，格式 8 位大写字母+数字）、默认角色
+    （viewer|member）、有效期、已用次数/上限；「生成/轮换」（轮换需确认「旧码立即
+    失效」）调用 `POST /api/workspaces/{code}/join-code`，「停用」调用
+    `DELETE /api/workspaces/{code}/join-code`；无有效码时显示生成引导与用途说明
+    （「已注册同事凭码可自助加入本工作台」）。
+- 「自动化」设置卡（2026-07-07 设计已定稿待实现，后端供给见
+  `docs/backend/pipeline-jobs-design.md` §8.2/§8.4，契约
+  `config/contracts/workspace_model.json` `schedule_policy`）：
+  - 读写 `GET/PATCH /api/workspaces/{code}/schedule-policy`；展示触发时刻、
+    day_offset、run 级重试（max_attempts/backoff）、周报节拍与**下次运行时间预览**。
+  - 每个字段标注生效值来源（"跟随实例默认 12:00" vs "本工作台 09:30"）；
+    实例总闸关闭或 intranet 禁采集时整卡只读并解释原因。
+  - 保存前展示影响确认；保存写审计 `workspace.schedule_policy.update`。
+- 「生成模型」设置卡（2026-07-07 设计已定稿待实现，后端供给见
+  `docs/backend/generation-provider-design.md` §4/§5，契约
+  `config/contracts/workspace_model.json` `generation_policy`）：
+  - 状态行：provider、模型、key **只显示"已配置/未配置"永不回显**、
+    最近连通状态；未配 key 时显示实例级 env 配置指引链接。
+  - 可编辑：模型名、温度、超时、每日预算、fallback 行为
+    （`GET/PATCH /api/workspaces/{code}/generation-policy`）。
+  - 「测试连通」按钮（仅 super_admin/editor_admin 可见）调
+    `POST /api/generation/ping`，展示延迟或分类错误；失败不得渲染成成功。
 
 ### 19.5.4 测试看护
 
@@ -699,6 +790,8 @@
   报告格式启停/新建、可选分区启停与核心分区锁定、成员角色调整。
 - 后端 `workspace_settings` 分区播种、min_role=admin、不可停用和 sections manage
   权限门由 `backend/tests/test_workspaces_api.py` 看护。
+- （加入码卡实施后）生成/轮换/停用调用真实 API 并刷新展示；轮换必须先确认；
+  member/viewer 不渲染该卡；码值以只读文本 + 复制按钮呈现，复制失败显示真实错误。
 
 ## 20. 用户权限 `/users`
 
@@ -887,7 +980,20 @@
 
 ### 25.1 目标态
 
-当前用户查看资料、修改密码、处理 must_change_password，未来管理会话。
+当前用户查看和编辑资料、修改密码、处理 must_change_password，未来管理会话。
+settings 模板：垂直分组设置卡，顺序为「资料」「密码」「身份来源」「会话（未来）」。
+
+「资料」卡片规格（2026-07 定稿，契约 `config/contracts/auth_modes.json`
+`profile_self_service`，后端设计 `docs/backend/identity-access-design.md` §4.4）：
+
+- 本地账号（`external_provider=local`）：可编辑 `display_name`（必填，1-128 字符）、
+  `department`（可空）、`email`（可空，格式校验）三个字段 + 保存按钮，调用
+  `PATCH /api/auth/me`；`username` 只读展示并注明「登录账号不可修改」；保存成功后
+  刷新 session store，顶部用户胶囊立即显示新姓名；保存失败展示后端错误，不显示假成功。
+- 外部身份（OIDC / intranet_header）：同一卡片只读展示字段，并说明「资料由外部身份
+  系统管理，登录时自动同步」，不渲染编辑表单和保存按钮（与改密边界同一语义）。
+- 游客会话：不渲染资料卡片。
+- must_change_password 用户：先完成改密，改密前资料表单禁用。
 
 ### 25.2 已做
 
@@ -900,6 +1006,7 @@
 
 ### 25.3 未做
 
+- 「资料」卡片编辑（§25.1）未实施：后端 `PATCH /api/auth/me` 与前端表单均待实现。
 - 会话列表和主动踢下线未完成。
 - 顶部用户胶囊到账号页的明确入口已落实并有 AppShell 测试。
 
@@ -909,6 +1016,9 @@
 - 改密后旧 cookie 失效。
 - OIDC/header 用户不应看到本地密码修改入口；该边界由 `AccountPage.spec.ts` 和后端
   `Password is managed externally` 共同看护。
+- （资料卡实施后）本地账号保存调用 `PATCH /api/auth/me` 并刷新胶囊显示名；
+  display_name 为空不发请求；外部身份不渲染编辑表单，后端对外部身份返回
+  `Profile is managed externally`；游客 403；资料变更写 `auth.profile.update` 审计。
 
 ## 26. 我的消息 `/notifications`
 
@@ -1016,4 +1126,5 @@ gating，属游离死代码。
 | P1 | `/exports` | SQL gate、trace、trace 字段来源、trace 字段差异预览、导入回执、失败语句反馈、service token importer 回调、preflight、服务端下载、viewer 下载禁用、预览复制、截断预览保护和批量 manifest 已覆盖；继续补真实内网平台生产联调证据 |
 | P1 | `/sync` | role capability、同步健康/水位/failed inbox 告警、failed inbox 重试、自动 backoff 状态、open conflict 查询/处置 UI、use_incoming/manual_merge 已覆盖；继续补实机证据、告警投递和更多对象 manual_merge |
 | P1 | `/insights`、`/requirements`、`/tasks` | 洞察/战略影响独立管理、外部信号追溯、历史反馈来源追溯、需求结论反哺、任务负责人视图、blocked reason、批量处理和任务详情抽屉已覆盖；继续补跨对象联动体验、评论和更多归档对象解释关系 |
+| P1 | 体验系统轨道（§1.1/§3.1/§4.1/§19.5/§25） | 布局模板与 spacing token 收敛、Dashboard 重排分区归属与源健康折叠、向导/发现/新增源/导入预览迁居中 Modal（含 Esc/遮罩/焦点/脏表单确认）、账号资料编辑边界、发现搜索与凭码加入 |
 | P2 | `/news`、`/recommendations` | 筛选跳转、观察池运营深化、策略编辑和批量重算解释 |

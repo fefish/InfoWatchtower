@@ -6,6 +6,7 @@
 状态：P1-P4 已实施（2026-07-02）。机器契约见 `config/contracts/report_renditions.json`。
 P4 的模型产出（insight prompt v2）已随生成链路接入，配置 MiniMax key 后自动生效；
 未配 key 时成稿走规则降级并在条目上标注「规则降级稿」。
+§10 模板驱动生成（generation_template）为 2026-07-07 设计已定稿待实现。
 
 ## 1. 背景与目标
 
@@ -62,6 +63,7 @@ report_renditions                     某报告按某格式渲染出的成稿（
 | item_fields | 有序字段清单，可选值：`tag_line`（标签行）、`bullet_points`（📋要点）、`takeaway`（📌总结）、`five_fields`（五段正文）、`summary`、`source_link`、`score` |
 | export_targets | `[]` \| `["md"]` \| `["md","html"]`（SQL 导出不在此配置，仍走原出口） |
 | enabled / sort_order | 启用与排序 |
+| generation_template / generation_template_source | 自定义格式的生成模板（规范形 + 上传原文，nullable；内置格式恒 null）——设计已定稿待实现，见 §10 |
 
 内置种子（每个工作台自动注册）：
 
@@ -168,4 +170,162 @@ PATCH  /api/daily-report-items/{id}             （增加 is_headline）
 | 板块判定质量 | 优先用源侧 board_relevance 先验；编审页允许改条目板块（存 insight_json，不碰 category） |
 | 格式注册表被配坏 | company_sql_v1 locked；导出目标只影响 MD/HTML，SQL 出口硬编码走原链路 |
 | 双版信息不同步 | rendition 是投影不是副本；重生成幂等，publish 时统一定稿 |
+
+## 10. generation_template 模板驱动生成（设计已定稿待实现，2026-07-07）
+
+事实源级规则（数据流位点、投影/生成判定、company_sql_v1 不变式）见
+`docs/backend/reports-editorial-design.md` §8.1；本节是实现级细节。契约：
+`config/contracts/report_renditions.json` `generation_template`。
+
+### 10.1 数据模型增量
+
+- `report_formats.generation_template`（JSON 列，nullable）：解析后的模板
+  规范形（canonical form）。内置格式恒为 null。
+- `report_formats.generation_template_source`（TEXT，nullable）：用户上传原文
+  （JSON 或 XML），仅用于回显编辑，运行时只读规范形。
+- `generated_news.template_extras_json`（JSON 列，默认 `{}`）：按 format_code
+  分桶的增量字段产出：
+
+```json
+{
+  "exec_brief_v1": {
+    "values": { "one_liner": "……", "risk_flags": ["……"] },
+    "generated_by": "minimax:MiniMax-M2.7-highspeed",
+    "generated_at": "2026-07-07T12:03:00+08:00",
+    "template_version": 3
+  }
+}
 ```
+
+### 10.2 模板规范形 schema
+
+```json
+{
+  "carrier": "json",
+  "version": 3,
+  "item_schema": {
+    "fields": [
+      {
+        "key": "one_liner",
+        "label": "一句话结论",
+        "type": "string",
+        "required": true,
+        "max_length": 80,
+        "map_from": null,
+        "example": "X 公司开源 Y 推理框架，单卡吞吐提升。",
+        "guidance": "面向高管的一句话，不带技术细节"
+      },
+      {
+        "key": "background",
+        "label": "背景",
+        "type": "text",
+        "required": true,
+        "max_length": 2000,
+        "map_from": "content_json.background",
+        "example": "……"
+      }
+    ]
+  }
+}
+```
+
+字段约束（上传时逐条校验，违规 422 并逐条报错）：
+
+| 约束 | 规则 |
+|---|---|
+| `carrier` | `json` \| `xml`；XML 上传解析为同一规范形后按 JSON 存储（见 10.3） |
+| `fields[].key` | `^[a-z][a-z0-9_]*$`，模板内唯一，≤32 字符，最多 24 个字段 |
+| `fields[].type` | `string`（≤500 单行）\| `text`（多行）\| `string_list`（元素 ≤200，最多 10 条）\| `url` |
+| `fields[].max_length` | 1..4000；`required` 缺省 false |
+| `fields[].map_from` | null 或基稿字段超集路径之一：`title` / `summary` / `key_points` / `category` / `content_json.background|effects|eventSummary|technologyAndInnovation|valueAndImpact` / `insight_json.board|bullet_points|takeaway|tag_line` / `source_link` / `published_at` / `score` |
+| 模板总大小 | 规范形序列化 ≤ 32KB，`example/guidance/label` 不得含 `<script`/`<style`/HTML 标签 |
+| `version` | 服务端维护的自增整数，每次 PATCH 模板 +1，用于 extras 失效判断 |
+
+投影/生成判定（确定性算法，实现必须与此逐条一致）：
+
+```text
+对模板每个 field：
+  map_from 非空                      -> 投影字段（从基稿超集取值）
+  map_from 为空且 key 命中超集路径尾名 -> 投影字段（隐式映射，如 key=summary）
+  其余                              -> 增量字段（追加生成）
+增量字段集合为空 -> 该格式是纯投影格式，零额外模型调用
+```
+
+### 10.3 XML 载体
+
+- 目的：兼容旧系统"XML 板式"心智；能力与 JSON 载体一一等价，不多不少。
+- 上传时用禁 DTD/禁外部实体/禁实体展开的安全解析器解析（defusedxml 语义），
+  解析失败或含 DTD/PI 一律 422。
+- 结构约定：`<template version=""><item><field key="" type="" required=""
+  max-length="" map-from=""><label/><example/><guidance/></field>…</item></template>`；
+  解析后转 10.2 规范形存储，`generation_template_source` 保留原文。
+- 运行时（生成/投影/校验）只读规范形，不存在"XML 分支逻辑"。
+
+### 10.4 生成与投影链路
+
+1. 增量生成时机：daily pipeline 的 generation step 在产出基稿后，对该工作台
+   `enabled=true` 且含增量字段的格式逐一追加生成；rendition
+   `regenerate` 时对缺失/过期（`template_version` 落后）的 extras 惰性补齐。
+2. 增量生成 prompt：复用 `_build_user_prompt` 的 JSON-in-JSON 风格，把模板
+   字段的 `key/label/type/max_length/required/example/guidance` 作为
+   `outputSchema` 数据传入，来源仍是同一 news_item + 基稿；模型输出按模板
+   逐字段校验（类型/长度/required），不合格字段按 `map_from` 兜底或置空。
+   现有 `_passes_generation_quality`、category、insight 校验不因模板放宽。
+3. 预算与降级：增量生成调用计入工作台 `generation_policy.daily_generation_budget`
+   （见 `docs/backend/generation-provider-design.md` §3.2）；provider 不可用/
+   超时/预算尽 → extras 缺失，body_json 条目标记
+   `"template_fallback": true, "missing_fields": [...]`，投影不阻塞。
+4. 投影：rendition 渲染读采信条目 + 基稿 + `template_extras_json[format_code]`
+   + 模板字段顺序产出 body_json；带模板的格式其 `item_fields` 由模板字段序
+   派生，MD/HTML 导出按模板 label 渲染小节。
+5. 编辑覆盖优先级不变：`editor override -> template_extras/generated_news ->
+   news_items`；编辑覆盖仍只写 `daily_report_items.editor_*`，不写 extras。
+
+### 10.5 API 增量
+
+```text
+POST  /api/report-formats                      # body 增加 generation_template（json 或 xml 原文 + carrier）
+PATCH /api/report-formats/{id}                 # 同上；locked/builtin 格式提交模板一律 400
+POST  /api/report-formats/validate-template    # 干跑校验 + 示例预览（workspace admin+）
+```
+
+`validate-template` 行为：不落库；返回
+`{valid, errors[], normalized_template, projection_fields[], generated_fields[],
+preview_item}`，其中 `preview_item` 用一条内置示例基稿按模板投影出的样例条目
+（增量字段填 example 值），供上传界面所见即所得预览。
+
+### 10.6 安全边界
+
+- 模板是纯声明式数据：渲染层只做字段投影，**不做任何模板字符串求值**
+  （无 Jinja/Liquid/eval 语义），MD/HTML 导出对模板 label/值统一转义。
+- 模板不含可执行内容：上传校验拒绝 script/style/HTML 标签与超长字段；
+  XML 走安全解析（10.3）。
+- prompt 注入控制：模板文本以 JSON 数据字段进入 prompt（不拼接进系统指令），
+  模型输出仍过逐字段 schema 校验和既有质量门禁。
+- 增量字段永不进入：`content_json`、`insight_json`、`generated_news.category`、
+  公司 SQL、dedupe/推荐输入。
+
+### 10.7 验收标准（可执行断言级）
+
+1. 注册含 `map_from` 全覆盖字段的自定义格式：生成 step 零额外模型调用
+   （fixture provider 断言调用次数不变），rendition body_json 按模板字段序投影。
+2. 注册含 1 个增量字段（如 `one_liner`）的格式：pipeline 后
+   `generated_news.template_extras_json[format_code].values.one_liner` 存在，
+   rendition/MD/HTML 展示该字段；`content_json`、`insight_json`、`category`
+   与不带模板时逐字节一致。
+3. 同一模板 XML 载体与 JSON 载体上传后规范形完全相等（canonical JSON 相等断言）；
+   含 DTD/外部实体的 XML 422。
+4. 非法模板逐条报错：重复 key、`key=1abc`、`type=script`、字段 >24、
+   `example` 含 `<script>` 均 422 且错误定位到字段。
+5. `validate-template` 不写任何表（前后行数断言），返回
+   projection/generated 字段划分和 preview_item。
+6. locked（company_sql_v1）与 builtin（tech_insight_v1）提交
+   `generation_template` 返回 400；两者行为回归测试不变。
+7. provider 关闭时带增量字段的格式：rendition 照常产出，条目带
+   `template_fallback=true`；开启 provider 后 `regenerate` 补齐 extras 且
+   `adoption_status`、`is_headline` 不变（投影不变式回归）。
+8. 模板 PATCH 后 `version+1`，旧 extras 判定过期，`regenerate` 按新模板重生；
+   删除该格式不影响采信与其他格式（现有 rendition 不变式回归）。
+9. 周报：`report_type=weekly` 的模板格式跑通 2/7 两条断言（同机制）。
+10. 全程 `scripts/validate_company_sql.py` 基准通过；模板任何配置组合下
+    公司 SQL 导出输出与无模板时逐字节一致。

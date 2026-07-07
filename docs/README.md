@@ -39,6 +39,7 @@ docs/
     data-ingestion-flow-storage-design.md
     recommendation-scoring-design.md
     pipeline-jobs-design.md
+    generation-provider-design.md
     reports-editorial-design.md
     workspace-configuration-design.md
     strategy-loop-design.md
@@ -105,7 +106,8 @@ docs/
 | 后端模块总图 | `docs/backend/backend-module-design.md` | 后端领域模块、数据归属、API/任务/事件边界 | 页面布局和视觉细节 |
 | 数据抓取/流转/存储 | `docs/backend/data-ingestion-flow-storage-design.md` | 数据源、抓取 run、raw、news、去重、覆盖率和追溯 | 推荐分和采信成稿 |
 | 推荐评分模块 | `docs/backend/recommendation-scoring-design.md` | 准入、评分、推荐 run、分数解释和反馈反哺 | 原始反馈写入和通知 |
-| 流水线与任务 | `docs/backend/pipeline-jobs-design.md` | 日更流水线、worker、scheduler、重试、幂等和任务状态 | 单个业务步骤的字段规则 |
+| 流水线与任务 | `docs/backend/pipeline-jobs-design.md` | 日更流水线、worker、scheduler、工作台调度策略、重试、幂等和任务状态 | 单个业务步骤的字段规则 |
+| 生成模型 provider | `docs/backend/generation-provider-design.md` | LLM provider 实例 env 配置、工作台 generation_policy、连通性自检 | 生成 prompt 字段结构（归 renditions） |
 | 报告编审发布 | `docs/backend/reports-editorial-design.md` | 日报/周报、采信、编辑覆盖、发布、锁定、版本 | 多版成稿渲染细节 |
 | 工作台配置 | `docs/backend/workspace-configuration-design.md` | 工作台、sections、成员、label/feedback policy、domain pack | 数据主链实现 |
 | 身份权限模块 | `docs/backend/identity-access-design.md` | 用户、角色、SSO、邀请、membership、部署认证 | 顶部用户胶囊 UI |
@@ -154,7 +156,7 @@ docs/
 5. 做后端模块：读 `docs/backend/backend-module-design.md`，并读对应模块设计文档。
 6. 做数据源、抓取、raw/news、去重、覆盖率：读 `docs/backend/data-ingestion-flow-storage-design.md`、`docs/backend/ingestion-adapter-dedup-spec.md`、`docs/backend/data-lineage-and-storage.md`。
 7. 做推荐、准入、评分、候选池解释：读 `docs/backend/recommendation-scoring-design.md`、`docs/backend/feedback-heat-scoring.md`。
-8. 做流水线、任务、scheduler、worker：读 `docs/backend/pipeline-jobs-design.md`。
+8. 做流水线、任务、scheduler、worker、工作台调度策略：读 `docs/backend/pipeline-jobs-design.md`；做生成模型 provider 配置或连通性自检：再读 `docs/backend/generation-provider-design.md`。
 9. 做日报/周报编审发布：读 `docs/backend/reports-editorial-design.md`、`docs/backend/report-renditions-design.md`。
 10. 做工作台配置：读 `docs/backend/workspace-configuration-design.md`、`docs/backend/workspace-module-model.md`。
 11. 做登录、SSO、用户权限：读 `docs/backend/identity-access-design.md`、`docs/deployment/auth-unified-login.md`、`config/contracts/auth_modes.json`。
@@ -267,7 +269,16 @@ docs/
 
 - 更新 `docs/backend/pipeline-jobs-design.md`
 - 更新涉及的 run API、worker、scheduler、部署配置和测试
+- 如涉及工作台 `schedule_policy`，同步 `config/contracts/workspace_model.json`
 - 确认部署形态能力开关仍覆盖 API、scheduler 和前端
+
+改生成模型 provider/生成策略：
+
+- 更新 `docs/backend/generation-provider-design.md`
+- 更新 `config/contracts/workspace_model.json` 的 `generation_policy`
+- 新增实例级 env 时同步 `config/contracts/deployment_modes.json` 的 `related_env`
+  与启动自检规则位
+- 密钥治理边界同步 `docs/backend/security-secrets-privacy-design.md`
 
 改报告编审发布：
 

@@ -48,6 +48,71 @@ http://localhost:8000/healthz
 
 如果要连接 PostgreSQL，把 `DATABASE_URL` 指向本地或 Compose 里的数据库。
 
+## 2.1 宿主机裸跑：自动调度需要三个进程
+
+**只跑 `uvicorn` 时手动触发可用，但自动调度静默不生效。** 每日定时流水线依赖
+redis + worker + scheduler 三个进程（Docker Compose 部署自带这三个服务；
+`deploy/docker-compose.*.yml` 已包含，不需要本节）。宿主机裸跑（不经 compose）
+必须手动起齐：
+
+```bash
+# 进程 0：redis（宿主机已装 redis-server 时）
+redis-server --port 6379
+
+# 以下三个进程共用同一份 env（示例最小集；生产 env 见 deploy/env.production.example）
+export DATABASE_URL="postgresql+psycopg://infowatchtower:...@127.0.0.1:5432/infowatchtower"
+export REDIS_URL="redis://127.0.0.1:6379/0"
+export AUTH_SESSION_SECRET="dev-secret"
+export INGESTION_SCHEDULER_ENABLED=true
+export INGESTION_SCHEDULER_DAILY_TIME=12:00
+export INGESTION_SCHEDULER_TIMEZONE=Asia/Shanghai
+export DAILY_PIPELINE_DAY_OFFSET_DAYS=-1
+
+cd backend && source .venv/bin/activate
+
+# 进程 1：API
+uvicorn app.main:app --port 8000
+
+# 进程 2：worker（执行重业务任务）
+python -m app.workers.worker
+
+# 进程 3：scheduler（只投递任务，不执行重业务）
+python -m app.workers.scheduler
+```
+
+自证方式：scheduler 日志应出现 `Next daily_pipeline job ... at 12:00 Asia/Shanghai`；
+调度心跳/下次运行/最近 run 的界面自证入口是
+`GET /api/pipeline/scheduler/status`（设计已定稿待实现，见
+`docs/backend/pipeline-jobs-design.md` §8.5；当前可先看
+`GET /api/ingestion/scheduler` 的 env 快照）。工作台级触发时刻/重试/周报节拍在
+工作台配置中心「自动化」卡配置（同为设计已定稿待实现，契约
+`config/contracts/workspace_model.json` `schedule_policy`）。
+
+## 2.2 生成模型（LLM provider）实例级 env 怎么配
+
+base_url 和 key **只在实例级 env 配置**，不进数据库、不进 Git（设计事实源
+`docs/backend/generation-provider-design.md`）：
+
+```bash
+# 目标态 env（设计已定稿待实现；当前实现请用下方 MINIMAX_* 等价变量）
+export GENERATION_ENABLED=true
+export GENERATION_PROVIDER=minimax            # minimax | openai_compatible
+export GENERATION_BASE_URL=https://api.minimaxi.com/v1
+export GENERATION_API_KEY_REF=env:MY_LLM_KEY  # 或 GENERATION_API_KEY=... / file:/path
+export GENERATION_MODEL=MiniMax-M2.7-highspeed
+
+# 当前实现态（MINIMAX_* 将保留为兼容别名）：
+export MINIMAX_GENERATION_ENABLED=true
+export MINIMAX_API_KEY=...
+export MINIMAX_BASE_URL=https://api.minimaxi.com/v1
+export MINIMAX_MODEL=MiniMax-M2.7-highspeed
+```
+
+模型名、温度、超时、每日预算、降级行为属于工作台级 `generation_policy`，
+在工作台配置中心「生成模型」卡配置（key 只显示"已配置/未配置"，永不回显）；
+连通性用 `POST /api/generation/ping`（admin）自检。未配 key 时生成链路走规则
+降级稿（`fallback_needs_review`，不进公司 SQL），这是预期行为不是故障。
+
 ## 3. 前端本地运行
 
 ```bash
