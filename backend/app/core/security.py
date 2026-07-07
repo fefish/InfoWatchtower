@@ -15,6 +15,8 @@ CSRF_HEADER_NAME = "X-CSRF-Token"
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS", "TRACE"}
 CSRF_EXEMPT_PREFIXES = (
     "/api/auth/login",
+    # 游客登录与密码登录同理：请求方此刻还没有会话，也拿不到 CSRF cookie。
+    "/api/auth/guest-login",
     "/api/auth/password/forgot",
     "/api/auth/password/reset",
     "/api/setup",

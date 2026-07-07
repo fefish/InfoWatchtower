@@ -11,6 +11,7 @@ const api = vi.hoisted(() => ({
   forgotPassword: vi.fn(),
   startOidcLogin: vi.fn(),
   login: vi.fn(),
+  guestLogin: vi.fn(),
   logout: vi.fn(),
   fetchMe: vi.fn(),
   changePassword: vi.fn()
@@ -25,17 +26,24 @@ vi.mock("../api/auth", () => ({
   forgotPassword: api.forgotPassword,
   startOidcLogin: api.startOidcLogin,
   login: api.login,
+  guestLogin: api.guestLogin,
   logout: api.logout,
   fetchMe: api.fetchMe,
   changePassword: api.changePassword
 }));
 
-function mountLoginPage(authMode: string, redirect = "", query: Record<string, string | string[]> = {}) {
+function mountLoginPage(
+  authMode: string,
+  redirect = "",
+  query: Record<string, string | string[]> = {},
+  guestEnabled = false
+) {
   const pinia = createPinia();
   setActivePinia(pinia);
   const runtime = useRuntimeStore();
   runtime.checked = true;
   runtime.authMode = authMode;
+  runtime.authGuestEnabled = guestEnabled;
   routeState.query = { ...(redirect ? { redirect } : {}), ...query };
 
   return mount(LoginPage, {
@@ -159,5 +167,60 @@ describe("LoginPage", () => {
     expect(wrapper.find('input[autocomplete="username"]').exists()).toBe(false);
     expect(wrapper.find('input[autocomplete="current-password"]').exists()).toBe(false);
     expect(wrapper.text()).not.toContain("使用单点登录");
+  });
+
+  // ---- 游客登录（runtime.auth_guest_enabled 驱动的条件渲染） ----
+
+  it("hides the guest entry when guest login is disabled", () => {
+    const wrapper = mountLoginPage("public_password");
+
+    expect(wrapper.text()).not.toContain("以游客身份浏览");
+  });
+
+  it("shows the guest entry and enters as guest when enabled", async () => {
+    api.guestLogin.mockResolvedValue({
+      user: {
+        id: "guest-1",
+        external_provider: "guest",
+        external_id: "guest",
+        employee_no: null,
+        username: "guest",
+        display_name: "游客",
+        department: null,
+        email: null,
+        status: "active",
+        is_active: true,
+        roles: ["viewer"]
+      }
+    });
+    const wrapper = mountLoginPage("public_password", "", {}, true);
+
+    expect(wrapper.text()).toContain("以游客身份浏览");
+    expect(wrapper.text()).toContain("需注册账号");
+
+    await buttonByText(wrapper, "以游客身份浏览").trigger("click");
+    await flushPromises();
+
+    expect(api.guestLogin).toHaveBeenCalledTimes(1);
+    expect(api.login).not.toHaveBeenCalled();
+    expect(routerPush).toHaveBeenCalledWith("/dashboard");
+  });
+
+  it("keeps the guest entry alongside SSO when both are enabled", () => {
+    const wrapper = mountLoginPage("oidc", "", {}, true);
+
+    expect(wrapper.text()).toContain("使用单点登录");
+    expect(wrapper.text()).toContain("以游客身份浏览");
+  });
+
+  it("shows the guest login error on failure", async () => {
+    api.guestLogin.mockRejectedValue(new Error("Guest login is disabled"));
+    const wrapper = mountLoginPage("oidc", "", {}, true);
+
+    await buttonByText(wrapper, "以游客身份浏览").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.find(".login-guest-entry .form-error").text()).toContain("Guest login is disabled");
+    expect(routerPush).not.toHaveBeenCalled();
   });
 });

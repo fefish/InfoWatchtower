@@ -40,6 +40,7 @@ export const useRuntimeStore = defineStore("runtime", {
     deployMode: "standalone" as DeployMode,
     instanceId: "",
     authMode: "public_password",
+    authGuestEnabled: false,
     appVersion: "",
     authMembershipMapping: emptyAuthMembershipMapping(),
     capabilities: fullCapabilities()
@@ -60,6 +61,7 @@ export const useRuntimeStore = defineStore("runtime", {
         this.deployMode = runtime.deploy_mode;
         this.instanceId = runtime.instance_id;
         this.authMode = runtime.auth_mode;
+        this.authGuestEnabled = runtime.auth_guest_enabled ?? false;
         this.appVersion = runtime.app_version;
         this.authMembershipMapping = runtime.auth_membership_mapping ?? emptyAuthMembershipMapping();
         this.capabilities = { ...runtime.capabilities };
@@ -80,6 +82,7 @@ export const useRuntimeStore = defineStore("runtime", {
         }
         this.deployMode = "standalone";
         this.authMode = "public_password";
+        this.authGuestEnabled = false;
         this.authMembershipMapping = emptyAuthMembershipMapping();
         this.capabilities = emptyCapabilities();
       } finally {

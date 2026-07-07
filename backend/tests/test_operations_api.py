@@ -579,6 +579,14 @@ def test_topic_task_owner_view_overdue_and_blocked_filters(monkeypatch, tmp_path
     assert mine.status_code == 200
     assert {item["id"] for item in mine.json()} == {overdue_id, blocked_id}
 
+    mine_by_alias = assignee_client.get(
+        "/api/topic-tasks",
+        params={"workspace_code": "planning_intel", "assignee": "me"},
+    )
+    assert mine_by_alias.status_code == 200
+    assert {item["id"] for item in mine_by_alias.json()} == {overdue_id, blocked_id}
+    assert all(item["assignee_user_id"] == assignee.id for item in mine_by_alias.json())
+
     overdue_items = assignee_client.get(
         "/api/topic-tasks",
         params={"workspace_code": "planning_intel", "assigned_to_me": "true", "due": "overdue"},

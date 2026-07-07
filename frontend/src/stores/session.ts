@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import type { Router } from "vue-router";
 
-import { changePassword, fetchMe, login, logout, type SessionUser } from "../api/auth";
+import { changePassword, fetchMe, guestLogin, login, logout, type SessionUser } from "../api/auth";
 import { onUnauthorized } from "../api/http";
 
 export const useSessionStore = defineStore("session", {
@@ -11,7 +11,9 @@ export const useSessionStore = defineStore("session", {
     loading: false
   }),
   getters: {
-    isAuthenticated: (state) => Boolean(state.user)
+    isAuthenticated: (state) => Boolean(state.user),
+    // 游客会话（共享只读 guest 账号）：顶栏显示「游客」、隐藏订阅等写入口。
+    isGuest: (state) => state.user?.external_provider === "guest"
   },
   actions: {
     async loadCurrentUser() {
@@ -30,6 +32,16 @@ export const useSessionStore = defineStore("session", {
       this.loading = true;
       try {
         const response = await login(username, password);
+        this.user = response.user;
+        this.checked = true;
+      } finally {
+        this.loading = false;
+      }
+    },
+    async guestLogin() {
+      this.loading = true;
+      try {
+        const response = await guestLogin();
         this.user = response.user;
         this.checked = true;
       } finally {

@@ -203,6 +203,25 @@ describe("TopicTasksPage", () => {
 
     expect(operationsApi.updateTopicTask).toHaveBeenCalledWith("task-1", { assignee_user_id: "user-3" });
     expect(wrapper.text()).toContain("Task Owner");
+    expect(wrapper.text()).toContain("已指派给 Task Owner，对方会收到站内通知");
+  });
+
+  it("shows immediate feedback when clearing a task assignee", async () => {
+    operationsApi.updateTopicTask.mockResolvedValue(
+      topicTask({
+        assignee_user_id: null,
+        assignee_name: null
+      })
+    );
+    const wrapper = mountPage();
+    await flushPromises();
+
+    const rowAssigneeSelect = wrapper.find(".topic-task-row .assignee-field select");
+    await rowAssigneeSelect.setValue("");
+    await flushPromises();
+
+    expect(operationsApi.updateTopicTask).toHaveBeenCalledWith("task-1", { assignee_user_id: null });
+    expect(wrapper.text()).toContain("已取消指派");
   });
 
   it("lets an assignee update status without exposing assignment controls", async () => {

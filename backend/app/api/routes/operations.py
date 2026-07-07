@@ -532,6 +532,8 @@ def list_topic_tasks(
     workspace_code: str = Query(...),
     status_filter: str | None = Query(default=None, alias="status"),
     assignee_user_id: str | None = Query(default=None),
+    # “我的任务”过滤：assignee=me（等价 assigned_to_me=true），也接受具体 user_id。
+    assignee: str | None = Query(default=None),
     assigned_to_me: bool = Query(default=False),
     due_filter: str | None = Query(default=None, alias="due", pattern="^(overdue|due_today)$"),
     limit: int = Query(default=50, ge=1, le=200),
@@ -548,6 +550,8 @@ def list_topic_tasks(
     )
     if status_filter:
         statement = statement.where(TopicTask.status == status_filter)
+    if assignee:
+        assignee_user_id = current_user.id if assignee == "me" else assignee
     if assigned_to_me:
         statement = statement.where(TopicTask.assignee_user_id == current_user.id)
     if assignee_user_id:

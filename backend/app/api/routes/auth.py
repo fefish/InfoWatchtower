@@ -12,6 +12,12 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.auth.guest import (
+    GUEST_ALLOWED_WRITE_PATHS,
+    GUEST_READ_ONLY_DETAIL,
+    ensure_guest_user,
+    is_guest_user,
+)
 from app.auth.oidc import (
     authorize_url as oidc_authorize_url,
     exchange_code as oidc_exchange_code,
@@ -40,7 +46,7 @@ from app.auth.service import (
 from app.auth.sessions import create_session_token, verify_session_token
 from app.core.config import Settings, get_settings
 from app.core.database import get_db_session
-from app.core.security import CSRF_COOKIE_NAME, peer_in_trusted_proxies
+from app.core.security import CSRF_COOKIE_NAME, SAFE_METHODS, peer_in_trusted_proxies
 from app.models.identity import PasswordResetToken, Role, User, UserInvite
 from app.models.feedback import AuditLog
 from app.models.workspace import Workspace, WorkspaceMembership
@@ -320,6 +326,7 @@ def get_current_user(
         if user and user.is_active and user.status in {"active", "must_change_password"}:
             if payload.get("sv") and payload.get("sv") != _session_version(user):
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+            _assert_guest_request_allowed(request, user, settings)
             if user.status == "must_change_password" and request.url.path not in MUST_CHANGE_ALLOWED_PATHS:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
@@ -353,6 +360,24 @@ def get_current_user(
             return user
 
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+
+
+def _assert_guest_request_allowed(request: Request, user: User, settings: Settings) -> None:
+    """游客写门禁的唯一集中点（语义见 app/auth/guest.py）。
+
+    - 开关关闭后存量 guest 会话立即按未登录处理（401）；
+    - 游客只放行安全方法与 /api/auth/logout，其余写操作一律 403，
+      文案提示注册后可用（评论/点赞/订阅等无需再各自判断）。
+    """
+    if not is_guest_user(user):
+        return
+    if not settings.auth_guest_enabled:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    if request.method.upper() in SAFE_METHODS:
+        return
+    if request.url.path in GUEST_ALLOWED_WRITE_PATHS:
+        return
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=GUEST_READ_ONLY_DETAIL)
 
 
 def require_super_admin(current_user: User = Depends(get_current_user)) -> User:
@@ -403,6 +428,12 @@ def assert_workspace_member(
     workspace = session.scalar(select(Workspace).where(Workspace.code == workspace_code, Workspace.enabled.is_(True)))
     if workspace is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
+    if is_guest_user(user):
+        # 游客隐式 viewer 视角：不建 membership，仅可只读浏览 internal_public
+        # 工作台（写操作已在 get_current_user 的集中门禁被 403 拦截）。
+        if workspace.visibility == "internal_public" and ROLE_RANK["viewer"] >= ROLE_RANK[min_role]:
+            return
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="not a workspace member")
     membership = session.scalar(
         select(WorkspaceMembership).where(
             WorkspaceMembership.workspace_id == workspace.id,
@@ -452,6 +483,35 @@ def login(
     user = find_user_with_roles(session, user.id)
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password")
+    _set_session_cookie(response, user, settings)
+    return AuthResponse(user=user_to_read(user))
+
+
+@router.post("/guest-login", response_model=AuthResponse)
+def guest_login(
+    response: Response,
+    session: Session = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> AuthResponse:
+    """游客登录：签发共享只读 guest 会话（完整语义见 app/auth/guest.py）。
+
+    - 仅 AUTH_GUEST_ENABLED=true 时可用（deploy_checks 限 standalone/cloud 可开）；
+    - 首次调用自动创建共享 guest 本地用户（viewer 全局角色、无密码不可改密）；
+    - 不写任何 workspace membership：游客按隐式 viewer 视角浏览 internal_public
+      工作台的已发布内容，一切写操作 403 提示注册后可用。
+    """
+    _require_auth_ready(settings)
+    if not settings.auth_guest_enabled:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Guest login is disabled")
+    try:
+        user = ensure_guest_user(session)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+    mark_login(session, user, "auth.guest_login")
+    session.commit()
+    user = find_user_with_roles(session, user.id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     _set_session_cookie(response, user, settings)
     return AuthResponse(user=user_to_read(user))
 

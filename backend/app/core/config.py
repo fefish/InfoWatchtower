@@ -145,6 +145,10 @@ class Settings(BaseSettings):
     auth_trusted_proxy_cidrs: str = Field(default="", alias="AUTH_TRUSTED_PROXY_CIDRS")
 
     auth_mode: str = Field(default="public_password", alias="AUTH_MODE")
+    # 游客登录开关（默认关）：开启后 POST /api/auth/guest-login 签发共享只读
+    # guest 会话（语义见 app/auth/guest.py）。仅 standalone/cloud 形态允许开启，
+    # intranet/extranet 由启动自检 fail-fast 拒绝（deploy_checks）。
+    auth_guest_enabled: bool = Field(default=False, alias="AUTH_GUEST_ENABLED")
     auth_session_secret: str = Field(default="", alias="AUTH_SESSION_SECRET")
     # 多版本轮换：逗号分隔，第一个用于签名、全部可验签；配置后覆盖单值
     # AUTH_SESSION_SECRET（见 _sync_session_secret_rotation）。换密钥时把新

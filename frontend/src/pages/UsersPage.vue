@@ -1,8 +1,19 @@
 <script setup lang="ts">
-import { Ban, Copy, KeyRound, Plus, RefreshCw, RotateCcw, Save, ShieldCheck, Trash2, UserPlus } from "lucide-vue-next";
+import { Ban, Copy, KeyRound, Plus, RefreshCw, RotateCcw, Save, ShieldCheck, Trash2, UserPlus, Users } from "lucide-vue-next";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 
 import type { InviteRecord, SessionUser, UserRole } from "../api/auth";
+import {
+  addUserGroupMember,
+  bulkJoinWorkspaceByGroup,
+  createUserGroup,
+  deleteUserGroup,
+  fetchUserGroup,
+  fetchUserGroups,
+  removeUserGroupMember,
+  type UserGroupDetailRecord,
+  type UserGroupRecord
+} from "../api/groups";
 import {
   createInvite,
   fetchPermissionChanges,
@@ -49,7 +60,13 @@ const selectedPermissionRollbackIds = ref<string[]>([]);
 const selectedRoles = reactive<Record<string, Set<UserRole>>>({});
 const memberRoleDrafts = reactive<Record<string, string>>({});
 const dangerousMemberConfirmations = reactive<Record<string, boolean>>({});
-const activeTab = ref<"users" | "invites" | "members" | "policies">("users");
+const activeTab = ref<"users" | "invites" | "groups" | "members" | "policies">("users");
+const groups = ref<UserGroupRecord[]>([]);
+const groupDetail = ref<UserGroupDetailRecord | null>(null);
+const groupForm = reactive({ code: "", name: "", description: "" });
+const groupMemberUserId = ref("");
+const bulkJoinRole = ref("member");
+const savingGroup = ref(false);
 const loading = ref(false);
 const savingUserId = ref("");
 const error = ref("");
@@ -89,8 +106,15 @@ const authMappingForm = reactive({
   workspace_role: "viewer"
 });
 const isSuperAdmin = computed(() => session.user?.roles.includes("super_admin") ?? false);
+// 用户组管理入口与后端权限门一致：super_admin / editor_admin。
+const canManageGroups = computed(() =>
+  (session.user?.roles ?? []).some((role) => role === "super_admin" || role === "editor_admin")
+);
 const memberUserOptions = computed(() =>
   users.value.filter((user) => !members.value.some((member) => member.user.id === user.id))
+);
+const groupMemberOptions = computed(() =>
+  users.value.filter((user) => !groupDetail.value?.members.some((member) => member.id === user.id))
 );
 const authModeLabel = computed(() => {
   const labels: Record<string, string> = {
@@ -217,13 +241,19 @@ async function loadData() {
   try {
     await workspace.loadWorkspaces();
     await runtime.load();
-    if (!isSuperAdmin.value && !["members", "policies"].includes(activeTab.value)) {
+    const allowedTabs = isSuperAdmin.value
+      ? ["users", "invites", "groups", "members", "policies"]
+      : canManageGroups.value
+        ? ["groups", "members", "policies"]
+        : ["members", "policies"];
+    if (!allowedTabs.includes(activeTab.value)) {
       activeTab.value = "members";
     }
     const [
       nextUsers,
       nextRoles,
       nextInvites,
+      nextGroups,
       nextMembers,
       nextFeedbackPolicy,
       nextAuthMapping,
@@ -232,6 +262,7 @@ async function loadData() {
       fetchUsers(isSuperAdmin.value ? undefined : workspace.currentCode),
       isSuperAdmin.value ? fetchRoles() : Promise.resolve([]),
       isSuperAdmin.value ? fetchInvites() : Promise.resolve([]),
+      canManageGroups.value ? fetchUserGroups() : Promise.resolve([]),
       workspace.currentCode ? fetchWorkspaceMembers(workspace.currentCode) : Promise.resolve([]),
       workspace.currentCode ? fetchWorkspaceFeedbackPolicy(workspace.currentCode) : Promise.resolve(null),
       isSuperAdmin.value && workspace.currentCode
@@ -243,6 +274,7 @@ async function loadData() {
     users.value = nextUsers;
     roles.value = nextRoles;
     invites.value = nextInvites;
+    groups.value = nextGroups;
     members.value = nextMembers;
     applyMemberRoleDrafts(nextMembers);
     applyFeedbackPolicy(nextFeedbackPolicy);
@@ -451,6 +483,128 @@ async function saveMemberRole(member: WorkspaceMemberRecord) {
     error.value = exc instanceof Error ? exc.message : "保存成员角色失败";
   } finally {
     savingMember.value = false;
+  }
+}
+
+async function loadGroups() {
+  if (!canManageGroups.value) {
+    groups.value = [];
+    groupDetail.value = null;
+    return;
+  }
+  groups.value = await fetchUserGroups();
+  if (groupDetail.value && !groups.value.some((group) => group.code === groupDetail.value?.code)) {
+    groupDetail.value = null;
+  }
+}
+
+async function submitGroup() {
+  if (!groupForm.code.trim() || !groupForm.name.trim()) {
+    error.value = "请填写组编码和组名称";
+    return;
+  }
+  savingGroup.value = true;
+  error.value = "";
+  notice.value = "";
+  try {
+    const created = await createUserGroup({
+      code: groupForm.code.trim(),
+      name: groupForm.name.trim(),
+      description: groupForm.description.trim()
+    });
+    groupForm.code = "";
+    groupForm.name = "";
+    groupForm.description = "";
+    notice.value = `用户组 ${created.name} 已创建`;
+    await loadGroups();
+    await openGroup(created.code);
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "创建用户组失败";
+  } finally {
+    savingGroup.value = false;
+  }
+}
+
+async function openGroup(code: string) {
+  error.value = "";
+  try {
+    groupDetail.value = await fetchUserGroup(code);
+    groupMemberUserId.value = "";
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "加载用户组失败";
+  }
+}
+
+async function removeGroup(group: UserGroupRecord) {
+  savingGroup.value = true;
+  error.value = "";
+  notice.value = "";
+  try {
+    await deleteUserGroup(group.code);
+    if (groupDetail.value?.code === group.code) {
+      groupDetail.value = null;
+    }
+    notice.value = `用户组 ${group.name} 已删除`;
+    await loadGroups();
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "删除用户组失败";
+  } finally {
+    savingGroup.value = false;
+  }
+}
+
+async function addGroupMember() {
+  if (!groupDetail.value || !groupMemberUserId.value) {
+    return;
+  }
+  savingGroup.value = true;
+  error.value = "";
+  try {
+    groupDetail.value = await addUserGroupMember(groupDetail.value.code, groupMemberUserId.value);
+    groupMemberUserId.value = "";
+    await loadGroups();
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "添加组成员失败";
+  } finally {
+    savingGroup.value = false;
+  }
+}
+
+async function removeGroupMember(userId: string) {
+  if (!groupDetail.value) {
+    return;
+  }
+  savingGroup.value = true;
+  error.value = "";
+  try {
+    await removeUserGroupMember(groupDetail.value.code, userId);
+    await openGroup(groupDetail.value.code);
+    await loadGroups();
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "移除组成员失败";
+  } finally {
+    savingGroup.value = false;
+  }
+}
+
+async function bulkJoinCurrentWorkspace() {
+  if (!workspace.currentCode || !groupDetail.value) {
+    return;
+  }
+  savingGroup.value = true;
+  error.value = "";
+  notice.value = "";
+  try {
+    const result = await bulkJoinWorkspaceByGroup(workspace.currentCode, {
+      group_code: groupDetail.value.code,
+      workspace_role: bulkJoinRole.value
+    });
+    notice.value = `已按组批量加入 ${result.workspace_code}：新增 ${result.added_count} 人、恢复 ${result.reactivated_count} 人、跳过 ${result.skipped_count} 人（已在台成员保持原角色）`;
+    await loadWorkspaceMembers();
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "按组批量加入工作台失败";
+  } finally {
+    savingGroup.value = false;
   }
 }
 
@@ -724,6 +878,7 @@ onMounted(loadData);
   <div class="policy-tabs">
     <button v-if="isSuperAdmin" type="button" :class="{ active: activeTab === 'users' }" @click="activeTab = 'users'">用户</button>
     <button v-if="isSuperAdmin" type="button" :class="{ active: activeTab === 'invites' }" @click="activeTab = 'invites'">邀请</button>
+    <button v-if="canManageGroups" type="button" :class="{ active: activeTab === 'groups' }" @click="activeTab = 'groups'">用户组</button>
     <button type="button" :class="{ active: activeTab === 'members' }" @click="activeTab = 'members'">工作台成员</button>
     <button type="button" :class="{ active: activeTab === 'policies' }" @click="activeTab = 'policies'">策略</button>
   </div>
@@ -877,6 +1032,121 @@ onMounted(loadData);
       </tbody>
     </table>
     <p v-if="!loading && invites.length === 0" class="empty-state">暂无邀请，选择角色和工作台后生成邀请链接。</p>
+  </section>
+
+  <section v-else-if="activeTab === 'groups'" class="data-table-wrap">
+    <form class="form-grid-two group-create-form" @submit.prevent="submitGroup">
+      <label>
+        <span>组编码</span>
+        <input v-model="groupForm.code" placeholder="例如：planning_team" aria-label="组编码" />
+      </label>
+      <label>
+        <span>组名称</span>
+        <input v-model="groupForm.name" placeholder="例如：规划团队" aria-label="组名称" />
+      </label>
+      <label>
+        <span>说明</span>
+        <input v-model="groupForm.description" placeholder="组用途说明（可选）" aria-label="组说明" />
+      </label>
+      <button type="submit" class="icon-button" :disabled="savingGroup || !groupForm.code.trim() || !groupForm.name.trim()">
+        <Plus :size="16" />
+        <span>创建用户组</span>
+      </button>
+    </form>
+
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>用户组</th>
+          <th>说明</th>
+          <th>成员数</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr v-for="group in groups" :key="group.id">
+          <td>
+            <strong>{{ group.name }}</strong>
+            <span>{{ group.code }}</span>
+          </td>
+          <td>{{ group.description || "-" }}</td>
+          <td>{{ group.member_count }}</td>
+          <td>
+            <button type="button" class="icon-button secondary" @click="openGroup(group.code)" title="管理组成员">
+              <Users :size="16" />
+              <span>管理</span>
+            </button>
+            <button type="button" class="icon-button secondary" :disabled="savingGroup" @click="removeGroup(group)" title="删除用户组">
+              <Trash2 :size="16" />
+              <span>删除</span>
+            </button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+    <p v-if="!loading && groups.length === 0" class="empty-state">暂无用户组，先创建一个组，再把整组成员批量加入工作台。</p>
+
+    <div v-if="groupDetail" class="permission-policy-section group-detail-panel">
+      <div class="section-heading-row">
+        <Users :size="18" />
+        <h3>组成员 · {{ groupDetail.name }}</h3>
+      </div>
+      <form class="form-grid-two group-member-form" @submit.prevent="addGroupMember">
+        <label>
+          <span>添加成员</span>
+          <select v-model="groupMemberUserId" aria-label="选择组成员">
+            <option v-for="user in groupMemberOptions" :key="user.id" :value="user.id">
+              {{ user.display_name }} · {{ user.username }}
+            </option>
+          </select>
+        </label>
+        <button type="submit" class="icon-button" :disabled="savingGroup || !groupMemberUserId">
+          <UserPlus :size="16" />
+          <span>添加成员</span>
+        </button>
+      </form>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>成员</th>
+            <th>部门</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="member in groupDetail.members" :key="member.id">
+            <td>
+              <strong>{{ member.display_name }}</strong>
+              <span>{{ member.username }}</span>
+            </td>
+            <td>{{ member.department || "-" }}</td>
+            <td>
+              <button type="button" class="icon-button secondary" :disabled="savingGroup" @click="removeGroupMember(member.id)" title="移出用户组">
+                <Trash2 :size="16" />
+                <span>移除</span>
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <p v-if="groupDetail.members.length === 0" class="empty-state">该组暂无成员，先从上方添加。</p>
+
+      <form class="form-grid-two group-bulk-form" @submit.prevent="bulkJoinCurrentWorkspace">
+        <label>
+          <span>批量加入 {{ workspace.current?.name || workspace.currentCode }}</span>
+          <select v-model="bulkJoinRole" aria-label="批量入台角色">
+            <option value="viewer">viewer</option>
+            <option value="member">member</option>
+            <option value="admin">admin</option>
+          </select>
+        </label>
+        <button type="submit" class="icon-button" :disabled="savingGroup || groupDetail.members.length === 0">
+          <UserPlus :size="16" />
+          <span>按组加入当前工作台</span>
+        </button>
+      </form>
+      <p class="empty-state">批量入台幂等：已在台成员保持原角色不降级；owner 角色只能走单人流程并需要危险确认。</p>
+    </div>
   </section>
 
   <section v-else-if="activeTab === 'members'" class="data-table-wrap">

@@ -500,6 +500,7 @@ def test_authenticated_user_can_load_workspace_sections(monkeypatch, tmp_path):
         "topic_tasks",
         "sync",
         "exports",
+        "workspace_settings",
         "users",
         "audit_logs",
     ]
@@ -1110,3 +1111,157 @@ def test_session_cookie_survives_secret_rotation_until_old_secret_removed(monkey
     )
     retired.cookies.set("infowatchtower_session", old_cookie)
     assert retired.get("/api/auth/me").status_code == 401
+
+
+# ---- 游客登录（AUTH_GUEST_ENABLED，共享只读 guest 会话，语义见 app/auth/guest.py） ----
+
+
+def test_guest_login_is_disabled_by_default(monkeypatch, tmp_path):
+    client, _ = make_client(monkeypatch, tmp_path, AUTH_MODE="public_password")
+
+    response = client.post("/api/auth/guest-login")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Guest login is disabled"
+
+
+def test_guest_login_issues_shared_readonly_session(monkeypatch, tmp_path):
+    client, _ = make_client(
+        monkeypatch,
+        tmp_path,
+        AUTH_MODE="public_password",
+        AUTH_GUEST_ENABLED="true",
+    )
+
+    response = client.post("/api/auth/guest-login")
+    assert response.status_code == 200
+    payload = response.json()["user"]
+    assert payload["external_provider"] == "guest"
+    assert payload["display_name"] == "游客"
+    assert payload["roles"] == ["viewer"]
+
+    me = client.get("/api/auth/me")
+    assert me.status_code == 200
+    assert me.json()["user"]["id"] == payload["id"]
+
+    # 共享账号：再来一个游客会话复用同一本地用户（首次自动建，之后幂等）
+    second = TestClient(create_app())
+    second_login = second.post("/api/auth/guest-login")
+    assert second_login.status_code == 200
+    assert second_login.json()["user"]["id"] == payload["id"]
+
+    # 游客无本地密码：不能走密码登录，也不能改密
+    password_login = TestClient(create_app()).post(
+        "/api/auth/login",
+        json={"username": payload["username"], "password": "anything"},
+    )
+    assert password_login.status_code == 401
+
+
+def test_guest_writes_are_blocked_centrally_with_register_hint(monkeypatch, tmp_path):
+    client, _ = make_client(
+        monkeypatch,
+        tmp_path,
+        AUTH_MODE="public_password",
+        AUTH_GUEST_ENABLED="true",
+    )
+    assert client.post("/api/auth/guest-login").status_code == 200
+
+    # 读操作放行
+    assert client.get("/api/workspaces").status_code == 200
+
+    # 任意写操作（包括评论点赞等）都在 get_current_user 集中门禁被 403 拦截
+    create_workspace = client.post(
+        "/api/workspaces",
+        json={"code": "guest_ws", "name": "游客建台", "description": ""},
+    )
+    assert create_workspace.status_code == 403
+    assert "注册" in create_workspace.json()["detail"]
+
+    change_password = client.post(
+        "/api/auth/password/change",
+        json={"current_password": "x", "new_password": "new-password-1"},
+    )
+    assert change_password.status_code == 403
+
+    # 退出登录是唯一放行的写路径
+    assert client.post("/api/auth/logout").status_code == 200
+
+
+def test_guest_sessions_expire_when_flag_is_turned_off(monkeypatch, tmp_path):
+    enabled, _ = make_client(
+        monkeypatch,
+        tmp_path,
+        AUTH_MODE="public_password",
+        AUTH_GUEST_ENABLED="true",
+    )
+    assert enabled.post("/api/auth/guest-login").status_code == 200
+    guest_cookie = enabled.cookies.get("infowatchtower_session")
+    assert guest_cookie
+
+    disabled, _ = make_client(
+        monkeypatch,
+        tmp_path,
+        AUTH_MODE="public_password",
+        AUTH_GUEST_ENABLED="false",
+    )
+    disabled.cookies.set("infowatchtower_session", guest_cookie)
+    assert disabled.get("/api/auth/me").status_code == 401
+
+
+def test_meta_runtime_exposes_guest_flag(monkeypatch, tmp_path):
+    client, _ = make_client(
+        monkeypatch,
+        tmp_path,
+        AUTH_MODE="public_password",
+        AUTH_GUEST_ENABLED="true",
+    )
+    runtime = client.get("/api/meta/runtime")
+    assert runtime.status_code == 200
+    assert runtime.json()["auth_guest_enabled"] is True
+
+    disabled_client, _ = make_client(
+        monkeypatch,
+        tmp_path,
+        AUTH_MODE="public_password",
+        AUTH_GUEST_ENABLED="false",
+    )
+    assert disabled_client.get("/api/meta/runtime").json()["auth_guest_enabled"] is False
+
+
+def test_failfast_limits_guest_login_to_standalone_and_cloud():
+    import pytest
+
+    from app.core.config import Settings
+    from app.core.deploy_checks import validate_deploy_settings
+
+    # standalone / cloud：允许开启
+    validate_deploy_settings(
+        Settings(DEPLOY_MODE="standalone", AUTH_MODE="public_password", AUTH_GUEST_ENABLED=True, AUTH_SESSION_SECRET="secret"),
+    )
+    validate_deploy_settings(
+        Settings(DEPLOY_MODE="cloud", AUTH_MODE="public_password", AUTH_GUEST_ENABLED=True, AUTH_SESSION_SECRET="secret"),
+    )
+
+    # intranet / extranet：游客会话与形态的身份边界冲突，fail-fast 拒启
+    with pytest.raises(RuntimeError, match="AUTH_GUEST_ENABLED"):
+        validate_deploy_settings(
+            Settings(
+                DEPLOY_MODE="intranet",
+                AUTH_MODE="intranet_header",
+                AUTH_GUEST_ENABLED=True,
+                AUTH_SESSION_SECRET="secret",
+                SYNC_REMOTE_BASE_URL="https://extranet.example.com",
+                SYNC_REMOTE_TOKEN="pull-token",
+            ),
+        )
+    with pytest.raises(RuntimeError, match="AUTH_GUEST_ENABLED"):
+        validate_deploy_settings(
+            Settings(
+                DEPLOY_MODE="extranet",
+                AUTH_MODE="public_password",
+                AUTH_GUEST_ENABLED=True,
+                AUTH_SESSION_SECRET="secret",
+                SYNC_SERVICE_TOKENS="feed-token",
+            ),
+        )

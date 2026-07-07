@@ -22,7 +22,15 @@ from app.models.feedback import (
     Rating,
     Reaction,
 )
-from app.models.identity import Permission, Role, User, role_permissions, user_roles
+from app.models.identity import (
+    Permission,
+    Role,
+    User,
+    UserGroup,
+    UserGroupMember,
+    role_permissions,
+    user_roles,
+)
 from app.models.labels import ContentLabel, Label, LabelSet
 from app.models.legacy import (
     EntityMilestone,
@@ -88,6 +96,8 @@ __all__ = [
     "TopicTask",
     "TrackedEntity",
     "User",
+    "UserGroup",
+    "UserGroupMember",
     "WeeklyReport",
     "WeeklyReportItem",
     "Workspace",

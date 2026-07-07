@@ -22,6 +22,8 @@ def get_runtime(settings: Settings = Depends(get_settings)) -> dict[str, object]
             "search": settings.capability_search,
         },
         "auth_mode": settings.auth_mode,
+        # 登录页据此渲染「以游客身份浏览」按钮（POST /api/auth/guest-login）。
+        "auth_guest_enabled": settings.auth_guest_enabled,
         "auth_membership_mapping": _auth_membership_mapping(settings),
         "app_version": settings.app_version,
     }

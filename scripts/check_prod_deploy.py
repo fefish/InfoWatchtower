@@ -200,6 +200,12 @@ def check_prod_deploy(root: Path, env_file: Path) -> list[str]:
         )
     if deploy_mode == "intranet" and env.get("CAPABILITY_INGESTION", "").strip().lower() == "true":
         errors.append("intranet forbids CAPABILITY_INGESTION=true (startup fail-fast)")
+    # 游客登录只允许 standalone/cloud（对齐启动自检；intranet 网关身份边界与
+    # extranet 机器同步形态都不应存在匿名会话）。
+    if deploy_mode not in {"standalone", "cloud"} and env_truthy(env.get("AUTH_GUEST_ENABLED", "")):
+        errors.append(
+            "AUTH_GUEST_ENABLED=true is only allowed for standalone/cloud (startup fail-fast)"
+        )
     return errors
 
 

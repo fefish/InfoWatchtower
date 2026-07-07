@@ -232,12 +232,16 @@ async function submitBatchUpdate() {
 
 async function assignTask(item: TopicTaskRecord, assigneeUserId: string) {
   error.value = "";
+  message.value = "";
   try {
     const updated = await updateTopicTask(item.id, { assignee_user_id: assigneeUserId || null });
     const index = tasks.value.findIndex((candidate) => candidate.id === item.id);
     if (index >= 0) {
       tasks.value.splice(index, 1, updated);
     }
+    message.value = updated.assignee_name
+      ? `已指派给 ${updated.assignee_name}，对方会收到站内通知`
+      : "已取消指派";
   } catch (exc) {
     error.value = exc instanceof Error ? exc.message : "更新负责人失败";
   }

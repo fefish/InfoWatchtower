@@ -59,6 +59,13 @@ def validate_deploy_settings(settings: Settings) -> None:
             "are trusted from any peer; ensure the trusted gateway is the only ingress, "
             "or set AUTH_TRUSTED_PROXY_CIDRS to enforce the boundary in-process.",
         )
+    # 游客登录只允许 standalone/cloud：intranet 的身份边界在网关（游客绕过
+    # 门户身份注入），extranet 是机器同步面向公网的形态，都不该有匿名会话。
+    if settings.auth_guest_enabled and settings.deploy_mode not in {"standalone", "cloud"}:
+        raise RuntimeError(
+            f"AUTH_GUEST_ENABLED=true is only allowed for DEPLOY_MODE in [standalone, cloud]; "
+            f"got DEPLOY_MODE={settings.deploy_mode}.",
+        )
     if settings.deploy_mode == "intranet" and settings.capability_ingestion_override is True:
         # 不变式：intranet 形态不采集，不允许用 env 覆盖打开
         raise RuntimeError(

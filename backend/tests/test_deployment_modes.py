@@ -435,6 +435,7 @@ def test_runtime_endpoint_standalone_defaults(monkeypatch, tmp_path):
             "search": True,
         },
         "auth_mode": "public_password",
+        "auth_guest_enabled": False,
         "auth_membership_mapping": {
             "status": "empty",
             "default_workspaces": [],

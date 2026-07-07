@@ -37,6 +37,16 @@ const operationsApi = vi.hoisted(() => ({
   fetchAuditLogs: vi.fn()
 }));
 
+const groupsApi = vi.hoisted(() => ({
+  addUserGroupMember: vi.fn(),
+  bulkJoinWorkspaceByGroup: vi.fn(),
+  createUserGroup: vi.fn(),
+  deleteUserGroup: vi.fn(),
+  fetchUserGroup: vi.fn(),
+  fetchUserGroups: vi.fn(),
+  removeUserGroupMember: vi.fn()
+}));
+
 vi.mock("../api/identity", () => ({
   createInvite: identityApi.createInvite,
   fetchPermissionChanges: identityApi.fetchPermissionChanges,
@@ -64,6 +74,16 @@ vi.mock("../api/workspaces", () => ({
 
 vi.mock("../api/operations", () => ({
   fetchAuditLogs: operationsApi.fetchAuditLogs
+}));
+
+vi.mock("../api/groups", () => ({
+  addUserGroupMember: groupsApi.addUserGroupMember,
+  bulkJoinWorkspaceByGroup: groupsApi.bulkJoinWorkspaceByGroup,
+  createUserGroup: groupsApi.createUserGroup,
+  deleteUserGroup: groupsApi.deleteUserGroup,
+  fetchUserGroup: groupsApi.fetchUserGroup,
+  fetchUserGroups: groupsApi.fetchUserGroups,
+  removeUserGroupMember: groupsApi.removeUserGroupMember
 }));
 
 function userRecord(overrides: Partial<SessionUser> = {}): SessionUser {
@@ -214,6 +234,15 @@ function setupApiMocks() {
     auditLogRecord(),
     auditLogRecord({ id: "audit-2", action: "daily_report.publish", object_type: "daily_report" })
   ]);
+  groupsApi.fetchUserGroups.mockResolvedValue([]);
+  groupsApi.fetchUserGroup.mockResolvedValue({
+    id: "group-1",
+    code: "planning_team",
+    name: "规划团队",
+    description: "",
+    member_count: 0,
+    members: []
+  });
 }
 
 function mountUsersPage(currentUser: SessionUser) {
@@ -272,8 +301,9 @@ describe("UsersPage", () => {
     const wrapper = mountUsersPage(userRecord());
     await flushPromises();
 
-    expect(tabTexts(wrapper)).toEqual(["用户", "邀请", "工作台成员", "策略"]);
+    expect(tabTexts(wrapper)).toEqual(["用户", "邀请", "用户组", "工作台成员", "策略"]);
     expect(identityApi.fetchUsers).toHaveBeenCalledWith(undefined);
+    expect(groupsApi.fetchUserGroups).toHaveBeenCalledTimes(1);
     expect(identityApi.fetchRoles).toHaveBeenCalledTimes(1);
     expect(identityApi.fetchInvites).toHaveBeenCalledTimes(1);
     expect(workspaceApi.fetchWorkspaceFeedbackPolicy).toHaveBeenCalledWith("planning_intel");
@@ -318,8 +348,9 @@ describe("UsersPage", () => {
     const wrapper = mountUsersPage(workspaceAdmin);
     await flushPromises();
 
-    expect(tabTexts(wrapper)).toEqual(["工作台成员", "策略"]);
+    expect(tabTexts(wrapper)).toEqual(["用户组", "工作台成员", "策略"]);
     expect(identityApi.fetchUsers).toHaveBeenCalledWith("planning_intel");
+    expect(groupsApi.fetchUserGroups).toHaveBeenCalledTimes(1);
     expect(identityApi.fetchRoles).not.toHaveBeenCalled();
     expect(identityApi.fetchInvites).not.toHaveBeenCalled();
     expect(operationsApi.fetchAuditLogs).not.toHaveBeenCalled();
@@ -445,6 +476,98 @@ describe("UsersPage", () => {
     const removeButton = wrapper.findAll("button").find((button) => button.text().includes("移出"));
     expect(removeButton?.attributes("disabled")).toBeDefined();
     expect(workspaceApi.removeWorkspaceMember).not.toHaveBeenCalled();
+  });
+
+  it("hides the group management tab from users without manager roles", async () => {
+    const viewer = userRecord({
+      id: "user-9",
+      username: "viewer-user",
+      display_name: "浏览者",
+      roles: ["viewer"]
+    });
+    const wrapper = mountUsersPage(viewer);
+    await flushPromises();
+
+    expect(tabTexts(wrapper)).toEqual(["工作台成员", "策略"]);
+    expect(wrapper.text()).not.toContain("创建用户组");
+    expect(groupsApi.fetchUserGroups).not.toHaveBeenCalled();
+  });
+
+  it("creates a user group and manages its members from the groups tab", async () => {
+    const groupRecord = { id: "group-1", code: "planning_team", name: "规划团队", description: "", member_count: 0 };
+    groupsApi.fetchUserGroups.mockResolvedValueOnce([]).mockResolvedValue([groupRecord]);
+    groupsApi.createUserGroup.mockResolvedValue(groupRecord);
+    groupsApi.fetchUserGroup.mockResolvedValue({ ...groupRecord, members: [] });
+    groupsApi.addUserGroupMember.mockResolvedValue({
+      ...groupRecord,
+      member_count: 1,
+      members: [userRecord()]
+    });
+
+    const wrapper = mountUsersPage(userRecord());
+    await flushPromises();
+    await clickTab(wrapper, "用户组");
+
+    await wrapper.find('input[aria-label="组编码"]').setValue("planning_team");
+    await wrapper.find('input[aria-label="组名称"]').setValue("规划团队");
+    await wrapper.find("form.group-create-form").trigger("submit");
+    await flushPromises();
+
+    expect(groupsApi.createUserGroup).toHaveBeenCalledWith({
+      code: "planning_team",
+      name: "规划团队",
+      description: ""
+    });
+    expect(groupsApi.fetchUserGroup).toHaveBeenCalledWith("planning_team");
+    expect(wrapper.text()).toContain("用户组 规划团队 已创建");
+    expect(wrapper.text()).toContain("组成员 · 规划团队");
+
+    await wrapper.find('select[aria-label="选择组成员"]').setValue("user-1");
+    await wrapper.find("form.group-member-form").trigger("submit");
+    await flushPromises();
+
+    expect(groupsApi.addUserGroupMember).toHaveBeenCalledWith("planning_team", "user-1");
+    expect(wrapper.find(".group-detail-panel").text()).toContain("规划部管理员");
+  });
+
+  it("bulk joins the current workspace by group with the selected role", async () => {
+    const groupRecord = { id: "group-1", code: "planning_team", name: "规划团队", description: "", member_count: 1 };
+    groupsApi.fetchUserGroups.mockResolvedValue([groupRecord]);
+    groupsApi.fetchUserGroup.mockResolvedValue({
+      ...groupRecord,
+      members: [userRecord()]
+    });
+    groupsApi.bulkJoinWorkspaceByGroup.mockResolvedValue({
+      workspace_code: "planning_intel",
+      group_code: "planning_team",
+      workspace_role: "member",
+      added_count: 1,
+      reactivated_count: 0,
+      skipped_count: 0,
+      member_count: 2
+    });
+
+    const wrapper = mountUsersPage(userRecord());
+    await flushPromises();
+    await clickTab(wrapper, "用户组");
+
+    const manageButton = wrapper.findAll("button").find((button) => button.text().includes("管理"));
+    if (!manageButton) {
+      throw new Error("Group manage button not found");
+    }
+    await manageButton.trigger("click");
+    await flushPromises();
+
+    await wrapper.find('select[aria-label="批量入台角色"]').setValue("member");
+    await wrapper.find("form.group-bulk-form").trigger("submit");
+    await flushPromises();
+
+    expect(groupsApi.bulkJoinWorkspaceByGroup).toHaveBeenCalledWith("planning_intel", {
+      group_code: "planning_team",
+      workspace_role: "member"
+    });
+    expect(wrapper.text()).toContain("新增 1 人、恢复 0 人、跳过 0 人");
+    expect(workspaceApi.fetchWorkspaceMembers).toHaveBeenCalledTimes(2);
   });
 
   it("shows readable invite states and only allows revoking pending invites", async () => {

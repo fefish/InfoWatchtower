@@ -4,6 +4,7 @@ from app.api.routes import (
     auth,
     domain_packs,
     exports,
+    groups,
     health,
     ingestion,
     meta,
@@ -27,6 +28,7 @@ api_router.include_router(setup.router)
 api_router.include_router(auth.admin_router)
 api_router.include_router(sources.router)
 api_router.include_router(workspaces.router)
+api_router.include_router(groups.router)
 api_router.include_router(domain_packs.router)
 api_router.include_router(ingestion.router)
 api_router.include_router(news.router)
