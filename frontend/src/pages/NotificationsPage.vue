@@ -194,7 +194,7 @@ onMounted(loadNotifications);
 </script>
 
 <template>
-  <section class="module-page notifications-page">
+  <section class="layout-list notifications-page">
     <header class="module-hero">
       <div>
         <p class="eyebrow">Collaboration</p>

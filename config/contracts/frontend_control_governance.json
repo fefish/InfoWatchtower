@@ -2,7 +2,7 @@
   "version": 2,
   "purpose": "Prevent decorative frontend controls from entering the product without a real route, API, contract or test-backed behavior.",
   "modal_rule": {
-    "status": "design_final_pending_implementation (2026-07); fact source docs/product/frontend-product-design.md section 10; scanner enforcement in scripts/validate_frontend_controls.py is an implementation follow-up",
+    "status": "enforced (2026-07, WP3-E); fact source docs/product/frontend-product-design.md section 10; scanner active in scripts/validate_frontend_controls.py (validate_modal_rule)",
     "allowed_overlay_forms": [
       "centered_modal: .modal-backdrop (fixed inset-0 grid place-items:center) + dialog container with role=\"dialog\" aria-modal=\"true\" aria-labelledby; formalizes the existing report-modal-backdrop/report-detail-modal base",
       "context_panel: right-side config-panel, only when all three conditions hold - edits the currently selected list item, the list must stay visible for comparison, and the action is repeatable configuration editing (not creation, not an irreversible decision)"
@@ -23,12 +23,23 @@
       "frontend/src/pages/DailyReportsPage.vue report format panel"
     ],
     "migration_targets": [
-      "AppShell workspace-create wizard -> centered modal md",
-      "WorkspaceDiscovery drawer -> centered modal md (adds discover?q= search and join-by-code block)",
-      "SourcesPage create-source panel -> centered modal md",
-      "SourcesPage import-preview panel -> centered modal sm"
+      "AppShell workspace-create wizard -> centered modal md (done 2026-07, WP3-E)",
+      "WorkspaceDiscovery drawer -> centered modal md (adds discover?q= search and join-by-code block; done 2026-07, WP3-G)",
+      "SourcesPage create-source panel -> centered modal md (done 2026-07, WP3-E)",
+      "SourcesPage import-preview panel -> centered modal sm (done 2026-07, WP3-E)"
     ],
-    "scanner_rule_once_enforced": "config-panel class may only appear in context_panel_whitelist files; every element with class modal-backdrop must contain role=\"dialog\" and aria-modal=\"true\" in the same component."
+    "scanner_rule_once_enforced": "config-panel class may only appear in context_panel_whitelist files (with the context-panel marker); every element with class modal-backdrop must contain role=\"dialog\" and aria-modal=\"true\" in the same component.",
+    "scanned_paths": [
+      "frontend/src/layouts",
+      "frontend/src/pages",
+      "frontend/src/components"
+    ],
+    "backdrop_scanned_paths": [
+      "frontend/src/layouts",
+      "frontend/src/pages",
+      "frontend/src/components"
+    ],
+    "context_panel_marker": "whitelisted config-panel elements must also carry the context-panel class as the formalization marker"
   },
   "button_action_rule": {
     "scanned_paths": [

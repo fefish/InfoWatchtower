@@ -1,9 +1,14 @@
 <script setup lang="ts">
 import {
   Building2,
+  Clock,
+  Copy,
+  Cpu,
   FileText,
+  KeyRound,
   LayoutGrid,
   Plus,
+  RefreshCw,
   Settings,
   Tag,
   Trash2,
@@ -13,6 +18,13 @@ import {
 import { computed, onMounted, reactive, ref, watch } from "vue";
 
 import {
+  fetchWorkspaceGenerationPolicy,
+  pingGeneration,
+  updateWorkspaceGenerationPolicy,
+  type GenerationPingRecord,
+  type WorkspaceGenerationPolicyRecord
+} from "../api/generation";
+import {
   createReportFormat,
   deleteReportFormat,
   fetchReportFormats,
@@ -20,6 +32,14 @@ import {
   type ReportFormatRecord
 } from "../api/renditions";
 import {
+  fetchWorkspaceSchedulePolicy,
+  updateWorkspaceSchedulePolicy,
+  type WorkspaceSchedulePolicyRecord
+} from "../api/scheduler";
+import {
+  createWorkspaceJoinCode,
+  disableWorkspaceJoinCode,
+  fetchWorkspaceJoinCode,
   fetchWorkspaceLabelPolicy,
   fetchWorkspaceMembers,
   fetchWorkspaceReportPolicy,
@@ -29,16 +49,21 @@ import {
   updateWorkspaceLabelPolicy,
   updateWorkspaceReportPolicy,
   updateWorkspaceSection,
+  updateWorkspaceVisibility,
   upsertWorkspaceMember,
+  type WorkspaceJoinCodeRecord,
   type WorkspaceLabelPolicy,
   type WorkspaceMemberRecord,
   type WorkspaceSectionManageRecord
 } from "../api/workspaces";
+import AppModal from "../components/AppModal.vue";
+import { useRuntimeStore } from "../stores/runtime";
 import { useSessionStore } from "../stores/session";
 import { useWorkspaceStore } from "../stores/workspace";
 
 const session = useSessionStore();
 const workspace = useWorkspaceStore();
+const runtime = useRuntimeStore();
 
 const error = ref("");
 const message = ref("");
@@ -682,6 +707,382 @@ async function toggleSection(section: WorkspaceSectionManageRecord, event: Event
   }
 }
 
+// ---------- f) 自动化（schedule_policy，pipeline-jobs-design §8.2/§8.4） ----------
+const schedulePolicy = ref<WorkspaceSchedulePolicyRecord | null>(null);
+const scheduleError = ref("");
+const savingSchedule = ref(false);
+const scheduleConfirmOpen = ref(false);
+const scheduleForm = reactive({
+  // 三态：follow=跟随实例总闸（null）/ on / off
+  enabled: "follow" as "follow" | "on" | "off",
+  dailyTime: "",
+  dayOffset: "",
+  retryMaxAttempts: 1,
+  retryBackoffSeconds: 900,
+  weeklyEnabled: false,
+  weeklyDay: 5,
+  weeklyTime: "17:00"
+});
+
+// 实例总闸关闭或部署禁采集（intranet）时整卡只读并解释原因（page-specs §19.5.3）。
+const scheduleReadOnlyReason = computed(() => {
+  if (!runtime.canIngest) {
+    return "当前部署形态已禁用采集能力（intranet 等 pull-only 形态），自动调度不可配置。";
+  }
+  if (schedulePolicy.value && !schedulePolicy.value.instance.scheduler_enabled) {
+    return "实例调度总闸已关闭（INGESTION_SCHEDULER_ENABLED=false），工作台策略不能越过总闸，本卡只读。";
+  }
+  return "";
+});
+const scheduleReadOnly = computed(() => Boolean(scheduleReadOnlyReason.value));
+
+function fillScheduleForm(record: WorkspaceSchedulePolicyRecord) {
+  const policy = record.policy;
+  scheduleForm.enabled = policy.enabled === null ? "follow" : policy.enabled ? "on" : "off";
+  scheduleForm.dailyTime = policy.daily_time ?? "";
+  scheduleForm.dayOffset = policy.day_offset === null ? "" : String(policy.day_offset);
+  scheduleForm.retryMaxAttempts = policy.retry.max_attempts;
+  scheduleForm.retryBackoffSeconds = policy.retry.backoff_seconds;
+  scheduleForm.weeklyEnabled = policy.weekly.enabled;
+  scheduleForm.weeklyDay = policy.weekly.weekly_day;
+  scheduleForm.weeklyTime = policy.weekly.weekly_time;
+}
+
+async function loadSchedulePolicy() {
+  if (!workspace.currentCode) {
+    return;
+  }
+  scheduleError.value = "";
+  try {
+    schedulePolicy.value = await fetchWorkspaceSchedulePolicy(workspace.currentCode);
+    fillScheduleForm(schedulePolicy.value);
+  } catch (exc) {
+    schedulePolicy.value = null;
+    scheduleError.value = exc instanceof Error ? exc.message : "加载自动化策略失败";
+  }
+}
+
+// 生效值来源标注（§8.4：「跟随实例默认 12:00」vs「本工作台 09:30」）
+const dailyTimeSourceLabel = computed(() => {
+  const record = schedulePolicy.value;
+  if (!record) {
+    return "";
+  }
+  return record.policy.daily_time
+    ? `本工作台 ${record.policy.daily_time}`
+    : `跟随实例默认 ${record.instance.daily_time || "未配置"}`;
+});
+const dayOffsetSourceLabel = computed(() => {
+  const record = schedulePolicy.value;
+  if (!record) {
+    return "";
+  }
+  return record.policy.day_offset !== null
+    ? `本工作台 ${record.policy.day_offset} 天`
+    : `跟随实例默认 ${record.instance.day_offset} 天`;
+});
+const enabledSourceLabel = computed(() => {
+  const record = schedulePolicy.value;
+  if (!record) {
+    return "";
+  }
+  if (record.policy.enabled === null) {
+    return `跟随实例总闸（当前${record.instance.scheduler_enabled ? "开启" : "关闭"}）`;
+  }
+  return record.policy.enabled ? "本工作台开启" : "本工作台退出自动调度";
+});
+
+function formatRunAt(value: string | null | undefined) {
+  if (!value) {
+    return "未排期";
+  }
+  return value.slice(0, 16).replace("T", " ");
+}
+
+function scheduleUpdatePayload() {
+  return {
+    enabled: scheduleForm.enabled === "follow" ? null : scheduleForm.enabled === "on",
+    daily_time: scheduleForm.dailyTime.trim() || null,
+    day_offset: scheduleForm.dayOffset === "" ? null : Number(scheduleForm.dayOffset),
+    // source_types 不在本卡编辑：原样回传存量值，避免全量 PATCH 把它冲回默认
+    source_types: schedulePolicy.value?.policy.source_types ?? null,
+    retry: {
+      max_attempts: Number(scheduleForm.retryMaxAttempts),
+      backoff_seconds: Number(scheduleForm.retryBackoffSeconds)
+    },
+    weekly: {
+      enabled: scheduleForm.weeklyEnabled,
+      weekly_day: Number(scheduleForm.weeklyDay),
+      weekly_time: scheduleForm.weeklyTime.trim() || "17:00"
+    }
+  };
+}
+
+// 保存前展示影响确认（AppModal sm，产品设计 §10.3：新增确认交互一律 Modal sm）
+function requestScheduleSave() {
+  if (scheduleReadOnly.value) {
+    return;
+  }
+  scheduleConfirmOpen.value = true;
+}
+
+async function confirmScheduleSave() {
+  if (!workspace.currentCode) {
+    return;
+  }
+  scheduleConfirmOpen.value = false;
+  savingSchedule.value = true;
+  scheduleError.value = "";
+  message.value = "";
+  try {
+    schedulePolicy.value = await updateWorkspaceSchedulePolicy(
+      workspace.currentCode,
+      scheduleUpdatePayload()
+    );
+    fillScheduleForm(schedulePolicy.value);
+    message.value = `已保存：自动化策略（下次运行 ${formatRunAt(schedulePolicy.value.resolved.next_run_at)}）`;
+  } catch (exc) {
+    scheduleError.value = exc instanceof Error ? exc.message : "保存自动化策略失败";
+  } finally {
+    savingSchedule.value = false;
+  }
+}
+
+// ---------- g) 生成模型（generation_policy，generation-provider-design §5） ----------
+const generationPolicy = ref<WorkspaceGenerationPolicyRecord | null>(null);
+const generationError = ref("");
+const savingGeneration = ref(false);
+const generationForm = reactive({
+  model: "",
+  temperature: "",
+  timeoutSeconds: "",
+  dailyBudget: "",
+  fallbackBehavior: "rule_fallback"
+});
+const pingResult = ref<GenerationPingRecord | null>(null);
+const pinging = ref(false);
+const pingError = ref("");
+
+// 「测试连通」权限门与后端一致：仅 super_admin / editor_admin（其余角色不渲染按钮）
+const canPingGeneration = computed(() => {
+  const roles = session.user?.roles ?? [];
+  return roles.includes("super_admin") || roles.includes("editor_admin");
+});
+
+function fillGenerationForm(record: WorkspaceGenerationPolicyRecord) {
+  const policy = record.policy;
+  generationForm.model = policy.model ?? "";
+  generationForm.temperature = policy.temperature === null ? "" : String(policy.temperature);
+  generationForm.timeoutSeconds = policy.timeout_seconds === null ? "" : String(policy.timeout_seconds);
+  generationForm.dailyBudget =
+    policy.daily_generation_budget === null ? "" : String(policy.daily_generation_budget);
+  generationForm.fallbackBehavior = policy.fallback_behavior || "rule_fallback";
+}
+
+async function loadGenerationPolicy() {
+  if (!workspace.currentCode) {
+    return;
+  }
+  generationError.value = "";
+  try {
+    generationPolicy.value = await fetchWorkspaceGenerationPolicy(workspace.currentCode);
+    fillGenerationForm(generationPolicy.value);
+  } catch (exc) {
+    generationPolicy.value = null;
+    generationError.value = exc instanceof Error ? exc.message : "加载生成模型配置失败";
+  }
+}
+
+async function saveGenerationPolicy() {
+  if (!workspace.currentCode) {
+    return;
+  }
+  savingGeneration.value = true;
+  generationError.value = "";
+  message.value = "";
+  try {
+    generationPolicy.value = await updateWorkspaceGenerationPolicy(workspace.currentCode, {
+      model: generationForm.model.trim() || null,
+      temperature: generationForm.temperature === "" ? null : Number(generationForm.temperature),
+      timeout_seconds:
+        generationForm.timeoutSeconds === "" ? null : Number(generationForm.timeoutSeconds),
+      daily_generation_budget:
+        generationForm.dailyBudget === "" ? null : Number(generationForm.dailyBudget),
+      fallback_behavior: generationForm.fallbackBehavior
+    });
+    fillGenerationForm(generationPolicy.value);
+    message.value = "已保存：生成模型策略";
+  } catch (exc) {
+    generationError.value = exc instanceof Error ? exc.message : "保存生成模型策略失败";
+  } finally {
+    savingGeneration.value = false;
+  }
+}
+
+async function runGenerationPing() {
+  if (!workspace.currentCode) {
+    return;
+  }
+  pinging.value = true;
+  pingError.value = "";
+  pingResult.value = null;
+  try {
+    pingResult.value = await pingGeneration(workspace.currentCode);
+  } catch (exc) {
+    // 请求本身失败（403/网络）也不得渲染成成功
+    pingError.value = exc instanceof Error ? exc.message : "连通性测试失败";
+  } finally {
+    pinging.value = false;
+  }
+}
+
+// ---------- h) 可见性与加入码（workspace-configuration-design §14，page-specs §19.5） ----------
+const joinCode = ref<WorkspaceJoinCodeRecord | null>(null);
+const joinCodeError = ref("");
+const visibilityConfirmOpen = ref(false);
+const savingVisibility = ref(false);
+const rotateConfirmOpen = ref(false);
+const savingJoinCode = ref(false);
+const copyFeedback = ref("");
+const joinCodeForm = reactive({
+  defaultRole: "viewer" as "viewer" | "member",
+  expiresInDays: "",
+  maxUses: ""
+});
+
+const currentVisibility = computed(() => workspace.current?.visibility ?? "private");
+
+async function loadJoinCode() {
+  if (!workspace.currentCode) {
+    return;
+  }
+  joinCodeError.value = "";
+  try {
+    joinCode.value = await fetchWorkspaceJoinCode(workspace.currentCode);
+  } catch (exc) {
+    joinCode.value = null;
+    joinCodeError.value = exc instanceof Error ? exc.message : "加载加入码失败";
+  }
+}
+
+// 切到 internal_public 前必须确认「任何登录用户可发现并以 viewer 订阅」影响提示
+function requestVisibilityToggle() {
+  if (currentVisibility.value === "internal_public") {
+    void applyVisibility("private");
+    return;
+  }
+  visibilityConfirmOpen.value = true;
+}
+
+async function confirmVisibilityPublic() {
+  visibilityConfirmOpen.value = false;
+  await applyVisibility("internal_public");
+}
+
+async function applyVisibility(next: "private" | "internal_public") {
+  if (!workspace.currentCode) {
+    return;
+  }
+  savingVisibility.value = true;
+  joinCodeError.value = "";
+  message.value = "";
+  try {
+    await updateWorkspaceVisibility(workspace.currentCode, next);
+    await workspace.loadWorkspaces();
+    message.value =
+      next === "internal_public"
+        ? "已切换为组织内公开：任何登录用户可发现并以 viewer 订阅本工作台"
+        : "已切换为私有：仅成员可见，凭加入码或管理员添加加入";
+  } catch (exc) {
+    joinCodeError.value = exc instanceof Error ? exc.message : "切换可见性失败";
+  } finally {
+    savingVisibility.value = false;
+  }
+}
+
+function joinCodeCreatePayload() {
+  return {
+    default_role: joinCodeForm.defaultRole,
+    expires_in_days: joinCodeForm.expiresInDays === "" ? null : Number(joinCodeForm.expiresInDays),
+    max_uses: joinCodeForm.maxUses === "" ? null : Number(joinCodeForm.maxUses)
+  };
+}
+
+// 生成（无 active 码）直接调；轮换（已有 active 码）必须先确认「旧码立即失效」
+function requestJoinCodeCreate() {
+  if (joinCode.value) {
+    rotateConfirmOpen.value = true;
+    return;
+  }
+  void createJoinCode();
+}
+
+async function confirmRotateJoinCode() {
+  rotateConfirmOpen.value = false;
+  await createJoinCode();
+}
+
+async function createJoinCode() {
+  if (!workspace.currentCode) {
+    return;
+  }
+  savingJoinCode.value = true;
+  joinCodeError.value = "";
+  message.value = "";
+  copyFeedback.value = "";
+  try {
+    const rotated = Boolean(joinCode.value);
+    joinCode.value = await createWorkspaceJoinCode(workspace.currentCode, joinCodeCreatePayload());
+    message.value = rotated
+      ? `已轮换加入码：旧码立即失效，新码 ${joinCode.value.code}`
+      : `已生成加入码：${joinCode.value.code}`;
+  } catch (exc) {
+    joinCodeError.value = exc instanceof Error ? exc.message : "生成加入码失败";
+  } finally {
+    savingJoinCode.value = false;
+  }
+}
+
+async function disableJoinCode() {
+  if (!workspace.currentCode) {
+    return;
+  }
+  savingJoinCode.value = true;
+  joinCodeError.value = "";
+  message.value = "";
+  copyFeedback.value = "";
+  try {
+    await disableWorkspaceJoinCode(workspace.currentCode);
+    joinCode.value = null;
+    message.value = "已停用加入码：现有码即刻失效";
+  } catch (exc) {
+    joinCodeError.value = exc instanceof Error ? exc.message : "停用加入码失败";
+  } finally {
+    savingJoinCode.value = false;
+  }
+}
+
+async function copyJoinCode() {
+  if (!joinCode.value) {
+    return;
+  }
+  copyFeedback.value = "";
+  try {
+    await navigator.clipboard.writeText(joinCode.value.code);
+    copyFeedback.value = "已复制加入码";
+  } catch (exc) {
+    // 复制失败显示真实错误（page-specs §19.5.4），不显示假成功
+    joinCodeError.value = exc instanceof Error ? `复制失败：${exc.message}` : "复制失败";
+  }
+}
+
+function formatExpiresAt(value: string | null) {
+  if (!value) {
+    return "长期有效";
+  }
+  return `${value.slice(0, 16).replace("T", " ")} 到期`;
+}
+
 // ---------- 加载调度 ----------
 let loadedForCode = "";
 
@@ -697,7 +1098,11 @@ async function loadAll() {
       loadMembers(),
       loadWorkspacePolicy(),
       loadReportSettings(),
-      loadManageSections()
+      loadManageSections(),
+      // 新三卡各自持有 card 级错误态：单卡后端不可用不拖垮整页
+      loadSchedulePolicy(),
+      loadGenerationPolicy(),
+      loadJoinCode()
     ]);
   } catch (exc) {
     error.value = exc instanceof Error ? exc.message : "加载工作台配置失败";
@@ -736,6 +1141,9 @@ onMounted(() => {
         <a href="#labels">标签策略</a>
         <a href="#reports">报告设置</a>
         <a href="#nav-sections">导航分区</a>
+        <a href="#automation">自动化</a>
+        <a href="#generation">生成模型</a>
+        <a href="#visibility">可见性与加入码</a>
       </nav>
     </header>
 
@@ -1203,6 +1611,423 @@ onMounted(() => {
           <p v-if="manageSections.length === 0" class="empty-state">暂无分区数据，请先选择工作台或刷新页面重新加载分区注册表。</p>
         </div>
       </section>
+
+      <!-- f) 自动化（schedule_policy，pipeline-jobs-design §8.2/§8.4） -->
+      <section id="automation" class="module-card compact settings-card" aria-label="自动化">
+        <div class="card-title-row">
+          <div>
+            <p class="eyebrow">Automation</p>
+            <h3><Clock :size="18" /> 自动化</h3>
+          </div>
+          <span
+            v-if="schedulePolicy"
+            class="metric-pill"
+            :data-tone="schedulePolicy.resolved.effective_enabled ? 'ok' : 'warn'"
+          >
+            {{ schedulePolicy.resolved.effective_enabled ? "自动调度中" : "未自动调度" }}
+          </span>
+        </div>
+        <p class="workspace-form-hint">
+          每天固定时刻自动跑抓取→去重→推荐→日报流水线；字段留空即跟随实例默认，改动下一个
+          60 秒 tick 生效，无需重启。
+        </p>
+        <p v-if="scheduleError" class="form-error">{{ scheduleError }}</p>
+        <p v-if="scheduleReadOnlyReason" class="form-info schedule-readonly-reason">{{ scheduleReadOnlyReason }}</p>
+
+        <template v-if="schedulePolicy">
+          <div class="schedule-resolved-line">
+            <span class="metric-pill">下次运行：{{ formatRunAt(schedulePolicy.resolved.next_run_at) }}</span>
+            <span class="metric-pill">时区 {{ schedulePolicy.instance.timezone }}</span>
+            <span class="metric-pill">
+              生效来源：{{ schedulePolicy.resolved.policy_source === "workspace" ? "本工作台策略" : "实例默认" }}
+            </span>
+          </div>
+          <div class="config-grid">
+            <label>
+              <span>自动调度</span>
+              <select v-model="scheduleForm.enabled" :disabled="scheduleReadOnly" aria-label="自动调度开关">
+                <option value="follow">跟随实例总闸</option>
+                <option value="on">开启（总闸开时生效）</option>
+                <option value="off">退出自动调度</option>
+              </select>
+              <small>{{ enabledSourceLabel }}</small>
+            </label>
+            <label>
+              <span>每日触发时刻（HH:MM，留空跟随实例）</span>
+              <input
+                v-model="scheduleForm.dailyTime"
+                :disabled="scheduleReadOnly"
+                placeholder="例如 09:30"
+                aria-label="每日触发时刻"
+              />
+              <small>{{ dailyTimeSourceLabel }}</small>
+            </label>
+            <label>
+              <span>目标日偏移（0=当天，-1=昨天）</span>
+              <select v-model="scheduleForm.dayOffset" :disabled="scheduleReadOnly" aria-label="目标日偏移">
+                <option value="">跟随实例默认</option>
+                <option v-for="offset in [0, -1, -2, -3, -4, -5, -6, -7]" :key="offset" :value="String(offset)">
+                  {{ offset }} 天
+                </option>
+              </select>
+              <small>{{ dayOffsetSourceLabel }}</small>
+            </label>
+            <label>
+              <span>run 失败自动重试次数（0-5）</span>
+              <input
+                v-model.number="scheduleForm.retryMaxAttempts"
+                type="number"
+                min="0"
+                max="5"
+                :disabled="scheduleReadOnly"
+                aria-label="run 失败自动重试次数"
+              />
+            </label>
+            <label>
+              <span>首次退避间隔（秒，60-21600，指数翻倍）</span>
+              <input
+                v-model.number="scheduleForm.retryBackoffSeconds"
+                type="number"
+                min="60"
+                max="21600"
+                :disabled="scheduleReadOnly"
+                aria-label="重试退避秒数"
+              />
+            </label>
+          </div>
+
+          <label class="switch-row settings-switch-row">
+            <input
+              v-model="scheduleForm.weeklyEnabled"
+              type="checkbox"
+              :disabled="scheduleReadOnly"
+              aria-label="周报草稿自动组稿"
+            />
+            <span>
+              <strong>周报草稿自动组稿</strong>
+              <small>到点从最近 7 天已发布日报的采信条目刷新本周周报草稿；发布仍是编辑决策。</small>
+            </span>
+          </label>
+          <div v-if="scheduleForm.weeklyEnabled" class="config-grid">
+            <label>
+              <span>组稿触发日（ISO 星期，1=周一）</span>
+              <select v-model.number="scheduleForm.weeklyDay" :disabled="scheduleReadOnly" aria-label="周报组稿触发日">
+                <option v-for="day in [1, 2, 3, 4, 5, 6, 7]" :key="day" :value="day">周{{ ["一", "二", "三", "四", "五", "六", "日"][day - 1] }}</option>
+              </select>
+            </label>
+            <label>
+              <span>组稿触发时刻（HH:MM）</span>
+              <input v-model="scheduleForm.weeklyTime" :disabled="scheduleReadOnly" aria-label="周报组稿触发时刻" />
+            </label>
+          </div>
+
+          <div class="settings-card-actions">
+            <button
+              type="button"
+              class="config-save"
+              :disabled="savingSchedule || scheduleReadOnly"
+              @click="requestScheduleSave"
+            >
+              {{ savingSchedule ? "保存中" : "保存自动化策略" }}
+            </button>
+          </div>
+        </template>
+        <p v-else-if="!scheduleError" class="empty-state">正在加载自动化策略。</p>
+      </section>
+
+      <!-- g) 生成模型（generation_policy，generation-provider-design §5） -->
+      <section id="generation" class="module-card compact settings-card" aria-label="生成模型">
+        <div class="card-title-row">
+          <div>
+            <p class="eyebrow">Generation</p>
+            <h3><Cpu :size="18" /> 生成模型</h3>
+          </div>
+          <span
+            v-if="generationPolicy"
+            class="metric-pill"
+            :data-tone="generationPolicy.resolved.key_configured ? 'ok' : 'warn'"
+          >
+            key {{ generationPolicy.resolved.key_configured ? "已配置" : "未配置" }}
+          </span>
+        </div>
+        <p v-if="generationError" class="form-error">{{ generationError }}</p>
+
+        <template v-if="generationPolicy">
+          <div class="schedule-resolved-line generation-status-line">
+            <span class="metric-pill">provider：{{ generationPolicy.resolved.provider }}</span>
+            <span class="metric-pill">生效模型：{{ generationPolicy.resolved.model }}</span>
+            <span class="metric-pill">{{ generationPolicy.resolved.base_url_host }}</span>
+            <span class="metric-pill" :data-tone="generationPolicy.resolved.enabled ? 'ok' : 'warn'">
+              {{ generationPolicy.resolved.enabled ? "生成已启用" : "生成未启用" }}
+            </span>
+          </div>
+          <p v-if="!generationPolicy.resolved.key_configured" class="form-info generation-key-hint">
+            实例尚未配置生成 API key：由运维在部署 env 配置 GENERATION_API_KEY（或兼容的
+            MINIMAX_API_KEY），配置方法见 docs/deployment/development-quickstart.md §2.2。
+            key 只存部署环境，不进本页面、数据库或审计。
+          </p>
+
+          <div class="config-grid">
+            <label>
+              <span>模型名（留空跟随实例）</span>
+              <input v-model="generationForm.model" placeholder="例如 MiniMax-M2.5" aria-label="生成模型名" />
+            </label>
+            <label>
+              <span>温度（0-2，留空跟随实例）</span>
+              <input
+                v-model="generationForm.temperature"
+                type="number"
+                step="0.1"
+                min="0"
+                max="2"
+                aria-label="生成温度"
+              />
+            </label>
+            <label>
+              <span>单条超时（5-300 秒，留空跟随实例）</span>
+              <input
+                v-model="generationForm.timeoutSeconds"
+                type="number"
+                min="5"
+                max="300"
+                aria-label="生成超时秒数"
+              />
+            </label>
+            <label>
+              <span>每日预算（条数上限，留空不限）</span>
+              <input
+                v-model="generationForm.dailyBudget"
+                type="number"
+                min="1"
+                max="1000"
+                aria-label="每日生成预算"
+              />
+            </label>
+            <label>
+              <span>降级行为</span>
+              <select v-model="generationForm.fallbackBehavior" aria-label="生成降级行为">
+                <option value="rule_fallback">规则降级稿（fallback_needs_review，不进公司 SQL）</option>
+                <option value="fail">直接失败，留待重跑</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="settings-card-actions">
+            <button
+              v-if="canPingGeneration"
+              type="button"
+              class="icon-button secondary"
+              :disabled="pinging"
+              @click="runGenerationPing"
+            >
+              <RefreshCw :size="14" />
+              <span>{{ pinging ? "测试中" : "测试连通" }}</span>
+            </button>
+            <button
+              type="button"
+              class="config-save"
+              :disabled="savingGeneration"
+              @click="saveGenerationPolicy"
+            >
+              {{ savingGeneration ? "保存中" : "保存生成模型策略" }}
+            </button>
+          </div>
+          <p v-if="pingError" class="form-error generation-ping-result">{{ pingError }}</p>
+          <p
+            v-else-if="pingResult"
+            class="generation-ping-result"
+            :class="pingResult.status === 'ok' ? 'form-success' : 'form-error'"
+          >
+            <template v-if="pingResult.status === 'ok'">
+              连通正常：{{ pingResult.provider }} · {{ pingResult.model }} · {{ pingResult.latency_ms }}ms
+            </template>
+            <template v-else>
+              连通失败（{{ pingResult.error_code || "unknown" }}）：{{ pingResult.error_message || "provider 无响应" }}
+            </template>
+          </p>
+        </template>
+        <p v-else-if="!generationError" class="empty-state">正在加载生成模型配置。</p>
+      </section>
+
+      <!-- h) 可见性与加入码（workspace-configuration-design §14，page-specs §19.5） -->
+      <section id="visibility" class="module-card compact settings-card" aria-label="可见性与加入码">
+        <div class="card-title-row">
+          <div>
+            <p class="eyebrow">Visibility &amp; Join Code</p>
+            <h3><KeyRound :size="18" /> 可见性与加入码</h3>
+          </div>
+          <span class="metric-pill" :data-tone="currentVisibility === 'internal_public' ? 'warn' : 'ok'">
+            {{ currentVisibility === "internal_public" ? "组织内公开" : "私有" }}
+          </span>
+        </div>
+        <p v-if="joinCodeError" class="form-error">{{ joinCodeError }}</p>
+
+        <label class="switch-row settings-switch-row">
+          <input
+            type="checkbox"
+            :checked="currentVisibility === 'internal_public'"
+            :disabled="savingVisibility"
+            aria-label="组织内公开"
+            @click.prevent="requestVisibilityToggle"
+          />
+          <span>
+            <strong>组织内公开（internal_public）</strong>
+            <small>开启后任何登录用户可在「发现工作台」看到本台并以 viewer 订阅；私有工作台不出现在任何发现列表。</small>
+          </span>
+        </label>
+
+        <div class="label-section-title">
+          <span>工作台加入码</span>
+          <small>已注册同事凭码可自助加入本工作台（含私有工作台），不建号、不改全局角色</small>
+        </div>
+
+        <template v-if="joinCode">
+          <div class="join-code-row">
+            <code class="join-code-value" aria-label="当前加入码">{{ joinCode.code }}</code>
+            <button type="button" class="icon-button secondary" @click="copyJoinCode">
+              <Copy :size="14" />
+              <span>复制</span>
+            </button>
+            <span v-if="copyFeedback" class="form-success join-code-copy-feedback">{{ copyFeedback }}</span>
+          </div>
+          <p class="workspace-form-hint">
+            默认角色 {{ joinCode.default_role }} · {{ formatExpiresAt(joinCode.expires_at) }} ·
+            已用 {{ joinCode.use_count }}{{ joinCode.max_uses !== null ? ` / 上限 ${joinCode.max_uses}` : "（不限次数）" }}
+          </p>
+        </template>
+        <p v-else class="workspace-form-hint">
+          当前没有有效加入码。生成后把 8 位码发给已注册同事，即可自助加入本工作台。
+        </p>
+
+        <div class="config-grid">
+          <label>
+            <span>默认角色</span>
+            <select v-model="joinCodeForm.defaultRole" aria-label="加入码默认角色">
+              <option value="viewer">viewer（只读）</option>
+              <option value="member">member（可编辑）</option>
+            </select>
+          </label>
+          <label>
+            <span>有效期（天，留空长期有效）</span>
+            <input v-model="joinCodeForm.expiresInDays" type="number" min="1" max="365" aria-label="加入码有效期天数" />
+          </label>
+          <label>
+            <span>使用次数上限（留空不限）</span>
+            <input v-model="joinCodeForm.maxUses" type="number" min="1" aria-label="加入码使用次数上限" />
+          </label>
+        </div>
+        <div class="settings-card-actions">
+          <button
+            v-if="joinCode"
+            type="button"
+            class="table-action danger"
+            :disabled="savingJoinCode"
+            @click="disableJoinCode"
+          >
+            停用加入码
+          </button>
+          <button type="button" class="config-save" :disabled="savingJoinCode" @click="requestJoinCodeCreate">
+            {{ savingJoinCode ? "处理中" : joinCode ? "轮换加入码" : "生成加入码" }}
+          </button>
+        </div>
+      </section>
     </template>
+
+    <!-- 确认弹层（AppModal sm，产品设计 §10.3：新增确认交互一律 Modal sm） -->
+    <AppModal
+      :open="scheduleConfirmOpen"
+      size="sm"
+      title="确认保存自动化策略？"
+      @close="scheduleConfirmOpen = false"
+    >
+      <p class="workspace-form-hint">
+        保存后下一个调度 tick 即按新策略触发：{{ scheduleForm.enabled === "off" ? "本工作台将退出自动调度。" : `每日
+        ${scheduleForm.dailyTime || schedulePolicy?.instance.daily_time || "实例默认时刻"} 自动跑流水线。` }}
+        改动会写入审计（workspace.schedule_policy.update）。
+      </p>
+      <template #footer>
+        <button type="button" class="icon-button secondary" @click="scheduleConfirmOpen = false">取消</button>
+        <button type="button" class="icon-button" @click="confirmScheduleSave">确认保存</button>
+      </template>
+    </AppModal>
+
+    <AppModal
+      :open="visibilityConfirmOpen"
+      size="sm"
+      title="切换为组织内公开？"
+      @close="visibilityConfirmOpen = false"
+    >
+      <p class="workspace-form-hint">
+        切换后任何登录用户可发现本工作台，并可自助以 viewer 身份订阅阅读已发布内容；
+        游客入口开启时游客也可只读浏览。确认要公开吗？
+      </p>
+      <template #footer>
+        <button type="button" class="icon-button secondary" @click="visibilityConfirmOpen = false">取消</button>
+        <button type="button" class="icon-button" @click="confirmVisibilityPublic">确认公开</button>
+      </template>
+    </AppModal>
+
+    <AppModal
+      :open="rotateConfirmOpen"
+      size="sm"
+      title="轮换加入码？"
+      @close="rotateConfirmOpen = false"
+    >
+      <p class="workspace-form-hint">
+        轮换会生成新码并使旧码立即失效：已发出的旧码将不能再加入。确认轮换吗？
+      </p>
+      <template #footer>
+        <button type="button" class="icon-button secondary" @click="rotateConfirmOpen = false">取消</button>
+        <button type="button" class="icon-button" @click="confirmRotateJoinCode">确认轮换</button>
+      </template>
+    </AppModal>
   </section>
 </template>
+
+<style scoped>
+/* WP3-H 新三卡的局部布线样式：表面材质仍沿用 base.css 的 module-card / metric-pill /
+   config-grid（Liquid Glass 基线），这里只补新结构的排布，避免与并行 WP 抢 base.css。 */
+.schedule-resolved-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.schedule-readonly-reason,
+.generation-key-hint {
+  margin-top: 4px;
+}
+
+.config-grid label small {
+  color: var(--text-muted, rgba(71, 85, 105, 0.9));
+  font-size: 12px;
+}
+
+.generation-ping-result {
+  margin-top: 8px;
+}
+
+.join-code-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 4px 0 8px;
+}
+
+.join-code-value {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.24em;
+  padding: 6px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(100, 116, 139, 0.28);
+  background: rgba(148, 163, 184, 0.12);
+  user-select: all;
+}
+
+.join-code-copy-feedback {
+  font-size: 12px;
+}
+</style>

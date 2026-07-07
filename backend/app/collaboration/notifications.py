@@ -209,6 +209,60 @@ def record_ingestion_failed_source_retry_alert_activity(
     return event
 
 
+def record_pipeline_retry_exhausted_activity(
+    session: Session,
+    *,
+    workspace_code: str,
+    domain_code: str,
+    run_id: str,
+    day_key: str,
+    attempt: int,
+    error_code: str,
+    run_id_chain: list[str],
+) -> ActivityEvent | None:
+    """run 级自动重试耗尽告警（pipeline-jobs-design §6.2 终止语义）。
+
+    事件 ingestion.pipeline_retry_exhausted：整条重试链只发一次（按最后一次
+    失败 run 去重），important 站内通知复用失败源告警通道（super_admin +
+    workspace owner/admin），前端锚点跳 /ingestion-runs?run_id=<最后失败 run>。
+    """
+    existing = session.scalar(
+        select(ActivityEvent).where(
+            ActivityEvent.workspace_code == workspace_code,
+            ActivityEvent.event_type == "ingestion.pipeline_retry_exhausted",
+            ActivityEvent.object_type == "pipeline_run",
+            ActivityEvent.object_id == run_id,
+        ),
+    )
+    if existing is not None:
+        return None
+    event = ActivityEvent(
+        workspace_code=workspace_code,
+        domain_code=domain_code,
+        actor_user_id=None,
+        event_type="ingestion.pipeline_retry_exhausted",
+        object_type="pipeline_run",
+        object_id=run_id,
+        target_object_type="pipeline_run",
+        target_object_id=run_id,
+        summary=f"日报流水线自动重试已耗尽：{day_key} 第 {attempt} 次尝试仍失败（{error_code}）",
+        metadata_json={
+            "pipeline_run_id": run_id,
+            "run_id_chain": run_id_chain,
+            "workspace_code": workspace_code,
+            "day_key": day_key,
+            "attempt": attempt,
+            "error_code": error_code,
+        },
+        sync_policy="local_only",
+    )
+    session.add(event)
+    session.flush()
+    recipient_ids = _sync_conflict_recipient_ids(session, workspace_code=workspace_code)
+    _create_notifications(session, event=event, recipient_ids=recipient_ids, priority="important")
+    return event
+
+
 def record_daily_report_publish_activity(
     session: Session,
     *,

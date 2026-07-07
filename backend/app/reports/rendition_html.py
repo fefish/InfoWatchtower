@@ -130,6 +130,7 @@ def render_html(rendition: ReportRendition) -> str:
                 )
         parts.append("</ol>")
 
+    template = body.get("template") or None
     for group in groups:
         parts.append(f"<h2>{escape(str(group['title']))}</h2>")
         for item_id in group.get("item_ids") or []:
@@ -138,6 +139,23 @@ def render_html(rendition: ReportRendition) -> str:
                 continue
             parts.append(f"<article class='item' id='item-{escape(item_id[:8])}'>")
             parts.append(f"<h3>{escape(str(snapshot['title']))}</h3>")
+            if template:
+                # 模板格式：按模板字段序 + label 渲染小节；label/值统一转义
+                # （模板是纯声明式数据，禁模板字符串求值——§10.6）。
+                template_values = snapshot.get("template_values") or {}
+                for field in template.get("fields") or []:
+                    value = template_values.get(str(field.get("key")))
+                    if value in (None, "", []):
+                        continue
+                    if isinstance(value, list):
+                        value = "；".join(str(entry) for entry in value)
+                    label = escape(str(field.get("label") or field.get("key")))
+                    parts.append(f"<p class='block'><strong>{label}</strong>：{escape(str(value))}</p>")
+                if snapshot.get("template_fallback"):
+                    missing = escape("、".join(str(key) for key in snapshot.get("missing_fields") or []))
+                    parts.append(f"<p class='source'>增量字段待补齐（template_fallback）：{missing}</p>")
+                parts.append("</article>")
+                continue
             if "tag_line" in fields and snapshot.get("tag_line"):
                 tags = "".join(f"<span class='tag'>{escape(str(tag))}</span>" for tag in snapshot["tag_line"])
                 parts.append(f"<p class='tags'>{tags}</p>")

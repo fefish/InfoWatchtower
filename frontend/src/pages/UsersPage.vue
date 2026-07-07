@@ -861,796 +861,799 @@ onMounted(loadData);
 </script>
 
 <template>
-  <section class="toolbar-band">
-    <div>
-      <p class="eyebrow">Identity</p>
-      <h2>用户权限</h2>
-      <p>公网账号和内网身份最终都落到本地用户，再由这里的角色决定权限。</p>
-    </div>
-    <div class="topbar-tools">
-      <button type="button" class="icon-button" :disabled="loading" @click="loadData" title="刷新">
-        <RefreshCw :size="18" />
-        <span>刷新</span>
-      </button>
-    </div>
-  </section>
-
-  <div class="policy-tabs">
-    <button v-if="isSuperAdmin" type="button" :class="{ active: activeTab === 'users' }" @click="activeTab = 'users'">用户</button>
-    <button v-if="isSuperAdmin" type="button" :class="{ active: activeTab === 'invites' }" @click="activeTab = 'invites'">邀请</button>
-    <button v-if="canManageGroups" type="button" :class="{ active: activeTab === 'groups' }" @click="activeTab = 'groups'">用户组</button>
-    <button type="button" :class="{ active: activeTab === 'members' }" @click="activeTab = 'members'">工作台成员</button>
-    <button type="button" :class="{ active: activeTab === 'policies' }" @click="activeTab = 'policies'">策略</button>
-  </div>
-
-  <p v-if="error" class="form-error">{{ error }}</p>
-  <p v-if="temporaryPassword" class="empty-state">临时密码：{{ temporaryPassword }}</p>
-  <p v-if="notice" class="empty-state">{{ noticeMessage }}</p>
-
-  <section v-if="activeTab === 'users'" class="data-table-wrap">
-    <table class="data-table">
-      <thead>
-        <tr>
-          <th>用户</th>
-          <th>身份来源</th>
-          <th>部门</th>
-          <th>状态</th>
-          <th>角色</th>
-          <th>操作</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="user in users" :key="user.id">
-          <td>
-            <strong>{{ user.display_name }}</strong>
-            <span>{{ user.username }}</span>
-          </td>
-          <td>
-            <strong>{{ user.external_provider }}</strong>
-            <span>{{ user.employee_no || user.external_id }}</span>
-          </td>
-          <td>{{ user.department || "-" }}</td>
-          <td>{{ user.status }}</td>
-          <td>
-            <div class="role-checks">
-              <label v-for="role in roles" :key="role.code">
-                <input
-                  type="checkbox"
-                  :checked="selectedRoles[user.id]?.has(role.code)"
-                  @change="toggleRole(user.id, role.code, ($event.target as HTMLInputElement).checked)"
-                />
-                <span>{{ role.name }}</span>
-              </label>
-            </div>
-          </td>
-          <td>
-            <button
-              type="button"
-              class="icon-button"
-              :disabled="savingUserId === user.id"
-              @click="saveUser(user)"
-              title="保存角色"
-            >
-              <Save :size="16" />
-              <span>{{ savingUserId === user.id ? "保存中" : "保存" }}</span>
-            </button>
-            <button type="button" class="icon-button secondary" @click="resetPassword(user)" title="重置密码">
-              <KeyRound :size="16" />
-              <span>重置</span>
-            </button>
-            <button type="button" class="icon-button secondary" @click="toggleActive(user)" title="启停用户">
-              <Ban :size="16" />
-              <span>{{ user.is_active ? "停用" : "启用" }}</span>
-            </button>
-          </td>
-        </tr>
-      </tbody>
-    </table>
-    <p v-if="!loading && users.length === 0" class="empty-state">暂无用户，可通过邀请链接创建第一个协作者账号。</p>
-  </section>
-
-  <section v-else-if="activeTab === 'invites'" class="data-table-wrap">
-    <form class="form-grid-two" @submit.prevent="submitInvite">
-      <label>
-        <span>邮箱</span>
-        <input v-model="inviteForm.email" type="email" />
-      </label>
-      <label>
-        <span>全局角色</span>
-        <select v-model="inviteForm.role_code">
-          <option v-for="role in roles" :key="role.code" :value="role.code">{{ role.name }}</option>
-        </select>
-      </label>
-      <label>
-        <span>工作台</span>
-        <select v-model="inviteForm.workspace_code">
-          <option v-for="item in workspace.options" :key="item.code" :value="item.code">{{ item.name }}</option>
-        </select>
-      </label>
-      <label>
-        <span>工作台角色</span>
-        <select v-model="inviteForm.workspace_role">
-          <option value="viewer">viewer</option>
-          <option value="member">member</option>
-          <option value="admin">admin</option>
-          <option value="owner">owner</option>
-        </select>
-      </label>
-      <label>
-        <span>有效天数</span>
-        <input v-model.number="inviteForm.expires_in_days" type="number" min="1" max="30" />
-      </label>
-      <button type="submit" class="icon-button">
-        <Plus :size="16" />
-        <span>创建邀请</span>
-      </button>
-    </form>
-
-    <table class="data-table">
-      <thead>
-        <tr>
-          <th>邀请</th>
-          <th>角色</th>
-          <th>工作台</th>
-          <th>状态</th>
-          <th>操作</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="invite in invites" :key="invite.id">
-          <td>
-            <strong>{{ invite.email || invite.code }}</strong>
-            <span>{{ invite.invite_url }}</span>
-          </td>
-          <td>{{ invite.role_code }}</td>
-          <td>
-            <span v-for="target in invite.workspaces" :key="target.code">
-              {{ target.code }} · {{ target.workspace_role }}
-            </span>
-          </td>
-          <td>
-            <strong>{{ inviteStatusLabel(invite.status) }}</strong>
-            <span>{{ inviteStatusHint(invite) }}</span>
-          </td>
-          <td>
-            <button type="button" class="icon-button secondary" @click="copyText(invite.invite_url)" title="复制链接">
-              <Copy :size="16" />
-              <span>复制</span>
-            </button>
-            <button
-              type="button"
-              class="icon-button secondary"
-              :disabled="invite.status !== 'pending'"
-              @click="revokeInviteRow(invite)"
-              title="撤销邀请"
-            >
-              <Ban :size="16" />
-              <span>撤销</span>
-            </button>
-          </td>
-        </tr>
-      </tbody>
-    </table>
-    <p v-if="!loading && invites.length === 0" class="empty-state">暂无邀请，选择角色和工作台后生成邀请链接。</p>
-  </section>
-
-  <section v-else-if="activeTab === 'groups'" class="data-table-wrap">
-    <form class="form-grid-two group-create-form" @submit.prevent="submitGroup">
-      <label>
-        <span>组编码</span>
-        <input v-model="groupForm.code" placeholder="例如：planning_team" aria-label="组编码" />
-      </label>
-      <label>
-        <span>组名称</span>
-        <input v-model="groupForm.name" placeholder="例如：规划团队" aria-label="组名称" />
-      </label>
-      <label>
-        <span>说明</span>
-        <input v-model="groupForm.description" placeholder="组用途说明（可选）" aria-label="组说明" />
-      </label>
-      <button type="submit" class="icon-button" :disabled="savingGroup || !groupForm.code.trim() || !groupForm.name.trim()">
-        <Plus :size="16" />
-        <span>创建用户组</span>
-      </button>
-    </form>
-
-    <table class="data-table">
-      <thead>
-        <tr>
-          <th>用户组</th>
-          <th>说明</th>
-          <th>成员数</th>
-          <th>操作</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="group in groups" :key="group.id">
-          <td>
-            <strong>{{ group.name }}</strong>
-            <span>{{ group.code }}</span>
-          </td>
-          <td>{{ group.description || "-" }}</td>
-          <td>{{ group.member_count }}</td>
-          <td>
-            <button type="button" class="icon-button secondary" @click="openGroup(group.code)" title="管理组成员">
-              <Users :size="16" />
-              <span>管理</span>
-            </button>
-            <button type="button" class="icon-button secondary" :disabled="savingGroup" @click="removeGroup(group)" title="删除用户组">
-              <Trash2 :size="16" />
-              <span>删除</span>
-            </button>
-          </td>
-        </tr>
-      </tbody>
-    </table>
-    <p v-if="!loading && groups.length === 0" class="empty-state">暂无用户组，先创建一个组，再把整组成员批量加入工作台。</p>
-
-    <div v-if="groupDetail" class="permission-policy-section group-detail-panel">
-      <div class="section-heading-row">
-        <Users :size="18" />
-        <h3>组成员 · {{ groupDetail.name }}</h3>
+  <!-- settings 模板容器（frontend-product-design §9.3：内容窄列 860px 居中） -->
+  <div class="layout-settings">
+    <section class="toolbar-band">
+      <div>
+        <p class="eyebrow">Identity</p>
+        <h2>用户权限</h2>
+        <p>公网账号和内网身份最终都落到本地用户，再由这里的角色决定权限。</p>
       </div>
-      <form class="form-grid-two group-member-form" @submit.prevent="addGroupMember">
-        <label>
-          <span>添加成员</span>
-          <select v-model="groupMemberUserId" aria-label="选择组成员">
-            <option v-for="user in groupMemberOptions" :key="user.id" :value="user.id">
-              {{ user.display_name }} · {{ user.username }}
-            </option>
-          </select>
-        </label>
-        <button type="submit" class="icon-button" :disabled="savingGroup || !groupMemberUserId">
-          <UserPlus :size="16" />
-          <span>添加成员</span>
+      <div class="topbar-tools">
+        <button type="button" class="icon-button" :disabled="loading" @click="loadData" title="刷新">
+          <RefreshCw :size="18" />
+          <span>刷新</span>
         </button>
-      </form>
+      </div>
+    </section>
+
+    <div class="policy-tabs">
+      <button v-if="isSuperAdmin" type="button" :class="{ active: activeTab === 'users' }" @click="activeTab = 'users'">用户</button>
+      <button v-if="isSuperAdmin" type="button" :class="{ active: activeTab === 'invites' }" @click="activeTab = 'invites'">邀请</button>
+      <button v-if="canManageGroups" type="button" :class="{ active: activeTab === 'groups' }" @click="activeTab = 'groups'">用户组</button>
+      <button type="button" :class="{ active: activeTab === 'members' }" @click="activeTab = 'members'">工作台成员</button>
+      <button type="button" :class="{ active: activeTab === 'policies' }" @click="activeTab = 'policies'">策略</button>
+    </div>
+
+    <p v-if="error" class="form-error">{{ error }}</p>
+    <p v-if="temporaryPassword" class="empty-state">临时密码：{{ temporaryPassword }}</p>
+    <p v-if="notice" class="empty-state">{{ noticeMessage }}</p>
+
+    <section v-if="activeTab === 'users'" class="data-table-wrap">
       <table class="data-table">
         <thead>
           <tr>
-            <th>成员</th>
+            <th>用户</th>
+            <th>身份来源</th>
             <th>部门</th>
+            <th>状态</th>
+            <th>角色</th>
             <th>操作</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="member in groupDetail.members" :key="member.id">
+          <tr v-for="user in users" :key="user.id">
             <td>
-              <strong>{{ member.display_name }}</strong>
-              <span>{{ member.username }}</span>
+              <strong>{{ user.display_name }}</strong>
+              <span>{{ user.username }}</span>
             </td>
-            <td>{{ member.department || "-" }}</td>
             <td>
-              <button type="button" class="icon-button secondary" :disabled="savingGroup" @click="removeGroupMember(member.id)" title="移出用户组">
-                <Trash2 :size="16" />
-                <span>移除</span>
+              <strong>{{ user.external_provider }}</strong>
+              <span>{{ user.employee_no || user.external_id }}</span>
+            </td>
+            <td>{{ user.department || "-" }}</td>
+            <td>{{ user.status }}</td>
+            <td>
+              <div class="role-checks">
+                <label v-for="role in roles" :key="role.code">
+                  <input
+                    type="checkbox"
+                    :checked="selectedRoles[user.id]?.has(role.code)"
+                    @change="toggleRole(user.id, role.code, ($event.target as HTMLInputElement).checked)"
+                  />
+                  <span>{{ role.name }}</span>
+                </label>
+              </div>
+            </td>
+            <td>
+              <button
+                type="button"
+                class="icon-button"
+                :disabled="savingUserId === user.id"
+                @click="saveUser(user)"
+                title="保存角色"
+              >
+                <Save :size="16" />
+                <span>{{ savingUserId === user.id ? "保存中" : "保存" }}</span>
+              </button>
+              <button type="button" class="icon-button secondary" @click="resetPassword(user)" title="重置密码">
+                <KeyRound :size="16" />
+                <span>重置</span>
+              </button>
+              <button type="button" class="icon-button secondary" @click="toggleActive(user)" title="启停用户">
+                <Ban :size="16" />
+                <span>{{ user.is_active ? "停用" : "启用" }}</span>
               </button>
             </td>
           </tr>
         </tbody>
       </table>
-      <p v-if="groupDetail.members.length === 0" class="empty-state">该组暂无成员，先从上方添加。</p>
+      <p v-if="!loading && users.length === 0" class="empty-state">暂无用户，可通过邀请链接创建第一个协作者账号。</p>
+    </section>
 
-      <form class="form-grid-two group-bulk-form" @submit.prevent="bulkJoinCurrentWorkspace">
+    <section v-else-if="activeTab === 'invites'" class="data-table-wrap">
+      <form class="form-grid-two" @submit.prevent="submitInvite">
         <label>
-          <span>批量加入 {{ workspace.current?.name || workspace.currentCode }}</span>
-          <select v-model="bulkJoinRole" aria-label="批量入台角色">
-            <option value="viewer">viewer</option>
-            <option value="member">member</option>
-            <option value="admin">admin</option>
+          <span>邮箱</span>
+          <input v-model="inviteForm.email" type="email" />
+        </label>
+        <label>
+          <span>全局角色</span>
+          <select v-model="inviteForm.role_code">
+            <option v-for="role in roles" :key="role.code" :value="role.code">{{ role.name }}</option>
           </select>
         </label>
-        <button type="submit" class="icon-button" :disabled="savingGroup || groupDetail.members.length === 0">
-          <UserPlus :size="16" />
-          <span>按组加入当前工作台</span>
-        </button>
-      </form>
-      <p class="empty-state">批量入台幂等：已在台成员保持原角色不降级；owner 角色只能走单人流程并需要危险确认。</p>
-    </div>
-  </section>
-
-  <section v-else-if="activeTab === 'members'" class="data-table-wrap">
-    <form class="form-grid-two" @submit.prevent="submitMember">
-      <label>
-        <span>工作台</span>
-        <input :value="workspace.current?.name || workspace.currentCode" disabled />
-      </label>
-      <label>
-        <span>用户</span>
-        <select v-model="memberForm.user_id">
-          <option v-for="user in memberUserOptions" :key="user.id" :value="user.id">
-            {{ user.display_name }} · {{ user.username }}
-          </option>
-        </select>
-      </label>
-      <label>
-        <span>工作台角色</span>
-        <select v-model="memberForm.workspace_role">
-          <option value="viewer">viewer</option>
-          <option value="member">member</option>
-          <option value="admin">admin</option>
-          <option value="owner">owner</option>
-        </select>
-      </label>
-      <button type="submit" class="icon-button" :disabled="savingMember || !memberForm.user_id">
-        <UserPlus :size="16" />
-        <span>加入工作台</span>
-      </button>
-    </form>
-
-    <div class="policy-summary-grid">
-      <article>
-        <p class="eyebrow">变更影响</p>
-        <h3>{{ selectedWorkspaceRoleImpact.title }}</h3>
-        <span>{{ selectedWorkspaceRoleImpact.description }}</span>
-      </article>
-      <article>
-        <p class="eyebrow">Owner Guard</p>
-        <h3>当前 owner {{ ownerCount }} 人</h3>
-        <span>最后一个 owner 不能移出工作台，后端和前端都会拦截。</span>
-      </article>
-      <article>
-        <p class="eyebrow">Audit</p>
-        <h3>成员变更会写审计</h3>
-        <span>加入、改角色、移出都会进入 workspace.member.* 审计动作。</span>
-      </article>
-    </div>
-
-    <table class="data-table">
-      <thead>
-        <tr>
-          <th>成员</th>
-          <th>全局角色</th>
-          <th>工作台角色</th>
-          <th>状态</th>
-          <th>操作</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="member in members" :key="member.user.id">
-          <td>
-            <strong>{{ member.user.display_name }}</strong>
-            <span>{{ member.user.username }}</span>
-          </td>
-          <td>{{ member.user.roles.join(", ") || "-" }}</td>
-          <td>
-            <select v-model="memberRoleDrafts[member.user.id]" class="compact-select">
-              <option value="viewer">viewer</option>
-              <option value="member">member</option>
-              <option value="admin">admin</option>
-              <option value="owner">owner</option>
-            </select>
-            <span v-if="isLastOwner(member)">最后 owner 不可移出</span>
-            <label v-if="isDangerousMemberChange(member)" class="danger-confirm-line">
-              <input v-model="dangerousMemberConfirmations[member.user.id]" type="checkbox" />
-              <span>确认调整 owner 权限</span>
-            </label>
-          </td>
-          <td>{{ member.user.status }}</td>
-          <td>
-            <button
-              type="button"
-              class="icon-button"
-              :disabled="savingMember || memberRoleDrafts[member.user.id] === member.workspace_role"
-              @click="saveMemberRole(member)"
-              title="保存工作台角色"
-            >
-              <Save :size="16" />
-              <span>保存</span>
-            </button>
-            <button
-              type="button"
-              class="icon-button secondary"
-              :disabled="savingMember || isLastOwner(member)"
-              @click="removeMember(member)"
-              title="移出工作台"
-            >
-              <Trash2 :size="16" />
-              <span>移出</span>
-            </button>
-          </td>
-        </tr>
-      </tbody>
-    </table>
-    <p v-if="!loading && members.length === 0" class="empty-state">暂无成员，从上方选择用户并加入当前工作台。</p>
-  </section>
-
-  <section v-else class="data-table-wrap permission-policy-panel">
-    <div class="policy-summary-grid">
-      <article>
-        <p class="eyebrow">Auth Mode</p>
-        <h3>{{ authModeLabel }}</h3>
-        <span>{{ runtime.deployMode }} · {{ runtime.instanceId || "local-instance" }}</span>
-      </article>
-      <article>
-        <p class="eyebrow">Workspace</p>
-        <h3>{{ workspace.current?.name || workspace.currentCode }}</h3>
-        <span>{{ workspace.currentCode }} · 成员 {{ members.length }}</span>
-      </article>
-      <article>
-        <p class="eyebrow">Boundary</p>
-        <h3>本地 RBAC</h3>
-        <span>外部身份只证明是谁，业务权限仍由本地角色决定。</span>
-      </article>
-    </div>
-
-    <div class="permission-policy-section">
-      <div class="section-heading-row">
-        <ShieldCheck :size="18" />
-        <h3>全局角色</h3>
-      </div>
-      <div class="permission-card-grid">
-        <article v-for="role in globalRoleRows" :key="role.code" class="permission-card">
-          <strong>{{ role.name }}</strong>
-          <span>{{ role.code }}</span>
-          <p>{{ role.description || "角色说明待补充。" }}</p>
-        </article>
-      </div>
-    </div>
-
-    <div class="permission-policy-section">
-      <div class="section-heading-row">
-        <ShieldCheck :size="18" />
-        <h3>工作台角色矩阵</h3>
-      </div>
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>角色</th>
-            <th>能力边界</th>
-            <th>最低等级</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="row in workspaceRoleRows" :key="row.role">
-            <td><strong>{{ row.role }}</strong></td>
-            <td>{{ row.scope }}</td>
-            <td>{{ row.min }}</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-
-    <div class="permission-policy-section">
-      <div class="section-heading-row">
-        <ShieldCheck :size="18" />
-        <h3>Viewer 反馈策略</h3>
-      </div>
-      <div class="policy-summary-grid">
-        <article>
-          <p class="eyebrow">Impact</p>
-          <h3>{{ feedbackPolicyDirty ? "待确认变更" : "当前策略已同步" }}</h3>
-          <span>{{ feedbackPolicyImpactLine }}</span>
-        </article>
-        <article>
-          <p class="eyebrow">Audit</p>
-          <h3>保存写入审计</h3>
-          <span>后端记录 workspace.feedback_policy.update，并继续以 403 兜底。</span>
-        </article>
-        <article>
-          <p class="eyebrow">Scope</p>
-          <h3>仅影响 viewer</h3>
-          <span>member、admin、owner 的采编协作能力不由这里降权。</span>
-        </article>
-      </div>
-      <form class="feedback-policy-form" @submit.prevent="saveFeedbackPolicy">
-        <label class="switch-row compact">
-          <input
-            v-model="feedbackPolicy.viewer_can_react"
-            type="checkbox"
-            :disabled="!canEditFeedbackPolicy"
-            aria-label="允许 viewer 点赞"
-            @change="touchFeedbackPolicy"
-          />
-          <span>允许 viewer 点赞</span>
-        </label>
-        <label class="switch-row compact">
-          <input
-            v-model="feedbackPolicy.viewer_can_rate"
-            type="checkbox"
-            :disabled="!canEditFeedbackPolicy"
-            aria-label="允许 viewer 评分"
-            @change="touchFeedbackPolicy"
-          />
-          <span>允许 viewer 评分</span>
-        </label>
-        <label class="switch-row compact">
-          <input
-            v-model="feedbackPolicy.viewer_can_comment"
-            type="checkbox"
-            :disabled="!canEditFeedbackPolicy"
-            aria-label="允许 viewer 评论"
-            @change="touchFeedbackPolicy"
-          />
-          <span>允许 viewer 评论</span>
-        </label>
-        <label class="switch-row compact">
-          <input
-            v-model="feedbackPolicy.notify_on_comment"
-            type="checkbox"
-            :disabled="!canEditFeedbackPolicy"
-            aria-label="评论通知"
-            @change="touchFeedbackPolicy"
-          />
-          <span>评论写入通知流</span>
-        </label>
-        <label class="switch-row compact">
-          <input
-            v-model="feedbackPolicy.notify_on_publish"
-            type="checkbox"
-            :disabled="!canEditFeedbackPolicy"
-            aria-label="发布通知"
-            @change="touchFeedbackPolicy"
-          />
-          <span>发布通知预留开关</span>
-        </label>
-        <label class="switch-row compact locked">
-          <input :checked="false" type="checkbox" disabled aria-label="viewer 编辑权限" />
-          <span>viewer 编辑日报：固定关闭</span>
-        </label>
-        <label class="feedback-policy-confirm">
-          <input
-            v-model="feedbackPolicyConfirmed"
-            type="checkbox"
-            :disabled="!canEditFeedbackPolicy || !feedbackPolicyDirty"
-            aria-label="确认反馈策略影响"
-          />
-          <span>已确认该策略只影响 viewer 反馈入口，并接受后端审计记录。</span>
-        </label>
-        <button
-          type="submit"
-          class="icon-button"
-          :disabled="!canEditFeedbackPolicy || !feedbackPolicyDirty || savingFeedbackPolicy"
-        >
-          <Save :size="16" />
-          <span>{{ savingFeedbackPolicy ? "保存中" : "保存反馈策略" }}</span>
-        </button>
-      </form>
-      <p v-if="!canEditFeedbackPolicy" class="empty-state">
-        仅工作台 owner/admin 或 super_admin 可修改反馈策略。
-      </p>
-    </div>
-
-    <div class="permission-policy-section">
-      <div class="section-heading-row">
-        <ShieldCheck :size="18" />
-        <h3>部署层自动开通规则</h3>
-      </div>
-      <p v-if="runtime.authMembershipMapping.status === 'invalid'" class="form-warning">
-        {{ runtime.authMembershipMapping.error || "自动开通规则配置无效" }}
-      </p>
-      <table v-else-if="hasAuthMembershipMapping" class="data-table">
-        <thead>
-          <tr>
-            <th>来源</th>
-            <th>工作台</th>
-            <th>角色</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="target in authDefaultWorkspaceRows" :key="`default-${target.workspace_code}`">
-            <td><strong>默认</strong></td>
-            <td>{{ target.workspace_code }}</td>
-            <td>{{ target.workspace_role }}</td>
-          </tr>
-          <tr
-            v-for="target in authDepartmentWorkspaceRows"
-            :key="`${target.department}-${target.workspace_code}`"
-          >
-            <td><strong>部门：{{ target.department }}</strong></td>
-            <td>{{ target.workspace_code }}</td>
-            <td>{{ target.workspace_role }}</td>
-          </tr>
-        </tbody>
-      </table>
-      <p v-else class="empty-state">未配置默认工作台或部门映射。</p>
-    </div>
-
-    <div class="permission-policy-section">
-      <div class="section-heading-row">
-        <ShieldCheck :size="18" />
-        <h3>当前工作台部门开通规则</h3>
-      </div>
-      <div class="policy-summary-grid">
-        <article>
-          <p class="eyebrow">Scope</p>
-          <h3>{{ workspace.currentCode }}</h3>
-          <span>匹配部门的 OIDC/Header 用户登录时会自动加入当前工作台。</span>
-        </article>
-        <article>
-          <p class="eyebrow">Guard</p>
-          <h3>只升级不降级</h3>
-          <span>自动规则只新增或升级 membership，不会降低人工已授予的角色。</span>
-        </article>
-        <article>
-          <p class="eyebrow">Audit</p>
-          <h3>保存写入审计</h3>
-          <span>动作记录为 workspace.auth_membership_mapping.update。</span>
-        </article>
-      </div>
-
-      <form v-if="isSuperAdmin" class="form-grid-two" @submit.prevent="addAuthMappingRow">
         <label>
-          <span>部门名称</span>
-          <input v-model="authMappingForm.department" placeholder="例如：规划部" />
+          <span>工作台</span>
+          <select v-model="inviteForm.workspace_code">
+            <option v-for="item in workspace.options" :key="item.code" :value="item.code">{{ item.name }}</option>
+          </select>
         </label>
         <label>
-          <span>自动授予角色</span>
-          <select v-model="authMappingForm.workspace_role">
+          <span>工作台角色</span>
+          <select v-model="inviteForm.workspace_role">
             <option value="viewer">viewer</option>
             <option value="member">member</option>
             <option value="admin">admin</option>
             <option value="owner">owner</option>
           </select>
         </label>
+        <label>
+          <span>有效天数</span>
+          <input v-model.number="inviteForm.expires_in_days" type="number" min="1" max="30" />
+        </label>
         <button type="submit" class="icon-button">
           <Plus :size="16" />
-          <span>加入规则</span>
+          <span>创建邀请</span>
         </button>
       </form>
 
-      <table v-if="authMappingRows.length > 0" class="data-table">
+      <table class="data-table">
         <thead>
           <tr>
-            <th>部门</th>
-            <th>工作台</th>
+            <th>邀请</th>
             <th>角色</th>
-            <th v-if="isSuperAdmin">操作</th>
+            <th>工作台</th>
+            <th>状态</th>
+            <th>操作</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="(row, index) in authMappingRows" :key="`${row.department}-${row.workspace_role}`">
-            <td><strong>{{ row.department }}</strong></td>
-            <td>{{ workspace.currentCode }}</td>
-            <td>{{ row.workspace_role }}</td>
-            <td v-if="isSuperAdmin">
-              <button type="button" class="icon-button secondary" @click="removeAuthMappingRow(index)">
-                <Trash2 :size="16" />
-                <span>移除</span>
+          <tr v-for="invite in invites" :key="invite.id">
+            <td>
+              <strong>{{ invite.email || invite.code }}</strong>
+              <span>{{ invite.invite_url }}</span>
+            </td>
+            <td>{{ invite.role_code }}</td>
+            <td>
+              <span v-for="target in invite.workspaces" :key="target.code">
+                {{ target.code }} · {{ target.workspace_role }}
+              </span>
+            </td>
+            <td>
+              <strong>{{ inviteStatusLabel(invite.status) }}</strong>
+              <span>{{ inviteStatusHint(invite) }}</span>
+            </td>
+            <td>
+              <button type="button" class="icon-button secondary" @click="copyText(invite.invite_url)" title="复制链接">
+                <Copy :size="16" />
+                <span>复制</span>
+              </button>
+              <button
+                type="button"
+                class="icon-button secondary"
+                :disabled="invite.status !== 'pending'"
+                @click="revokeInviteRow(invite)"
+                title="撤销邀请"
+              >
+                <Ban :size="16" />
+                <span>撤销</span>
               </button>
             </td>
           </tr>
         </tbody>
       </table>
-      <p v-else class="empty-state">当前工作台未配置数据库部门开通规则。</p>
+      <p v-if="!loading && invites.length === 0" class="empty-state">暂无邀请，选择角色和工作台后生成邀请链接。</p>
+    </section>
 
-      <form v-if="isSuperAdmin" class="feedback-policy-form" @submit.prevent="saveAuthMembershipMapping">
-        <label class="feedback-policy-confirm">
-          <input
-            v-model="authMappingConfirmed"
-            type="checkbox"
-            :disabled="!authMappingDirty"
-            aria-label="确认部门开通规则影响"
-          />
-          <span>已确认这些部门用户后续登录会自动加入当前工作台，并接受审计记录。</span>
+    <section v-else-if="activeTab === 'groups'" class="data-table-wrap">
+      <form class="form-grid-two group-create-form" @submit.prevent="submitGroup">
+        <label>
+          <span>组编码</span>
+          <input v-model="groupForm.code" placeholder="例如：planning_team" aria-label="组编码" />
         </label>
-        <button
-          type="submit"
-          class="icon-button"
-          :disabled="!authMappingDirty || savingAuthMapping"
-        >
-          <Save :size="16" />
-          <span>{{ savingAuthMapping ? "保存中" : "保存部门规则" }}</span>
+        <label>
+          <span>组名称</span>
+          <input v-model="groupForm.name" placeholder="例如：规划团队" aria-label="组名称" />
+        </label>
+        <label>
+          <span>说明</span>
+          <input v-model="groupForm.description" placeholder="组用途说明（可选）" aria-label="组说明" />
+        </label>
+        <button type="submit" class="icon-button" :disabled="savingGroup || !groupForm.code.trim() || !groupForm.name.trim()">
+          <Plus :size="16" />
+          <span>创建用户组</span>
         </button>
       </form>
-      <p v-else class="empty-state">只有 super_admin 可以编辑部门自动开通规则。</p>
-    </div>
 
-    <div class="permission-policy-section">
-      <div class="section-heading-row">
-        <ShieldCheck :size="18" />
-        <h3>权限差异解释与回滚</h3>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>用户组</th>
+            <th>说明</th>
+            <th>成员数</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="group in groups" :key="group.id">
+            <td>
+              <strong>{{ group.name }}</strong>
+              <span>{{ group.code }}</span>
+            </td>
+            <td>{{ group.description || "-" }}</td>
+            <td>{{ group.member_count }}</td>
+            <td>
+              <button type="button" class="icon-button secondary" @click="openGroup(group.code)" title="管理组成员">
+                <Users :size="16" />
+                <span>管理</span>
+              </button>
+              <button type="button" class="icon-button secondary" :disabled="savingGroup" @click="removeGroup(group)" title="删除用户组">
+                <Trash2 :size="16" />
+                <span>删除</span>
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <p v-if="!loading && groups.length === 0" class="empty-state">暂无用户组，先创建一个组，再把整组成员批量加入工作台。</p>
+
+      <div v-if="groupDetail" class="permission-policy-section group-detail-panel">
+        <div class="section-heading-row">
+          <Users :size="18" />
+          <h3>组成员 · {{ groupDetail.name }}</h3>
+        </div>
+        <form class="form-grid-two group-member-form" @submit.prevent="addGroupMember">
+          <label>
+            <span>添加成员</span>
+            <select v-model="groupMemberUserId" aria-label="选择组成员">
+              <option v-for="user in groupMemberOptions" :key="user.id" :value="user.id">
+                {{ user.display_name }} · {{ user.username }}
+              </option>
+            </select>
+          </label>
+          <button type="submit" class="icon-button" :disabled="savingGroup || !groupMemberUserId">
+            <UserPlus :size="16" />
+            <span>添加成员</span>
+          </button>
+        </form>
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>成员</th>
+              <th>部门</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="member in groupDetail.members" :key="member.id">
+              <td>
+                <strong>{{ member.display_name }}</strong>
+                <span>{{ member.username }}</span>
+              </td>
+              <td>{{ member.department || "-" }}</td>
+              <td>
+                <button type="button" class="icon-button secondary" :disabled="savingGroup" @click="removeGroupMember(member.id)" title="移出用户组">
+                  <Trash2 :size="16" />
+                  <span>移除</span>
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-if="groupDetail.members.length === 0" class="empty-state">该组暂无成员，先从上方添加。</p>
+
+        <form class="form-grid-two group-bulk-form" @submit.prevent="bulkJoinCurrentWorkspace">
+          <label>
+            <span>批量加入 {{ workspace.current?.name || workspace.currentCode }}</span>
+            <select v-model="bulkJoinRole" aria-label="批量入台角色">
+              <option value="viewer">viewer</option>
+              <option value="member">member</option>
+              <option value="admin">admin</option>
+            </select>
+          </label>
+          <button type="submit" class="icon-button" :disabled="savingGroup || groupDetail.members.length === 0">
+            <UserPlus :size="16" />
+            <span>按组加入当前工作台</span>
+          </button>
+        </form>
+        <p class="empty-state">批量入台幂等：已在台成员保持原角色不降级；owner 角色只能走单人流程并需要危险确认。</p>
       </div>
+    </section>
+
+    <section v-else-if="activeTab === 'members'" class="data-table-wrap">
+      <form class="form-grid-two" @submit.prevent="submitMember">
+        <label>
+          <span>工作台</span>
+          <input :value="workspace.current?.name || workspace.currentCode" disabled />
+        </label>
+        <label>
+          <span>用户</span>
+          <select v-model="memberForm.user_id">
+            <option v-for="user in memberUserOptions" :key="user.id" :value="user.id">
+              {{ user.display_name }} · {{ user.username }}
+            </option>
+          </select>
+        </label>
+        <label>
+          <span>工作台角色</span>
+          <select v-model="memberForm.workspace_role">
+            <option value="viewer">viewer</option>
+            <option value="member">member</option>
+            <option value="admin">admin</option>
+            <option value="owner">owner</option>
+          </select>
+        </label>
+        <button type="submit" class="icon-button" :disabled="savingMember || !memberForm.user_id">
+          <UserPlus :size="16" />
+          <span>加入工作台</span>
+        </button>
+      </form>
+
       <div class="policy-summary-grid">
         <article>
-          <p class="eyebrow">Diff</p>
-          <h3>后端解释差异</h3>
-          <span>角色、成员、反馈策略和部门开通规则都按审计 before/after 展示。</span>
+          <p class="eyebrow">变更影响</p>
+          <h3>{{ selectedWorkspaceRoleImpact.title }}</h3>
+          <span>{{ selectedWorkspaceRoleImpact.description }}</span>
         </article>
         <article>
-          <p class="eyebrow">Rollback</p>
-          <h3>{{ selectedPermissionRollbackIds.length }} 条待回滚</h3>
-          <span>回滚会再次写入 identity.permission_rollback 审计记录。</span>
+          <p class="eyebrow">Owner Guard</p>
+          <h3>当前 owner {{ ownerCount }} 人</h3>
+          <span>最后一个 owner 不能移出工作台，后端和前端都会拦截。</span>
         </article>
         <article>
-          <p class="eyebrow">Guard</p>
-          <h3>保留管理员兜底</h3>
-          <span>最后 super_admin 和最后 workspace owner 不会被回滚掉。</span>
+          <p class="eyebrow">Audit</p>
+          <h3>成员变更会写审计</h3>
+          <span>加入、改角色、移出都会进入 workspace.member.* 审计动作。</span>
         </article>
       </div>
-      <table v-if="permissionChanges.length > 0" class="data-table permission-change-table">
+
+      <table class="data-table">
         <thead>
           <tr>
-            <th>选择</th>
-            <th>变更</th>
-            <th>差异解释</th>
-            <th>操作者</th>
-            <th>时间</th>
+            <th>成员</th>
+            <th>全局角色</th>
+            <th>工作台角色</th>
+            <th>状态</th>
+            <th>操作</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="change in permissionChanges" :key="change.id">
+          <tr v-for="member in members" :key="member.user.id">
             <td>
-              <input
-                type="checkbox"
-                :checked="isPermissionRollbackSelected(change)"
-                :disabled="!change.rollback_available"
-                :aria-label="`选择回滚 ${change.title}`"
-                @change="togglePermissionRollback(change, ($event.target as HTMLInputElement).checked)"
-              />
+              <strong>{{ member.user.display_name }}</strong>
+              <span>{{ member.user.username }}</span>
             </td>
+            <td>{{ member.user.roles.join(", ") || "-" }}</td>
             <td>
-              <strong>{{ change.title }}</strong>
-              <span>{{ change.scope }} · {{ change.action }}</span>
-              <span v-if="!change.rollback_available">{{ change.rollback_reason }}</span>
+              <select v-model="memberRoleDrafts[member.user.id]" class="compact-select">
+                <option value="viewer">viewer</option>
+                <option value="member">member</option>
+                <option value="admin">admin</option>
+                <option value="owner">owner</option>
+              </select>
+              <span v-if="isLastOwner(member)">最后 owner 不可移出</span>
+              <label v-if="isDangerousMemberChange(member)" class="danger-confirm-line">
+                <input v-model="dangerousMemberConfirmations[member.user.id]" type="checkbox" />
+                <span>确认调整 owner 权限</span>
+              </label>
             </td>
+            <td>{{ member.user.status }}</td>
             <td>
-              <ul class="permission-diff-list">
-                <li v-for="diff in change.diffs" :key="`${change.id}-${diff.field}`">
-                  <strong>{{ diff.label }}</strong>
-                  <span>{{ permissionDiffValue(diff.before) }} → {{ permissionDiffValue(diff.after) }}</span>
-                  <em>{{ diff.explanation }}</em>
-                </li>
-              </ul>
-              <span v-if="change.diffs.length === 0">{{ change.summary }}</span>
+              <button
+                type="button"
+                class="icon-button"
+                :disabled="savingMember || memberRoleDrafts[member.user.id] === member.workspace_role"
+                @click="saveMemberRole(member)"
+                title="保存工作台角色"
+              >
+                <Save :size="16" />
+                <span>保存</span>
+              </button>
+              <button
+                type="button"
+                class="icon-button secondary"
+                :disabled="savingMember || isLastOwner(member)"
+                @click="removeMember(member)"
+                title="移出工作台"
+              >
+                <Trash2 :size="16" />
+                <span>移出</span>
+              </button>
             </td>
-            <td>{{ change.actor_name || "system" }}</td>
-            <td>{{ permissionChangeTime(change) }}</td>
           </tr>
         </tbody>
       </table>
-      <p v-else class="empty-state">暂无可解释的权限变更记录，调整成员角色或工作台成员资格后，这里会展示每次变更的字段差异与原因。</p>
-      <form v-if="permissionChanges.length > 0" class="feedback-policy-form" @submit.prevent="rollbackSelectedPermissionChanges">
-        <label class="feedback-policy-confirm">
-          <input v-model="rollbackConfirmDangerous" type="checkbox" aria-label="确认危险权限回滚" />
-          <span>确认本次回滚可能涉及 owner 或 super_admin 降权，由后端继续执行最后管理员保护。</span>
-        </label>
-        <button
-          type="submit"
-          class="icon-button"
-          :disabled="selectedPermissionRollbackIds.length === 0 || rollingBackPermissions"
-        >
-          <RotateCcw :size="16" />
-          <span>{{ rollingBackPermissions ? "回滚中" : "回滚选中变更" }}</span>
-        </button>
-      </form>
-    </div>
+      <p v-if="!loading && members.length === 0" class="empty-state">暂无成员，从上方选择用户并加入当前工作台。</p>
+    </section>
 
-    <div class="permission-policy-section">
-      <div class="section-heading-row">
-        <ShieldCheck :size="18" />
-        <h3>权限审计摘要</h3>
+    <section v-else class="data-table-wrap permission-policy-panel">
+      <div class="policy-summary-grid">
+        <article>
+          <p class="eyebrow">Auth Mode</p>
+          <h3>{{ authModeLabel }}</h3>
+          <span>{{ runtime.deployMode }} · {{ runtime.instanceId || "local-instance" }}</span>
+        </article>
+        <article>
+          <p class="eyebrow">Workspace</p>
+          <h3>{{ workspace.current?.name || workspace.currentCode }}</h3>
+          <span>{{ workspace.currentCode }} · 成员 {{ members.length }}</span>
+        </article>
+        <article>
+          <p class="eyebrow">Boundary</p>
+          <h3>本地 RBAC</h3>
+          <span>外部身份只证明是谁，业务权限仍由本地角色决定。</span>
+        </article>
       </div>
-      <table v-if="identityAuditLogs.length > 0" class="data-table">
-        <thead>
-          <tr>
-            <th>动作</th>
-            <th>对象</th>
-            <th>操作者</th>
-            <th>时间</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="log in identityAuditLogs" :key="log.id">
-            <td><strong>{{ log.action }}</strong></td>
-            <td>{{ auditDetailLine(log) }}</td>
-            <td>{{ log.user_name || log.user_id || "system" }}</td>
-            <td>{{ new Date(log.created_at).toLocaleString("zh-CN", { hour12: false }) }}</td>
-          </tr>
-        </tbody>
-      </table>
-      <p v-else-if="isSuperAdmin" class="empty-state">暂无身份权限相关审计记录，请先完成邀请、角色调整或反馈策略变更后再查看。</p>
-      <p v-else class="empty-state">权限审计摘要仅 super_admin 可见。</p>
-    </div>
 
-    <div class="permission-policy-section">
-      <div class="section-heading-row">
-        <ShieldCheck :size="18" />
-        <h3>后续治理项</h3>
+      <div class="permission-policy-section">
+        <div class="section-heading-row">
+          <ShieldCheck :size="18" />
+          <h3>全局角色</h3>
+        </div>
+        <div class="permission-card-grid">
+          <article v-for="role in globalRoleRows" :key="role.code" class="permission-card">
+            <strong>{{ role.name }}</strong>
+            <span>{{ role.code }}</span>
+            <p>{{ role.description || "角色说明待补充。" }}</p>
+          </article>
+        </div>
       </div>
-      <ul class="policy-gap-list">
-        <li v-for="item in policyGapRows" :key="item">{{ item }}</li>
-      </ul>
-    </div>
-  </section>
+
+      <div class="permission-policy-section">
+        <div class="section-heading-row">
+          <ShieldCheck :size="18" />
+          <h3>工作台角色矩阵</h3>
+        </div>
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>角色</th>
+              <th>能力边界</th>
+              <th>最低等级</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in workspaceRoleRows" :key="row.role">
+              <td><strong>{{ row.role }}</strong></td>
+              <td>{{ row.scope }}</td>
+              <td>{{ row.min }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="permission-policy-section">
+        <div class="section-heading-row">
+          <ShieldCheck :size="18" />
+          <h3>Viewer 反馈策略</h3>
+        </div>
+        <div class="policy-summary-grid">
+          <article>
+            <p class="eyebrow">Impact</p>
+            <h3>{{ feedbackPolicyDirty ? "待确认变更" : "当前策略已同步" }}</h3>
+            <span>{{ feedbackPolicyImpactLine }}</span>
+          </article>
+          <article>
+            <p class="eyebrow">Audit</p>
+            <h3>保存写入审计</h3>
+            <span>后端记录 workspace.feedback_policy.update，并继续以 403 兜底。</span>
+          </article>
+          <article>
+            <p class="eyebrow">Scope</p>
+            <h3>仅影响 viewer</h3>
+            <span>member、admin、owner 的采编协作能力不由这里降权。</span>
+          </article>
+        </div>
+        <form class="feedback-policy-form" @submit.prevent="saveFeedbackPolicy">
+          <label class="switch-row compact">
+            <input
+              v-model="feedbackPolicy.viewer_can_react"
+              type="checkbox"
+              :disabled="!canEditFeedbackPolicy"
+              aria-label="允许 viewer 点赞"
+              @change="touchFeedbackPolicy"
+            />
+            <span>允许 viewer 点赞</span>
+          </label>
+          <label class="switch-row compact">
+            <input
+              v-model="feedbackPolicy.viewer_can_rate"
+              type="checkbox"
+              :disabled="!canEditFeedbackPolicy"
+              aria-label="允许 viewer 评分"
+              @change="touchFeedbackPolicy"
+            />
+            <span>允许 viewer 评分</span>
+          </label>
+          <label class="switch-row compact">
+            <input
+              v-model="feedbackPolicy.viewer_can_comment"
+              type="checkbox"
+              :disabled="!canEditFeedbackPolicy"
+              aria-label="允许 viewer 评论"
+              @change="touchFeedbackPolicy"
+            />
+            <span>允许 viewer 评论</span>
+          </label>
+          <label class="switch-row compact">
+            <input
+              v-model="feedbackPolicy.notify_on_comment"
+              type="checkbox"
+              :disabled="!canEditFeedbackPolicy"
+              aria-label="评论通知"
+              @change="touchFeedbackPolicy"
+            />
+            <span>评论写入通知流</span>
+          </label>
+          <label class="switch-row compact">
+            <input
+              v-model="feedbackPolicy.notify_on_publish"
+              type="checkbox"
+              :disabled="!canEditFeedbackPolicy"
+              aria-label="发布通知"
+              @change="touchFeedbackPolicy"
+            />
+            <span>发布通知预留开关</span>
+          </label>
+          <label class="switch-row compact locked">
+            <input :checked="false" type="checkbox" disabled aria-label="viewer 编辑权限" />
+            <span>viewer 编辑日报：固定关闭</span>
+          </label>
+          <label class="feedback-policy-confirm">
+            <input
+              v-model="feedbackPolicyConfirmed"
+              type="checkbox"
+              :disabled="!canEditFeedbackPolicy || !feedbackPolicyDirty"
+              aria-label="确认反馈策略影响"
+            />
+            <span>已确认该策略只影响 viewer 反馈入口，并接受后端审计记录。</span>
+          </label>
+          <button
+            type="submit"
+            class="icon-button"
+            :disabled="!canEditFeedbackPolicy || !feedbackPolicyDirty || savingFeedbackPolicy"
+          >
+            <Save :size="16" />
+            <span>{{ savingFeedbackPolicy ? "保存中" : "保存反馈策略" }}</span>
+          </button>
+        </form>
+        <p v-if="!canEditFeedbackPolicy" class="empty-state">
+          仅工作台 owner/admin 或 super_admin 可修改反馈策略。
+        </p>
+      </div>
+
+      <div class="permission-policy-section">
+        <div class="section-heading-row">
+          <ShieldCheck :size="18" />
+          <h3>部署层自动开通规则</h3>
+        </div>
+        <p v-if="runtime.authMembershipMapping.status === 'invalid'" class="form-warning">
+          {{ runtime.authMembershipMapping.error || "自动开通规则配置无效" }}
+        </p>
+        <table v-else-if="hasAuthMembershipMapping" class="data-table">
+          <thead>
+            <tr>
+              <th>来源</th>
+              <th>工作台</th>
+              <th>角色</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="target in authDefaultWorkspaceRows" :key="`default-${target.workspace_code}`">
+              <td><strong>默认</strong></td>
+              <td>{{ target.workspace_code }}</td>
+              <td>{{ target.workspace_role }}</td>
+            </tr>
+            <tr
+              v-for="target in authDepartmentWorkspaceRows"
+              :key="`${target.department}-${target.workspace_code}`"
+            >
+              <td><strong>部门：{{ target.department }}</strong></td>
+              <td>{{ target.workspace_code }}</td>
+              <td>{{ target.workspace_role }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-else class="empty-state">未配置默认工作台或部门映射。</p>
+      </div>
+
+      <div class="permission-policy-section">
+        <div class="section-heading-row">
+          <ShieldCheck :size="18" />
+          <h3>当前工作台部门开通规则</h3>
+        </div>
+        <div class="policy-summary-grid">
+          <article>
+            <p class="eyebrow">Scope</p>
+            <h3>{{ workspace.currentCode }}</h3>
+            <span>匹配部门的 OIDC/Header 用户登录时会自动加入当前工作台。</span>
+          </article>
+          <article>
+            <p class="eyebrow">Guard</p>
+            <h3>只升级不降级</h3>
+            <span>自动规则只新增或升级 membership，不会降低人工已授予的角色。</span>
+          </article>
+          <article>
+            <p class="eyebrow">Audit</p>
+            <h3>保存写入审计</h3>
+            <span>动作记录为 workspace.auth_membership_mapping.update。</span>
+          </article>
+        </div>
+
+        <form v-if="isSuperAdmin" class="form-grid-two" @submit.prevent="addAuthMappingRow">
+          <label>
+            <span>部门名称</span>
+            <input v-model="authMappingForm.department" placeholder="例如：规划部" />
+          </label>
+          <label>
+            <span>自动授予角色</span>
+            <select v-model="authMappingForm.workspace_role">
+              <option value="viewer">viewer</option>
+              <option value="member">member</option>
+              <option value="admin">admin</option>
+              <option value="owner">owner</option>
+            </select>
+          </label>
+          <button type="submit" class="icon-button">
+            <Plus :size="16" />
+            <span>加入规则</span>
+          </button>
+        </form>
+
+        <table v-if="authMappingRows.length > 0" class="data-table">
+          <thead>
+            <tr>
+              <th>部门</th>
+              <th>工作台</th>
+              <th>角色</th>
+              <th v-if="isSuperAdmin">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(row, index) in authMappingRows" :key="`${row.department}-${row.workspace_role}`">
+              <td><strong>{{ row.department }}</strong></td>
+              <td>{{ workspace.currentCode }}</td>
+              <td>{{ row.workspace_role }}</td>
+              <td v-if="isSuperAdmin">
+                <button type="button" class="icon-button secondary" @click="removeAuthMappingRow(index)">
+                  <Trash2 :size="16" />
+                  <span>移除</span>
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-else class="empty-state">当前工作台未配置数据库部门开通规则。</p>
+
+        <form v-if="isSuperAdmin" class="feedback-policy-form" @submit.prevent="saveAuthMembershipMapping">
+          <label class="feedback-policy-confirm">
+            <input
+              v-model="authMappingConfirmed"
+              type="checkbox"
+              :disabled="!authMappingDirty"
+              aria-label="确认部门开通规则影响"
+            />
+            <span>已确认这些部门用户后续登录会自动加入当前工作台，并接受审计记录。</span>
+          </label>
+          <button
+            type="submit"
+            class="icon-button"
+            :disabled="!authMappingDirty || savingAuthMapping"
+          >
+            <Save :size="16" />
+            <span>{{ savingAuthMapping ? "保存中" : "保存部门规则" }}</span>
+          </button>
+        </form>
+        <p v-else class="empty-state">只有 super_admin 可以编辑部门自动开通规则。</p>
+      </div>
+
+      <div class="permission-policy-section">
+        <div class="section-heading-row">
+          <ShieldCheck :size="18" />
+          <h3>权限差异解释与回滚</h3>
+        </div>
+        <div class="policy-summary-grid">
+          <article>
+            <p class="eyebrow">Diff</p>
+            <h3>后端解释差异</h3>
+            <span>角色、成员、反馈策略和部门开通规则都按审计 before/after 展示。</span>
+          </article>
+          <article>
+            <p class="eyebrow">Rollback</p>
+            <h3>{{ selectedPermissionRollbackIds.length }} 条待回滚</h3>
+            <span>回滚会再次写入 identity.permission_rollback 审计记录。</span>
+          </article>
+          <article>
+            <p class="eyebrow">Guard</p>
+            <h3>保留管理员兜底</h3>
+            <span>最后 super_admin 和最后 workspace owner 不会被回滚掉。</span>
+          </article>
+        </div>
+        <table v-if="permissionChanges.length > 0" class="data-table permission-change-table">
+          <thead>
+            <tr>
+              <th>选择</th>
+              <th>变更</th>
+              <th>差异解释</th>
+              <th>操作者</th>
+              <th>时间</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="change in permissionChanges" :key="change.id">
+              <td>
+                <input
+                  type="checkbox"
+                  :checked="isPermissionRollbackSelected(change)"
+                  :disabled="!change.rollback_available"
+                  :aria-label="`选择回滚 ${change.title}`"
+                  @change="togglePermissionRollback(change, ($event.target as HTMLInputElement).checked)"
+                />
+              </td>
+              <td>
+                <strong>{{ change.title }}</strong>
+                <span>{{ change.scope }} · {{ change.action }}</span>
+                <span v-if="!change.rollback_available">{{ change.rollback_reason }}</span>
+              </td>
+              <td>
+                <ul class="permission-diff-list">
+                  <li v-for="diff in change.diffs" :key="`${change.id}-${diff.field}`">
+                    <strong>{{ diff.label }}</strong>
+                    <span>{{ permissionDiffValue(diff.before) }} → {{ permissionDiffValue(diff.after) }}</span>
+                    <em>{{ diff.explanation }}</em>
+                  </li>
+                </ul>
+                <span v-if="change.diffs.length === 0">{{ change.summary }}</span>
+              </td>
+              <td>{{ change.actor_name || "system" }}</td>
+              <td>{{ permissionChangeTime(change) }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-else class="empty-state">暂无可解释的权限变更记录，调整成员角色或工作台成员资格后，这里会展示每次变更的字段差异与原因。</p>
+        <form v-if="permissionChanges.length > 0" class="feedback-policy-form" @submit.prevent="rollbackSelectedPermissionChanges">
+          <label class="feedback-policy-confirm">
+            <input v-model="rollbackConfirmDangerous" type="checkbox" aria-label="确认危险权限回滚" />
+            <span>确认本次回滚可能涉及 owner 或 super_admin 降权，由后端继续执行最后管理员保护。</span>
+          </label>
+          <button
+            type="submit"
+            class="icon-button"
+            :disabled="selectedPermissionRollbackIds.length === 0 || rollingBackPermissions"
+          >
+            <RotateCcw :size="16" />
+            <span>{{ rollingBackPermissions ? "回滚中" : "回滚选中变更" }}</span>
+          </button>
+        </form>
+      </div>
+
+      <div class="permission-policy-section">
+        <div class="section-heading-row">
+          <ShieldCheck :size="18" />
+          <h3>权限审计摘要</h3>
+        </div>
+        <table v-if="identityAuditLogs.length > 0" class="data-table">
+          <thead>
+            <tr>
+              <th>动作</th>
+              <th>对象</th>
+              <th>操作者</th>
+              <th>时间</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="log in identityAuditLogs" :key="log.id">
+              <td><strong>{{ log.action }}</strong></td>
+              <td>{{ auditDetailLine(log) }}</td>
+              <td>{{ log.user_name || log.user_id || "system" }}</td>
+              <td>{{ new Date(log.created_at).toLocaleString("zh-CN", { hour12: false }) }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-else-if="isSuperAdmin" class="empty-state">暂无身份权限相关审计记录，请先完成邀请、角色调整或反馈策略变更后再查看。</p>
+        <p v-else class="empty-state">权限审计摘要仅 super_admin 可见。</p>
+      </div>
+
+      <div class="permission-policy-section">
+        <div class="section-heading-row">
+          <ShieldCheck :size="18" />
+          <h3>后续治理项</h3>
+        </div>
+        <ul class="policy-gap-list">
+          <li v-for="item in policyGapRows" :key="item">{{ item }}</li>
+        </ul>
+      </div>
+    </section>
+  </div>
 </template>

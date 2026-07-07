@@ -1265,3 +1265,141 @@ def test_failfast_limits_guest_login_to_standalone_and_cloud():
                 SYNC_SERVICE_TOKENS="feed-token",
             ),
         )
+
+
+# ---- 资料自助编辑（PATCH /api/auth/me，identity-access-design §4.4） ----
+
+
+def _login_admin(client):
+    response = client.post("/api/auth/login", json={"username": "admin", "password": "password"})
+    assert response.status_code == 200
+    return response
+
+
+def test_profile_self_service_updates_local_account_and_audits(monkeypatch, tmp_path):
+    client, engine = make_client(monkeypatch, tmp_path, AUTH_MODE="public_password")
+    _login_admin(client)
+
+    response = client.patch(
+        "/api/auth/me",
+        json={
+            "display_name": "  新任规划官  ",
+            "department": "战略规划部",
+            "email": "planner@example.com",
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()["user"]
+    # display_name trim 后保存；响应与 GET /api/auth/me 同一用户投影
+    assert payload["display_name"] == "新任规划官"
+    assert payload["department"] == "战略规划部"
+    assert payload["email"] == "planner@example.com"
+
+    me = client.get("/api/auth/me").json()["user"]
+    assert me["display_name"] == "新任规划官"
+    assert me["department"] == "战略规划部"
+    assert me["email"] == "planner@example.com"
+
+    Session = sessionmaker(bind=engine)
+    with Session() as session:
+        audit = session.scalar(
+            select(AuditLog).where(AuditLog.action == "auth.profile.update"),
+        )
+        assert audit is not None
+        assert audit.detail_json["before"]["display_name"] == "规划部管理员"
+        assert audit.detail_json["after"]["display_name"] == "新任规划官"
+        assert audit.detail_json["after"]["department"] == "战略规划部"
+        assert audit.detail_json["after"]["email"] == "planner@example.com"
+
+    # department/email 可清空（传空串 -> None）；display_name 不动
+    cleared = client.patch("/api/auth/me", json={"department": "", "email": ""})
+    assert cleared.status_code == 200
+    assert cleared.json()["user"]["department"] is None
+    assert cleared.json()["user"]["email"] is None
+    assert cleared.json()["user"]["display_name"] == "新任规划官"
+
+
+def test_profile_self_service_rejects_externally_managed_identity(monkeypatch, tmp_path):
+    client, _ = make_client(
+        monkeypatch,
+        tmp_path,
+        AUTH_MODE="intranet_header",
+        AUTH_AUTO_PROVISION="true",
+        AUTH_DEFAULT_ROLE="viewer",
+    )
+    headers = {
+        "X-Employee-No": "E100",
+        "X-Employee-Name": "%E5%86%85%E7%BD%91%E7%94%A8%E6%88%B7",
+    }
+    assert client.get("/api/auth/me", headers=headers).status_code == 200
+
+    # 外部身份（intranet_header/OIDC）资料以网关 header / provider claims 为准
+    response = client.patch("/api/auth/me", headers=headers, json={"display_name": "改名"})
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Profile is managed externally"
+
+
+def test_profile_self_service_guest_gets_register_hint(monkeypatch, tmp_path):
+    client, _ = make_client(
+        monkeypatch,
+        tmp_path,
+        AUTH_MODE="public_password",
+        AUTH_GUEST_ENABLED="true",
+    )
+    assert client.post("/api/auth/guest-login").status_code == 200
+
+    # 游客在 get_current_user 的集中写门禁被 403 拦截（提示注册）
+    response = client.patch("/api/auth/me", json={"display_name": "游客改名"})
+    assert response.status_code == 403
+    assert "注册" in response.json()["detail"]
+
+
+def test_profile_self_service_blocked_before_password_change(monkeypatch, tmp_path):
+    client, engine = make_client(monkeypatch, tmp_path, AUTH_MODE="public_password")
+    _login_admin(client)
+
+    Session = sessionmaker(bind=engine)
+    with Session() as session:
+        admin_id = session.scalar(select(User).where(User.username == "admin")).id
+    reset = client.post(f"/api/users/{admin_id}/reset-password")
+    assert reset.status_code == 200
+    temporary_password = reset.json()["temporary_password"]
+
+    limbo = TestClient(create_app())
+    login = limbo.post("/api/auth/login", json={"username": "admin", "password": temporary_password})
+    assert login.status_code == 200
+    assert login.json()["user"]["status"] == "must_change_password"
+
+    # 改密完成前不可编辑资料（路径白名单只为放行 GET /me）
+    blocked = limbo.patch("/api/auth/me", json={"display_name": "抢跑改名"})
+    assert blocked.status_code == 403
+    assert blocked.json()["detail"] == "must_change_password"
+
+    changed = limbo.post(
+        "/api/auth/password/change",
+        json={"current_password": temporary_password, "new_password": "brand-new-password"},
+    )
+    assert changed.status_code == 200
+    unblocked = limbo.patch("/api/auth/me", json={"display_name": "改密后改名"})
+    assert unblocked.status_code == 200
+    assert unblocked.json()["user"]["display_name"] == "改密后改名"
+
+
+def test_profile_self_service_field_rules(monkeypatch, tmp_path):
+    client, _ = make_client(monkeypatch, tmp_path, AUTH_MODE="public_password")
+    _login_admin(client)
+
+    # display_name 空串或纯空白 -> 422
+    assert client.patch("/api/auth/me", json={"display_name": ""}).status_code == 422
+    assert client.patch("/api/auth/me", json={"display_name": "   "}).status_code == 422
+
+    # 未知字段（username/roles/is_active 等）一律 422 拒绝
+    assert client.patch("/api/auth/me", json={"username": "hijack"}).status_code == 422
+    assert client.patch("/api/auth/me", json={"is_active": False}).status_code == 422
+    assert client.patch("/api/auth/me", json={"display_name": "合法", "roles": ["super_admin"]}).status_code == 422
+
+    # email 格式校验（可清空但不可乱写）
+    assert client.patch("/api/auth/me", json={"email": "not-an-email"}).status_code == 422
+
+    # 至少一个字段
+    assert client.patch("/api/auth/me", json={}).status_code == 400

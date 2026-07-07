@@ -30,14 +30,25 @@ GET  /healthz
 POST /api/auth/login
 POST /api/auth/logout
 GET  /api/auth/me
+PATCH /api/auth/me
 
 GET  /api/workspaces
 POST /api/workspaces
+GET  /api/workspaces/discover?q=...
+GET  /api/workspaces/{workspace_code}/join-code
+POST /api/workspaces/{workspace_code}/join-code
+DELETE /api/workspaces/{workspace_code}/join-code
+POST /api/workspaces/join-by-code
 GET  /api/workspaces/{workspace_code}/sections
 GET  /api/workspaces/{workspace_code}/label-policy
 PATCH /api/workspaces/{workspace_code}/label-policy
 GET  /api/workspaces/{workspace_code}/feedback-policy
 PATCH /api/workspaces/{workspace_code}/feedback-policy
+GET  /api/workspaces/{workspace_code}/schedule-policy
+PATCH /api/workspaces/{workspace_code}/schedule-policy
+GET  /api/workspaces/{workspace_code}/generation-policy
+PATCH /api/workspaces/{workspace_code}/generation-policy
+POST /api/generation/ping
 
 GET  /api/sources?workspace_code={workspace_code}
 POST /api/sources
@@ -69,6 +80,7 @@ GET  /api/dedupe-groups
 GET  /api/dedupe-groups/{id}
 
 POST /api/pipeline/daily-runs
+GET  /api/pipeline/scheduler/status
 
 POST /api/recommendation/runs
 GET  /api/recommendation/runs
@@ -145,6 +157,7 @@ GET  /api/report-formats?workspace_code={workspace_code}
 POST /api/report-formats
 PATCH /api/report-formats/{id}
 DELETE /api/report-formats/{id}
+POST /api/report-formats/validate-template
 GET  /api/daily-reports/{id}/renditions
 POST /api/daily-reports/{id}/renditions/{format_code}/regenerate
 GET  /api/daily-reports/{id}/renditions/{format_code}/export?target=md|html
@@ -186,34 +199,27 @@ PATCH /api/workspaces/{workspace_code}/auth-membership-mapping
 GET  /api/audit-logs?workspace_code=...&action=...&object_type=...
 ```
 
-2026-07-07 设计轮（体验系统轨道 + 自动化/生成轨道）已定稿、**尚未实现**的端点
-增量（实现时移入上表）：
+2026-07-07 设计轮（体验系统轨道 + 自动化/生成轨道）的端点增量已于 2026-07-08
+第三轮实施（WP3-A/B/C/F/G）全部实现并移入上表，语义速记：
 
-```text
-# 体验系统轨道
-PATCH  /api/auth/me                          # 本地账号资料自助编辑（display_name/department/email；
-                                             # 外部身份 400，契约 auth_modes.json profile_self_service）
-GET    /api/workspaces/discover?q=...        # 发现列表名称/描述搜索（仍只返回 internal_public）
-GET    /api/workspaces/{code}/join-code      # 工作台加入码读取（admin/owner）
-POST   /api/workspaces/{code}/join-code      # 生成/轮换加入码
-DELETE /api/workspaces/{code}/join-code      # 停用加入码
-POST   /api/workspaces/join-by-code          # 已登录用户凭码自助入台（契约 workspace_model.json join_code）
-
-# 自动化 / 调度轨道（docs/backend/pipeline-jobs-design.md §8）
-GET    /api/workspaces/{code}/schedule-policy    # 策略 + resolved 生效值 + next_run_at 预览（viewer+）
-PATCH  /api/workspaces/{code}/schedule-policy    # admin+，取值域校验 422，审计 workspace.schedule_policy.update
-GET    /api/pipeline/scheduler/status            # 调度心跳/下次运行/最近 run/pending retry（登录用户，按 membership 过滤）
-
-# 生成模型 provider 轨道（docs/backend/generation-provider-design.md）
-GET    /api/workspaces/{code}/generation-policy  # 策略 + resolved provider/model/key_configured（永不回显 key）
-PATCH  /api/workspaces/{code}/generation-policy  # admin+，secret-like 字段 422，审计 workspace.generation_policy.update
-POST   /api/generation/ping                      # super_admin/editor_admin 连通性自检，审计 generation.ping
-
-# 模板驱动生成轨道（docs/backend/report-renditions-design.md §10）
-POST   /api/report-formats/validate-template     # 模板干跑校验 + 投影/增量字段划分 + preview_item（不落库）
-POST   /api/report-formats                       # body 增加 generation_template（locked/builtin 400）
-PATCH  /api/report-formats/{id}                  # 同上
-```
+- `PATCH /api/auth/me`：本地账号资料自助编辑（display_name/department/email；
+  外部身份 400，契约 `auth_modes.json` `profile_self_service`）。
+- `GET /api/workspaces/discover?q=...`：发现列表名称/描述搜索（仍只返回
+  internal_public）；`join-code` 三端点（读取/生成轮换/停用，admin/owner）+
+  `POST /api/workspaces/join-by-code`（已登录用户凭码自助入台）为工作台加入码，
+  契约 `workspace_model.json` `join_code`。
+- `schedule-policy` 读写：策略 + resolved 生效值 + next_run_at 预览（viewer+ 读、
+  admin+ 写，取值域校验 422，审计 `workspace.schedule_policy.update`）；
+  `GET /api/pipeline/scheduler/status`：调度心跳/下次运行/最近 run/pending retry
+  （登录用户，按 membership 过滤）。
+- `generation-policy` 读写：策略 + resolved provider/model/key_configured
+  （永不回显 key；secret-like 字段 422，审计 `workspace.generation_policy.update`）；
+  `POST /api/generation/ping`：super_admin/editor_admin 连通性自检，审计
+  `generation.ping`。
+- `POST /api/report-formats/validate-template`：模板干跑校验 + 投影/增量字段划分 +
+  preview_item（不落库）；`POST/PATCH /api/report-formats` body 增加
+  `generation_template`（locked/builtin 400，契约 `report_renditions.json`
+  `generation_template`）。
 
 `POST /api/ingestion/runs` 支持 `concurrency`、`source_timeout_seconds` 和 `max_items_per_source`（单源条数上限，对齐 Tech Insight Loop 的单源上限行为，截断按 feed 新在前顺序）；默认值来自 `INGESTION_CONCURRENCY=8`、`INGESTION_SOURCE_TIMEOUT_SECONDS=25`。RSS/页面/论文 API 适配器统一使用浏览器 User-Agent（`app/adapters/base.py` 的 `BROWSER_FETCH_HEADERS`，与旧系统一致），降低站点反爬 403。`POST /api/ingestion/runs/{id}/retry-failed-sources` 只抽取原 run 中失败源，按低并发长超时重跑，并在新 run 的 `params_json.retry_of_run_id/source_ids` 中记录追溯；无失败源或失败源已停用返回 409，不生成 0 源成功记录。已注册但尚未实现的 stub adapter 会返回每源 `status=skipped_unimplemented` 和 run 汇总 `source_skipped_unimplemented`，不计入成功或失败，前端显示“尚未实现”。`POST /api/ingestion/backfill-runs` 支持 `rss_window/paper_api/archive_page/sitemap/manual_import` 模式；其中 `paper_api` 已支持 arXiv v1、OpenAlex Works v1 和 Semantic Scholar v1，历史补采会把目标日期窗口传给 adapter，并分别生成 arXiv submittedDate 查询、OpenAlex `from_publication_date/to_publication_date` filter 或 Semantic Scholar `publicationDateOrYear` filter；`manual_import` 已支持前端上传/粘贴 CSV/SQL、`POST /api/ingestion/manual-import-preview` 后端预览、逐行错误报告和 API `manual_items` 提交，后端拒绝空条目、缺归属源、非本次启用源和空内容行。第一版仍只承诺把补采结果先写入 `raw_items`，后续复用标准化、去重、推荐和日报链路。
 

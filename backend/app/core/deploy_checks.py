@@ -10,6 +10,7 @@ import logging
 
 from app.core.config import (
     DEPLOY_MODES,
+    GENERATION_PROVIDERS,
     KNOWN_INGESTION_SOURCE_TYPES,
     MODE_ALLOWED_AUTH_MODES,
     Settings,
@@ -111,4 +112,27 @@ def validate_deploy_settings(settings: Settings) -> None:
             "INGESTION_SOURCE_TYPES contains unknown source types: "
             f"{', '.join(unknown_source_types)}; "
             f"allowed values: {', '.join(KNOWN_INGESTION_SOURCE_TYPES)}.",
+        )
+    # 生成 provider 启动自检（generation-provider-design §3.1；契约
+    # deployment_modes.json planned_startup_failfast_rules，实现后应移入
+    # startup_failfast_rules）：错配不能拖到夜里 pipeline 静默降级，必须拒启。
+    generation_provider = settings.generation_provider_effective
+    if generation_provider not in GENERATION_PROVIDERS:
+        raise RuntimeError(
+            f"GENERATION_PROVIDER must be one of {', '.join(GENERATION_PROVIDERS)}; "
+            f"got {generation_provider!r}.",
+        )
+    if settings.generation_enabled_effective and not settings.generation_api_key_effective:
+        raise RuntimeError(
+            "GENERATION_ENABLED=true requires a resolvable API key. Set GENERATION_API_KEY "
+            "in the environment file, or GENERATION_API_KEY_REF=env:VAR / file:/abs/path "
+            "pointing at a non-empty secret (legacy MINIMAX_API_KEY still works as a "
+            "per-field fallback during the deprecation window). The key lives only in "
+            "env/credential files; it never enters the DB, Git, sync feeds or audit logs.",
+        )
+    if generation_provider == "openai_compatible" and not settings.generation_base_url_effective:
+        raise RuntimeError(
+            "GENERATION_PROVIDER=openai_compatible requires GENERATION_BASE_URL "
+            "(only the minimax preset carries a builtin default base URL). "
+            "Set GENERATION_BASE_URL to the provider's OpenAI-compatible endpoint.",
         )

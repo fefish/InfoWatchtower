@@ -18,6 +18,8 @@ import {
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 
+import AppModal from "../components/AppModal.vue";
+
 import {
   createDailyReportItemComment,
   createDailyReportItemEntityMilestone,
@@ -1026,421 +1028,271 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="report-command">
-    <div>
-      <p class="eyebrow">Daily Intelligence</p>
-      <h2>日报</h2>
-      <p>从推荐链路生成日报草稿，也支持把已校验公司 SQL 预览回填为可查看、可采信、可导出的日报。</p>
-    </div>
-    <div class="toolbar-actions">
-      <label v-if="canManageReports" class="date-control" title="日报日期">
-        <span>日期</span>
-        <input v-model="targetDayKey" type="date" />
-      </label>
-      <button type="button" class="icon-button secondary" :disabled="loading" @click="loadReports">
-        <RefreshCw :size="18" />
-        <span>刷新</span>
-      </button>
-      <button
-        v-if="canManageReports"
-        type="button"
-        class="icon-button"
-        :disabled="generating"
-        @click="generateDraft"
-      >
-        <Sparkles :size="18" />
-        <span>{{ generating ? "生成中" : "生成日报草稿" }}</span>
-      </button>
-    </div>
-  </section>
-
-  <p v-if="error" class="form-error">{{ error }}</p>
-  <p v-if="message" class="form-success">{{ message }}</p>
-
-  <section v-if="selectedReport" class="daily-report-layout enhanced">
-    <aside class="report-timeline">
-      <p class="eyebrow">Reports</p>
-      <button
-        v-for="report in reports"
-        :key="report.id"
-        type="button"
-        class="report-tab"
-        :class="{ active: report.id === selectedReport.id }"
-        @click="selectReport(report)"
-      >
-        <strong>{{ report.day_key }}</strong>
-        <span>{{ statusLabel(report.status) }} · {{ report.items.length }} 条</span>
-      </button>
-    </aside>
-
-    <article class="daily-report-card editorial">
-      <header class="daily-report-header">
-        <div>
-          <p class="eyebrow">{{ selectedReport.workspace_code }} · {{ selectedReport.domain_code }}</p>
-          <h3>{{ selectedReport.title }}</h3>
-          <p>{{ selectedReport.summary }}</p>
-        </div>
-        <div class="toolbar-actions compact">
-          <button
-            v-if="canManageReports && selectedReport.status !== 'published'"
-            type="button"
-            class="icon-button secondary"
-            :disabled="regeneratingReportId === selectedReport.id"
-            @click="regenerateReport(selectedReport)"
-          >
-            <Sparkles :size="18" />
-            <span>{{ regeneratingReportId === selectedReport.id ? "重跑中" : "重跑生成稿" }}</span>
-          </button>
-          <button
-            v-if="canManageReports && selectedReport.status !== 'published'"
-            type="button"
-            class="icon-button secondary"
-            :disabled="publishingId === selectedReport.id"
-            @click="publishReport(selectedReport)"
-          >
-            <CheckCircle2 :size="18" />
-            <span>{{ publishingId === selectedReport.id ? "发布中" : "发布" }}</span>
-          </button>
-        </div>
-      </header>
-
-      <div class="report-metrics">
-        <span>{{ reportItems.length }} 条入稿</span>
-        <span>{{ adoptedCount }} 条采信</span>
-        <span>{{ averageRating }} 平均评分</span>
+  <!-- list 模板容器（frontend-product-design §9.3） -->
+  <div class="layout-list">
+    <section class="report-command">
+      <div>
+        <p class="eyebrow">Daily Intelligence</p>
+        <h2>日报</h2>
+        <p>从推荐链路生成日报草稿，也支持把已校验公司 SQL 预览回填为可查看、可采信、可导出的日报。</p>
       </div>
-
-      <div class="rendition-bar">
-        <div class="coverage-filter" role="tablist" aria-label="成稿格式">
-          <button
-            v-for="fmt in enabledFormats"
-            :key="fmt.format_code"
-            type="button"
-            :class="{ active: activeFormatCode === fmt.format_code, anchored: isAnchoredRenditionFormat(fmt) }"
-            :aria-current="isAnchoredRenditionFormat(fmt) ? 'true' : undefined"
-            @click="switchFormat(fmt.format_code)"
-          >
-            {{ fmt.format_code === "company_sql_v1" ? `${fmt.name} · 编审` : fmt.name }}
-          </button>
-        </div>
-        <div class="rendition-actions">
-          <a
-            v-if="activeFormat?.export_targets.includes('md')"
-            class="table-action"
-            :href="renditionExportHref('md')"
-            target="_blank"
-          >
-            导出 MD
-          </a>
-          <a
-            v-if="activeFormat?.export_targets.includes('html')"
-            class="table-action"
-            :href="renditionExportHref('html')"
-            target="_blank"
-          >
-            导出 HTML
-          </a>
-          <button
-            v-if="canManageReports"
-            type="button"
-            class="table-action"
-            @click="showFormatPanel = true"
-          >
-            格式
-          </button>
-        </div>
-      </div>
-
-      <div
-        v-if="activeFormatCode !== 'company_sql_v1'"
-        class="rendition-view"
-        :class="{ anchored: isAnchoredRenditionView() }"
-        :aria-current="isAnchoredRenditionView() ? 'true' : undefined"
-      >
-        <p v-if="renditionLoading" class="empty-state">正在生成成稿…</p>
-        <template v-else-if="rendition">
-          <section v-if="activeFormat?.headline_enabled && renditionHeadlines.length" class="rendition-headlines">
-            <h4>今日头条</h4>
-            <ol>
-              <li v-for="snapshot in renditionHeadlines" :key="snapshot.item_id">
-                {{ snapshot.title }}
-              </li>
-            </ol>
-          </section>
-
-          <section v-for="group in renditionGroups" :key="group.key" class="rendition-group">
-            <h4>
-              {{ group.title }}
-              <small>{{ group.item_ids.length }} 条</small>
-            </h4>
-            <article
-              v-for="(itemId, index) in group.item_ids"
-              :key="itemId"
-              class="rendition-item"
-            >
-              <template v-if="renditionSnapshots[itemId]">
-                <div class="rendition-item-head">
-                  <h5>{{ index + 1 }}、{{ renditionSnapshots[itemId].title }}</h5>
-                  <button
-                    v-if="canManageReports && activeFormat?.headline_enabled"
-                    type="button"
-                    class="headline-toggle"
-                    :class="{ active: renditionSnapshots[itemId].is_headline }"
-                    :disabled="headlineSavingId === itemId"
-                    :title="renditionSnapshots[itemId].is_headline ? '移出头条' : '设为头条'"
-                    @click="toggleHeadline(itemId, renditionSnapshots[itemId].is_headline)"
-                  >
-                    <Star :size="14" />
-                    <span>{{ renditionSnapshots[itemId].is_headline ? "头条" : "设头条" }}</span>
-                  </button>
-                </div>
-                <p v-if="renditionFields.includes('tag_line') && renditionSnapshots[itemId].tag_line.length" class="rendition-tags">
-                  <span v-for="tag in renditionSnapshots[itemId].tag_line" :key="tag">【{{ tag }}】</span>
-                </p>
-                <p v-if="renditionFields.includes('bullet_points') && renditionSnapshots[itemId].bullet_points.length" class="rendition-block">
-                  📋 <strong>要点</strong>：{{ renditionSnapshots[itemId].bullet_points.join("；") }}
-                </p>
-                <p v-if="renditionFields.includes('takeaway') && renditionSnapshots[itemId].takeaway" class="rendition-block">
-                  📌 <strong>总结</strong>：{{ renditionSnapshots[itemId].takeaway }}
-                </p>
-                <p v-if="renditionFields.includes('summary') && renditionSnapshots[itemId].summary" class="rendition-block">
-                  {{ renditionSnapshots[itemId].summary }}
-                </p>
-                <p class="rendition-source">
-                  <a
-                    v-if="renditionSnapshots[itemId].source_url"
-                    :href="renditionSnapshots[itemId].source_url || '#'"
-                    target="_blank"
-                  >
-                    来源：{{ renditionSnapshots[itemId].source_name || "原文链接" }}
-                  </a>
-                  <span v-else>来源：{{ renditionSnapshots[itemId].source_name || "未知" }}</span>
-                  <span v-if="renditionSnapshots[itemId].insight_source === 'rule_fallback'" class="rendition-fallback">
-                    规则降级稿
-                  </span>
-                </p>
-              </template>
-            </article>
-          </section>
-          <p v-if="renditionGroups.length === 0" class="empty-state">
-            本报告暂无采信条目，先在内网版视图完成采信。
-          </p>
-        </template>
-        <p v-else class="empty-state">
-          该格式的成稿尚未生成：日报发布时会自动投影，请等待发布或联系编辑。
-        </p>
-      </div>
-
-      <div v-if="activeFormatCode === 'company_sql_v1'" class="daily-item-list">
-        <article
-          v-for="(item, index) in reportItems"
-          :key="item.id"
-          class="daily-item story"
-          :class="{ active: detailItem?.id === item.id }"
-          @click="selectItem(item)"
+      <div class="toolbar-actions">
+        <label v-if="canManageReports" class="date-control" title="日报日期">
+          <span>日期</span>
+          <input v-model="targetDayKey" type="date" />
+        </label>
+        <button type="button" class="icon-button secondary" :disabled="loading" @click="loadReports">
+          <RefreshCw :size="18" />
+          <span>刷新</span>
+        </button>
+        <button
+          v-if="canManageReports"
+          type="button"
+          class="icon-button"
+          :disabled="generating"
+          @click="generateDraft"
         >
-          <div class="story-index">{{ String(index + 1).padStart(2, "0") }}</div>
-          <div class="story-body">
-            <div class="daily-item-meta">
-              <span class="category-chip">{{ item.generated_news.category }}</span>
-              <span class="state-chip">{{ adoptionLabel(item.adoption_status) }}</span>
-              <span class="state-chip subtle">{{ generationLabel(item.generated_news.generation_status) }}</span>
-              <span>{{ item.reaction_count }} 赞</span>
-              <span>{{ item.comment_count }} 评论</span>
-            </div>
-            <h4>{{ displayTitle(item) }}</h4>
-            <p>{{ displaySummary(item) }}</p>
-            <div class="story-footer">
-              <a
-                v-if="item.generated_news.source_url"
-                :href="item.generated_news.source_url"
-                target="_blank"
-                @click.stop
-              >
-                <ExternalLink :size="14" />
-                <span>{{ item.generated_news.source_url }}</span>
-              </a>
-              <span>点击查看详情并处理</span>
-            </div>
-          </div>
-        </article>
+          <Sparkles :size="18" />
+          <span>{{ generating ? "生成中" : "生成日报草稿" }}</span>
+        </button>
       </div>
-    </article>
-  </section>
+    </section>
 
-  <Teleport to="body">
-    <div v-if="detailItem" class="report-modal-backdrop" @click.self="closeItemDetail">
-      <section class="report-detail-modal" role="dialog" aria-modal="true">
-        <header class="report-modal-header">
+    <p v-if="error" class="form-error">{{ error }}</p>
+    <p v-if="message" class="form-success">{{ message }}</p>
+
+    <section v-if="selectedReport" class="daily-report-layout enhanced">
+      <aside class="report-timeline">
+        <p class="eyebrow">Reports</p>
+        <button
+          v-for="report in reports"
+          :key="report.id"
+          type="button"
+          class="report-tab"
+          :class="{ active: report.id === selectedReport.id }"
+          @click="selectReport(report)"
+        >
+          <strong>{{ report.day_key }}</strong>
+          <span>{{ statusLabel(report.status) }} · {{ report.items.length }} 条</span>
+        </button>
+      </aside>
+
+      <article class="daily-report-card editorial">
+        <header class="daily-report-header">
           <div>
-            <div class="headline-chip-row">
-              <span class="category-chip large">{{ detailItem.generated_news.category }}</span>
-              <span class="state-chip">{{ adoptionLabel(detailItem.adoption_status) }}</span>
-            </div>
-            <h3>{{ displayTitle(detailItem) }}</h3>
+            <p class="eyebrow">{{ selectedReport.workspace_code }} · {{ selectedReport.domain_code }}</p>
+            <h3>{{ selectedReport.title }}</h3>
+            <p>{{ selectedReport.summary }}</p>
           </div>
-          <button type="button" class="panel-close" aria-label="关闭详情" @click="closeItemDetail">
-            <X :size="18" />
-          </button>
+          <div class="toolbar-actions compact">
+            <button
+              v-if="canManageReports && selectedReport.status !== 'published'"
+              type="button"
+              class="icon-button secondary"
+              :disabled="regeneratingReportId === selectedReport.id"
+              @click="regenerateReport(selectedReport)"
+            >
+              <Sparkles :size="18" />
+              <span>{{ regeneratingReportId === selectedReport.id ? "重跑中" : "重跑生成稿" }}</span>
+            </button>
+            <button
+              v-if="canManageReports && selectedReport.status !== 'published'"
+              type="button"
+              class="icon-button secondary"
+              :disabled="publishingId === selectedReport.id"
+              @click="publishReport(selectedReport)"
+            >
+              <CheckCircle2 :size="18" />
+              <span>{{ publishingId === selectedReport.id ? "发布中" : "发布" }}</span>
+            </button>
+          </div>
         </header>
 
-        <div class="report-modal-body">
-          <article class="modal-story-detail">
-            <p class="modal-summary">{{ displaySummary(detailItem) }}</p>
-            <div class="modal-keyword-row">
-              <div class="keyword-list" aria-label="关键词">
-                <span
-                  v-for="keyword in displayKeywordList(detailItem)"
-                  :key="keyword"
-                  class="keyword-chip key-chip"
-                >
-                  {{ keyword }}
-                </span>
-              </div>
-              <div class="daily-item-meta">
-                <span>{{ detailItem.reaction_count }} 赞</span>
-                <span>{{ detailItem.comment_count }} 评论</span>
-              </div>
-            </div>
-            <section v-for="[fieldKey, fieldLabel] in contentFieldLabels" :key="fieldKey" v-show="contentField(detailItem, fieldKey)">
-              <h4>{{ fieldLabel }}</h4>
-              <p>{{ contentField(detailItem, fieldKey) }}</p>
-            </section>
-            <a v-if="detailItem.generated_news.source_url" :href="detailItem.generated_news.source_url" target="_blank">
-              <ExternalLink :size="14" />
-              <span>{{ detailItem.generated_news.source_url }}</span>
-            </a>
-          </article>
+        <div class="report-metrics">
+          <span>{{ reportItems.length }} 条入稿</span>
+          <span>{{ adoptedCount }} 条采信</span>
+          <span>{{ averageRating }} 平均评分</span>
+        </div>
 
-          <aside class="modal-editor-panel">
-            <div
-              v-if="canManageReports || canCreateStrategyLoop || canCreateEntityMilestone"
-              class="editor-panel-section"
+        <div class="rendition-bar">
+          <div class="coverage-filter" role="tablist" aria-label="成稿格式">
+            <button
+              v-for="fmt in enabledFormats"
+              :key="fmt.format_code"
+              type="button"
+              :class="{ active: activeFormatCode === fmt.format_code, anchored: isAnchoredRenditionFormat(fmt) }"
+              :aria-current="isAnchoredRenditionFormat(fmt) ? 'true' : undefined"
+              @click="switchFormat(fmt.format_code)"
             >
-              <p class="eyebrow">当前处理</p>
-              <div class="editor-actions">
-                <button
-                  v-if="canManageReports"
-                  type="button"
-                  class="mini-action"
-                  :class="{ active: detailItem.adoption_status === 2 }"
-                  :disabled="actingItemId === detailItem.id"
-                  @click="setAdoption(detailItem, 2)"
-                >
-                  <CheckCircle2 :size="15" />
-                  <span>采信</span>
-                </button>
-                <button
-                  v-if="canManageReports"
-                  type="button"
-                  class="mini-action"
-                  :class="{ active: detailItem.adoption_status === 1 }"
-                  :disabled="actingItemId === detailItem.id"
-                  @click="setAdoption(detailItem, 1)"
-                >
-                  <FileText :size="15" />
-                  <span>备选</span>
-                </button>
-                <button
-                  v-if="canManageReports"
-                  type="button"
-                  class="mini-action"
-                  :class="{ active: detailItem.adoption_status === 0 }"
-                  :disabled="actingItemId === detailItem.id"
-                  @click="setAdoption(detailItem, 0)"
-                >
-                  <CircleSlash2 :size="15" />
-                  <span>剔除</span>
-                </button>
-                <button
-                  v-if="canCreateStrategyLoop"
-                  type="button"
-                  class="mini-action"
-                  :disabled="strategyItemId === detailItem.id"
-                  @click="createStrategyLoop(detailItem)"
-                >
-                  <Sparkles :size="15" />
-                  <span>{{ strategyItemId === detailItem.id ? "沉淀中" : "沉淀需求" }}</span>
-                </button>
-                <button
-                  v-if="canCreateEntityMilestone"
-                  type="button"
-                  class="mini-action"
-                  :class="{ active: milestoneItemId === detailItem.id }"
-                  @click="toggleMilestoneForm(detailItem)"
-                >
-                  <FileText :size="15" />
-                  <span>登记事件</span>
-                </button>
-              </div>
-              <form
-                v-if="milestoneItemId === detailItem.id"
-                class="inline-milestone-form"
-                @submit.prevent="createEntityMilestone(detailItem)"
-              >
-                <label>
-                  实体名称
-                  <input v-model="milestoneDrafts[detailItem.id]" placeholder="公司、模型、产品或技术名" />
-                </label>
-                <button type="submit" class="icon-button" :disabled="milestoneSavingId === detailItem.id">
-                  <Save :size="15" />
-                  <span>{{ milestoneSavingId === detailItem.id ? "登记中" : "保存事件" }}</span>
-                </button>
-              </form>
-            </div>
+              {{ fmt.format_code === "company_sql_v1" ? `${fmt.name} · 编审` : fmt.name }}
+            </button>
+          </div>
+          <div class="rendition-actions">
+            <a
+              v-if="activeFormat?.export_targets.includes('md')"
+              class="table-action"
+              :href="renditionExportHref('md')"
+              target="_blank"
+            >
+              导出 MD
+            </a>
+            <a
+              v-if="activeFormat?.export_targets.includes('html')"
+              class="table-action"
+              :href="renditionExportHref('html')"
+              target="_blank"
+            >
+              导出 HTML
+            </a>
+            <button
+              v-if="canManageReports"
+              type="button"
+              class="table-action"
+              @click="showFormatPanel = true"
+            >
+              格式
+            </button>
+          </div>
+        </div>
 
-            <div class="editor-panel-section">
-              <div class="section-title-row">
-                <p class="eyebrow">编辑</p>
-                <button
-                  v-if="canManageReports && editingItemId !== detailItem.id"
-                  type="button"
-                  class="mini-action"
-                  @click="beginEdit(detailItem)"
+        <div
+          v-if="activeFormatCode !== 'company_sql_v1'"
+          class="rendition-view"
+          :class="{ anchored: isAnchoredRenditionView() }"
+          :aria-current="isAnchoredRenditionView() ? 'true' : undefined"
+        >
+          <p v-if="renditionLoading" class="empty-state">正在生成成稿…</p>
+          <template v-else-if="rendition">
+            <section v-if="activeFormat?.headline_enabled && renditionHeadlines.length" class="rendition-headlines">
+              <h4>今日头条</h4>
+              <ol>
+                <li v-for="snapshot in renditionHeadlines" :key="snapshot.item_id">
+                  {{ snapshot.title }}
+                </li>
+              </ol>
+            </section>
+
+            <section v-for="group in renditionGroups" :key="group.key" class="rendition-group">
+              <h4>
+                {{ group.title }}
+                <small>{{ group.item_ids.length }} 条</small>
+              </h4>
+              <article
+                v-for="(itemId, index) in group.item_ids"
+                :key="itemId"
+                class="rendition-item"
+              >
+                <template v-if="renditionSnapshots[itemId]">
+                  <div class="rendition-item-head">
+                    <h5>{{ index + 1 }}、{{ renditionSnapshots[itemId].title }}</h5>
+                    <button
+                      v-if="canManageReports && activeFormat?.headline_enabled"
+                      type="button"
+                      class="headline-toggle"
+                      :class="{ active: renditionSnapshots[itemId].is_headline }"
+                      :disabled="headlineSavingId === itemId"
+                      :title="renditionSnapshots[itemId].is_headline ? '移出头条' : '设为头条'"
+                      @click="toggleHeadline(itemId, renditionSnapshots[itemId].is_headline)"
+                    >
+                      <Star :size="14" />
+                      <span>{{ renditionSnapshots[itemId].is_headline ? "头条" : "设头条" }}</span>
+                    </button>
+                  </div>
+                  <p v-if="renditionFields.includes('tag_line') && renditionSnapshots[itemId].tag_line.length" class="rendition-tags">
+                    <span v-for="tag in renditionSnapshots[itemId].tag_line" :key="tag">【{{ tag }}】</span>
+                  </p>
+                  <p v-if="renditionFields.includes('bullet_points') && renditionSnapshots[itemId].bullet_points.length" class="rendition-block">
+                    📋 <strong>要点</strong>：{{ renditionSnapshots[itemId].bullet_points.join("；") }}
+                  </p>
+                  <p v-if="renditionFields.includes('takeaway') && renditionSnapshots[itemId].takeaway" class="rendition-block">
+                    📌 <strong>总结</strong>：{{ renditionSnapshots[itemId].takeaway }}
+                  </p>
+                  <p v-if="renditionFields.includes('summary') && renditionSnapshots[itemId].summary" class="rendition-block">
+                    {{ renditionSnapshots[itemId].summary }}
+                  </p>
+                  <p class="rendition-source">
+                    <a
+                      v-if="renditionSnapshots[itemId].source_url"
+                      :href="renditionSnapshots[itemId].source_url || '#'"
+                      target="_blank"
+                    >
+                      来源：{{ renditionSnapshots[itemId].source_name || "原文链接" }}
+                    </a>
+                    <span v-else>来源：{{ renditionSnapshots[itemId].source_name || "未知" }}</span>
+                    <span v-if="renditionSnapshots[itemId].insight_source === 'rule_fallback'" class="rendition-fallback">
+                      规则降级稿
+                    </span>
+                  </p>
+                </template>
+              </article>
+            </section>
+            <p v-if="renditionGroups.length === 0" class="empty-state">
+              本报告暂无采信条目，先在内网版视图完成采信。
+            </p>
+          </template>
+          <p v-else class="empty-state">
+            该格式的成稿尚未生成：日报发布时会自动投影，请等待发布或联系编辑。
+          </p>
+        </div>
+
+        <div v-if="activeFormatCode === 'company_sql_v1'" class="daily-item-list">
+          <article
+            v-for="(item, index) in reportItems"
+            :key="item.id"
+            class="daily-item story"
+            :class="{ active: detailItem?.id === item.id }"
+            @click="selectItem(item)"
+          >
+            <div class="story-index">{{ String(index + 1).padStart(2, "0") }}</div>
+            <div class="story-body">
+              <div class="daily-item-meta">
+                <span class="category-chip">{{ item.generated_news.category }}</span>
+                <span class="state-chip">{{ adoptionLabel(item.adoption_status) }}</span>
+                <span class="state-chip subtle">{{ generationLabel(item.generated_news.generation_status) }}</span>
+                <span>{{ item.reaction_count }} 赞</span>
+                <span>{{ item.comment_count }} 评论</span>
+              </div>
+              <h4>{{ displayTitle(item) }}</h4>
+              <p>{{ displaySummary(item) }}</p>
+              <div class="story-footer">
+                <a
+                  v-if="item.generated_news.source_url"
+                  :href="item.generated_news.source_url"
+                  target="_blank"
+                  @click.stop
                 >
-                  <Pencil :size="15" />
-                  <span>编辑</span>
-                </button>
+                  <ExternalLink :size="14" />
+                  <span>{{ item.generated_news.source_url }}</span>
+                </a>
+                <span>点击查看详情并处理</span>
               </div>
-              <div v-if="editingItemId === detailItem.id" class="editor-form">
-                <label>
-                  标题
-                  <input v-model="editorDraft.title" />
-                </label>
-                <label>
-                  摘要 / 一句话概括
-                  <textarea v-model="editorDraft.summary" rows="5" />
-                </label>
-                <label>
-                  关键词（逗号或分号分隔，避免整句）
-                  <textarea v-model="editorDraft.keyPoints" rows="3" />
-                </label>
-                <div class="editor-content-fields">
-                  <label v-for="[fieldKey, fieldLabel] in contentFieldLabels" :key="fieldKey">
-                    {{ fieldLabel }}
-                    <textarea v-model="editorDraft.contentJson[fieldKey]" rows="4" />
-                  </label>
-                </div>
-                <label>
-                  编辑备注
-                  <textarea v-model="editorDraft.notes" rows="3" />
-                </label>
-                <div class="editor-actions">
-                  <button
-                    type="button"
-                    class="mini-action active"
-                    :disabled="savingItemId === detailItem.id"
-                    @click="saveEdit(detailItem)"
-                  >
-                    <Save :size="15" />
-                    <span>{{ savingItemId === detailItem.id ? "保存中" : "保存" }}</span>
-                  </button>
-                  <button type="button" class="mini-action" @click="cancelEdit">取消</button>
-                </div>
-              </div>
-              <div v-else class="editor-readonly">
-                <p>{{ displaySummary(detailItem) }}</p>
-                <div class="keyword-list compact" aria-label="关键词">
+            </div>
+          </article>
+        </div>
+      </article>
+    </section>
+
+    <!-- 弹层迁移样例（frontend-product-design §10.3）：日报条目详情正式化为 AppModal lg 档。
+         其余 8 项弹层迁移清单（page-specs §3.1）由 Wave2（WP3-E）逐项收编。 -->
+    <AppModal
+      :open="Boolean(detailItem)"
+      size="lg"
+      body-class="report-modal-body"
+      :title="detailItem ? displayTitle(detailItem) : ''"
+      :dirty="Boolean(detailItem && editingItemId === detailItem.id)"
+      @close="closeItemDetail"
+    >
+      <template #header-meta>
+        <div v-if="detailItem" class="headline-chip-row">
+          <span class="category-chip large">{{ detailItem.generated_news.category }}</span>
+          <span class="state-chip">{{ adoptionLabel(detailItem.adoption_status) }}</span>
+        </div>
+      </template>
+      <template v-if="detailItem">
+            <article class="modal-story-detail">
+              <p class="modal-summary">{{ displaySummary(detailItem) }}</p>
+              <div class="modal-keyword-row">
+                <div class="keyword-list" aria-label="关键词">
                   <span
                     v-for="keyword in displayKeywordList(detailItem)"
                     :key="keyword"
@@ -1449,219 +1301,373 @@ onMounted(() => {
                     {{ keyword }}
                   </span>
                 </div>
-              </div>
-            </div>
-
-            <div class="editor-panel-section">
-              <p class="eyebrow">反馈</p>
-              <div class="feedback-row">
-                <button
-                  type="button"
-                  class="mini-action"
-                  :class="{ active: watcherStatus(detailItem)?.watching }"
-                  :disabled="watchingItemId === detailItem.id || loadingWatcherId === detailItem.id"
-                  :aria-pressed="watcherStatus(detailItem)?.watching ? 'true' : 'false'"
-                  @click="toggleWatchItem(detailItem)"
-                >
-                  <Bell :size="15" />
-                  <span>{{ watcherStatus(detailItem)?.watching ? "已关注" : "关注" }}</span>
-                  <span v-if="watcherStatus(detailItem)">· {{ watcherStatus(detailItem)?.watcher_count }}</span>
-                </button>
-                <button
-                  type="button"
-                  class="mini-action"
-                  :disabled="actingItemId === detailItem.id || !canReact"
-                  @click="likeItem(detailItem)"
-                >
-                  <Heart :size="15" />
-                  <span>{{ detailItem.reaction_count }}</span>
-                </button>
-                <button
-                  v-for="score in 5"
-                  :key="score"
-                  type="button"
-                  class="star-button"
-                  :disabled="actingItemId === detailItem.id || !canRate"
-                  @click="rateItem(detailItem, score)"
-                >
-                  <Star :size="15" :fill="score <= Math.round(detailItem.rating_avg) ? 'currentColor' : 'none'" />
-                </button>
-              </div>
-              <p v-if="!canReact || !canRate || !canComment" class="muted-line">
-                当前工作台已关闭浏览者的部分反馈入口。
-              </p>
-              <div class="comment-box">
-                <textarea
-                  v-model="commentDrafts[detailItem.id]"
-                  rows="3"
-                  placeholder="写一条评论或判断依据"
-                  :disabled="!canComment"
-                />
-                <button
-                  type="button"
-                  class="mini-action active"
-                  :disabled="actingItemId === detailItem.id || !canComment"
-                  @click="submitComment(detailItem)"
-                >
-                  <Send :size="15" />
-                  <span>发送</span>
-                </button>
-              </div>
-              <div class="comment-list">
-                <p v-if="loadingCommentsId === detailItem.id" class="muted-line">评论加载中</p>
-                <article
-                  v-for="comment in commentsByItem[detailItem.id] || []"
-                  :key="comment.id"
-                  class="comment-row"
-                  :class="{ anchored: isAnchoredComment(comment) }"
-                  :aria-current="isAnchoredComment(comment) ? 'true' : undefined"
-                >
-                  <MessageCircle :size="14" />
-                  <p>{{ comment.body }}</p>
-                </article>
-              </div>
-            </div>
-
-            <div class="editor-panel-section">
-              <p class="eyebrow">追溯</p>
-              <dl class="lineage-list">
-                <div>
-                  <dt>news</dt>
-                  <dd>{{ sourceLineage(detailItem, "news_item_id") || detailItem.generated_news.news_item_id }}</dd>
+                <div class="daily-item-meta">
+                  <span>{{ detailItem.reaction_count }} 赞</span>
+                  <span>{{ detailItem.comment_count }} 评论</span>
                 </div>
-                <div>
-                  <dt>raw</dt>
-                  <dd>{{ sourceLineage(detailItem, "raw_item_id") || "未返回" }}</dd>
-                </div>
-                <div>
-                  <dt>source</dt>
-                  <dd>{{ sourceLineage(detailItem, "data_source_id") || "未返回" }}</dd>
-                </div>
-              </dl>
-            </div>
-          </aside>
-        </div>
-      </section>
-    </div>
-  </Teleport>
+              </div>
+              <section v-for="[fieldKey, fieldLabel] in contentFieldLabels" :key="fieldKey" v-show="contentField(detailItem, fieldKey)">
+                <h4>{{ fieldLabel }}</h4>
+                <p>{{ contentField(detailItem, fieldKey) }}</p>
+              </section>
+              <a v-if="detailItem.generated_news.source_url" :href="detailItem.generated_news.source_url" target="_blank">
+                <ExternalLink :size="14" />
+                <span>{{ detailItem.generated_news.source_url }}</span>
+              </a>
+            </article>
 
-  <section v-if="!selectedReport" class="placeholder-panel">
-    <div>
-      <p class="eyebrow">日报草稿</p>
-      <h2>{{ loading ? "正在加载" : "还没有日报" }}</h2>
-      <p>
-        当前工作台还没有可展示的日报。可以先完成抓取、标准化和去重后生成草稿；
-        已经产出的公司 SQL 预览也可以通过回填脚本同步到日报工作台。
-      </p>
-    </div>
-    <FileText :size="42" />
-  </section>
+            <aside class="modal-editor-panel">
+              <div
+                v-if="canManageReports || canCreateStrategyLoop || canCreateEntityMilestone"
+                class="editor-panel-section"
+              >
+                <p class="eyebrow">当前处理</p>
+                <div class="editor-actions">
+                  <button
+                    v-if="canManageReports"
+                    type="button"
+                    class="mini-action"
+                    :class="{ active: detailItem.adoption_status === 2 }"
+                    :disabled="actingItemId === detailItem.id"
+                    @click="setAdoption(detailItem, 2)"
+                  >
+                    <CheckCircle2 :size="15" />
+                    <span>采信</span>
+                  </button>
+                  <button
+                    v-if="canManageReports"
+                    type="button"
+                    class="mini-action"
+                    :class="{ active: detailItem.adoption_status === 1 }"
+                    :disabled="actingItemId === detailItem.id"
+                    @click="setAdoption(detailItem, 1)"
+                  >
+                    <FileText :size="15" />
+                    <span>备选</span>
+                  </button>
+                  <button
+                    v-if="canManageReports"
+                    type="button"
+                    class="mini-action"
+                    :class="{ active: detailItem.adoption_status === 0 }"
+                    :disabled="actingItemId === detailItem.id"
+                    @click="setAdoption(detailItem, 0)"
+                  >
+                    <CircleSlash2 :size="15" />
+                    <span>剔除</span>
+                  </button>
+                  <button
+                    v-if="canCreateStrategyLoop"
+                    type="button"
+                    class="mini-action"
+                    :disabled="strategyItemId === detailItem.id"
+                    @click="createStrategyLoop(detailItem)"
+                  >
+                    <Sparkles :size="15" />
+                    <span>{{ strategyItemId === detailItem.id ? "沉淀中" : "沉淀需求" }}</span>
+                  </button>
+                  <button
+                    v-if="canCreateEntityMilestone"
+                    type="button"
+                    class="mini-action"
+                    :class="{ active: milestoneItemId === detailItem.id }"
+                    @click="toggleMilestoneForm(detailItem)"
+                  >
+                    <FileText :size="15" />
+                    <span>登记事件</span>
+                  </button>
+                </div>
+                <form
+                  v-if="milestoneItemId === detailItem.id"
+                  class="inline-milestone-form"
+                  @submit.prevent="createEntityMilestone(detailItem)"
+                >
+                  <label>
+                    实体名称
+                    <input v-model="milestoneDrafts[detailItem.id]" placeholder="公司、模型、产品或技术名" />
+                  </label>
+                  <button type="submit" class="icon-button" :disabled="milestoneSavingId === detailItem.id">
+                    <Save :size="15" />
+                    <span>{{ milestoneSavingId === detailItem.id ? "登记中" : "保存事件" }}</span>
+                  </button>
+                </form>
+              </div>
 
-  <div v-if="showFormatPanel" class="config-backdrop" @click="showFormatPanel = false"></div>
-  <aside v-if="showFormatPanel" class="config-panel format-panel" aria-label="成稿格式管理">
-    <header>
+              <div class="editor-panel-section">
+                <div class="section-title-row">
+                  <p class="eyebrow">编辑</p>
+                  <button
+                    v-if="canManageReports && editingItemId !== detailItem.id"
+                    type="button"
+                    class="mini-action"
+                    @click="beginEdit(detailItem)"
+                  >
+                    <Pencil :size="15" />
+                    <span>编辑</span>
+                  </button>
+                </div>
+                <div v-if="editingItemId === detailItem.id" class="editor-form">
+                  <label>
+                    标题
+                    <input v-model="editorDraft.title" />
+                  </label>
+                  <label>
+                    摘要 / 一句话概括
+                    <textarea v-model="editorDraft.summary" rows="5" />
+                  </label>
+                  <label>
+                    关键词（逗号或分号分隔，避免整句）
+                    <textarea v-model="editorDraft.keyPoints" rows="3" />
+                  </label>
+                  <div class="editor-content-fields">
+                    <label v-for="[fieldKey, fieldLabel] in contentFieldLabels" :key="fieldKey">
+                      {{ fieldLabel }}
+                      <textarea v-model="editorDraft.contentJson[fieldKey]" rows="4" />
+                    </label>
+                  </div>
+                  <label>
+                    编辑备注
+                    <textarea v-model="editorDraft.notes" rows="3" />
+                  </label>
+                  <div class="editor-actions">
+                    <button
+                      type="button"
+                      class="mini-action active"
+                      :disabled="savingItemId === detailItem.id"
+                      @click="saveEdit(detailItem)"
+                    >
+                      <Save :size="15" />
+                      <span>{{ savingItemId === detailItem.id ? "保存中" : "保存" }}</span>
+                    </button>
+                    <button type="button" class="mini-action" @click="cancelEdit">取消</button>
+                  </div>
+                </div>
+                <div v-else class="editor-readonly">
+                  <p>{{ displaySummary(detailItem) }}</p>
+                  <div class="keyword-list compact" aria-label="关键词">
+                    <span
+                      v-for="keyword in displayKeywordList(detailItem)"
+                      :key="keyword"
+                      class="keyword-chip key-chip"
+                    >
+                      {{ keyword }}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="editor-panel-section">
+                <p class="eyebrow">反馈</p>
+                <div class="feedback-row">
+                  <button
+                    type="button"
+                    class="mini-action"
+                    :class="{ active: watcherStatus(detailItem)?.watching }"
+                    :disabled="watchingItemId === detailItem.id || loadingWatcherId === detailItem.id"
+                    :aria-pressed="watcherStatus(detailItem)?.watching ? 'true' : 'false'"
+                    @click="toggleWatchItem(detailItem)"
+                  >
+                    <Bell :size="15" />
+                    <span>{{ watcherStatus(detailItem)?.watching ? "已关注" : "关注" }}</span>
+                    <span v-if="watcherStatus(detailItem)">· {{ watcherStatus(detailItem)?.watcher_count }}</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="mini-action"
+                    :disabled="actingItemId === detailItem.id || !canReact"
+                    @click="likeItem(detailItem)"
+                  >
+                    <Heart :size="15" />
+                    <span>{{ detailItem.reaction_count }}</span>
+                  </button>
+                  <button
+                    v-for="score in 5"
+                    :key="score"
+                    type="button"
+                    class="star-button"
+                    :disabled="actingItemId === detailItem.id || !canRate"
+                    @click="rateItem(detailItem, score)"
+                  >
+                    <Star :size="15" :fill="score <= Math.round(detailItem.rating_avg) ? 'currentColor' : 'none'" />
+                  </button>
+                </div>
+                <p v-if="!canReact || !canRate || !canComment" class="muted-line">
+                  当前工作台已关闭浏览者的部分反馈入口。
+                </p>
+                <div class="comment-box">
+                  <textarea
+                    v-model="commentDrafts[detailItem.id]"
+                    rows="3"
+                    placeholder="写一条评论或判断依据"
+                    :disabled="!canComment"
+                  />
+                  <button
+                    type="button"
+                    class="mini-action active"
+                    :disabled="actingItemId === detailItem.id || !canComment"
+                    @click="submitComment(detailItem)"
+                  >
+                    <Send :size="15" />
+                    <span>发送</span>
+                  </button>
+                </div>
+                <div class="comment-list">
+                  <p v-if="loadingCommentsId === detailItem.id" class="muted-line">评论加载中</p>
+                  <article
+                    v-for="comment in commentsByItem[detailItem.id] || []"
+                    :key="comment.id"
+                    class="comment-row"
+                    :class="{ anchored: isAnchoredComment(comment) }"
+                    :aria-current="isAnchoredComment(comment) ? 'true' : undefined"
+                  >
+                    <MessageCircle :size="14" />
+                    <p>{{ comment.body }}</p>
+                  </article>
+                </div>
+              </div>
+
+              <div class="editor-panel-section">
+                <p class="eyebrow">追溯</p>
+                <dl class="lineage-list">
+                  <div>
+                    <dt>news</dt>
+                    <dd>{{ sourceLineage(detailItem, "news_item_id") || detailItem.generated_news.news_item_id }}</dd>
+                  </div>
+                  <div>
+                    <dt>raw</dt>
+                    <dd>{{ sourceLineage(detailItem, "raw_item_id") || "未返回" }}</dd>
+                  </div>
+                  <div>
+                    <dt>source</dt>
+                    <dd>{{ sourceLineage(detailItem, "data_source_id") || "未返回" }}</dd>
+                  </div>
+                </dl>
+              </div>
+            </aside>
+      </template>
+    </AppModal>
+
+    <section v-if="!selectedReport" class="placeholder-panel">
       <div>
-        <p class="eyebrow">一次采信，多版成稿</p>
-        <h3>成稿格式</h3>
+        <p class="eyebrow">日报草稿</p>
+        <h2>{{ loading ? "正在加载" : "还没有日报" }}</h2>
+        <p>
+          当前工作台还没有可展示的日报。可以先完成抓取、标准化和去重后生成草稿；
+          已经产出的公司 SQL 预览也可以通过回填脚本同步到日报工作台。
+        </p>
       </div>
-      <button type="button" class="panel-close" @click="showFormatPanel = false" title="关闭">
-        <X :size="18" />
-      </button>
-    </header>
+      <FileText :size="42" />
+    </section>
 
-    <div class="format-list">
-      <div v-for="fmt in formats" :key="fmt.id" class="format-row">
-        <div class="format-row-main">
-          <strong>{{ fmt.name }}</strong>
-          <small>
-            {{ fmt.format_code }}
-            · {{ fmt.group_by === "board" ? "按板块" : fmt.group_by === "category" ? "按分类" : "平铺" }}
-            <template v-if="fmt.export_targets.length"> · 导出 {{ fmt.export_targets.join("/").toUpperCase() }}</template>
-            <template v-if="fmt.locked"> · 锁定（公司 SQL 口径）</template>
-          </small>
+    <!-- 成稿格式管理：按 frontend-product-design §10.2 三条判定保留的上下文面板（context-panel）——
+         ① 编辑当前报告的格式列表项；② 需同时看到背后成稿视图以便对照；
+         ③ 提交是可反复保存的配置编辑。创建/确认类弹层一律走居中 AppModal。 -->
+    <div v-if="showFormatPanel" class="config-backdrop" @click="showFormatPanel = false"></div>
+    <aside v-if="showFormatPanel" class="config-panel context-panel format-panel" aria-label="成稿格式管理">
+      <header>
+        <div>
+          <p class="eyebrow">一次采信，多版成稿</p>
+          <h3>成稿格式</h3>
         </div>
-        <div class="format-row-actions">
-          <label class="switch-row compact" :title="fmt.enabled ? '停用' : '启用'">
-            <input
-              type="checkbox"
-              :checked="fmt.enabled"
+        <button type="button" class="panel-close" @click="showFormatPanel = false" title="关闭">
+          <X :size="18" />
+        </button>
+      </header>
+
+      <div class="format-list">
+        <div v-for="fmt in formats" :key="fmt.id" class="format-row">
+          <div class="format-row-main">
+            <strong>{{ fmt.name }}</strong>
+            <small>
+              {{ fmt.format_code }}
+              · {{ fmt.group_by === "board" ? "按板块" : fmt.group_by === "category" ? "按分类" : "平铺" }}
+              <template v-if="fmt.export_targets.length"> · 导出 {{ fmt.export_targets.join("/").toUpperCase() }}</template>
+              <template v-if="fmt.locked"> · 锁定（公司 SQL 口径）</template>
+            </small>
+          </div>
+          <div class="format-row-actions">
+            <label class="switch-row compact" :title="fmt.enabled ? '停用' : '启用'">
+              <input
+                type="checkbox"
+                :checked="fmt.enabled"
+                :disabled="formatBusyId === fmt.id"
+                @change="toggleFormatEnabled(fmt)"
+              />
+            </label>
+            <button
+              v-if="!fmt.builtin"
+              type="button"
+              class="mini-icon-button"
               :disabled="formatBusyId === fmt.id"
-              @change="toggleFormatEnabled(fmt)"
-            />
-          </label>
-          <button
-            v-if="!fmt.builtin"
-            type="button"
-            class="mini-icon-button"
-            :disabled="formatBusyId === fmt.id"
-            title="删除格式"
-            @click="removeFormat(fmt)"
-          >
-            <X :size="14" />
-          </button>
+              title="删除格式"
+              @click="removeFormat(fmt)"
+            >
+              <X :size="14" />
+            </button>
+          </div>
         </div>
       </div>
-    </div>
 
-    <div class="config-section-divider">
-      <span>注册自定义格式</span>
-      <small>格式只影响成稿视图与导出，不影响采信和公司 SQL</small>
-    </div>
+      <div class="config-section-divider">
+        <span>注册自定义格式</span>
+        <small>格式只影响成稿视图与导出，不影响采信和公司 SQL</small>
+      </div>
 
-    <div class="config-grid">
-      <label>
-        <span>标识（英文）</span>
-        <input v-model="formatForm.code" placeholder="leader_brief_v1" />
-      </label>
-      <label>
-        <span>名称</span>
-        <input v-model="formatForm.name" placeholder="领导一页纸" />
-      </label>
-      <label>
-        <span>分组维度</span>
-        <select v-model="formatForm.groupBy">
-          <option value="board">业务板块</option>
-          <option value="category">成品新闻十分类</option>
-          <option value="none">平铺</option>
-        </select>
-      </label>
-      <label>
-        <span>头条条数</span>
-        <input v-model.number="formatForm.headlineTopN" type="number" min="0" max="20" />
-      </label>
-    </div>
+      <div class="config-grid">
+        <label>
+          <span>标识（英文）</span>
+          <input v-model="formatForm.code" placeholder="leader_brief_v1" />
+        </label>
+        <label>
+          <span>名称</span>
+          <input v-model="formatForm.name" placeholder="领导一页纸" />
+        </label>
+        <label>
+          <span>分组维度</span>
+          <select v-model="formatForm.groupBy">
+            <option value="board">业务板块</option>
+            <option value="category">成品新闻十分类</option>
+            <option value="none">平铺</option>
+          </select>
+        </label>
+        <label>
+          <span>头条条数</span>
+          <input v-model.number="formatForm.headlineTopN" type="number" min="0" max="20" />
+        </label>
+      </div>
 
-    <label class="switch-row">
-      <input v-model="formatForm.headlineEnabled" type="checkbox" />
-      <span>启用头条区</span>
-    </label>
-
-    <div class="format-field-picks">
-      <span class="format-field-title">条目字段</span>
-      <label v-for="[field, label] in formatFieldOptions" :key="field" class="format-field-pick">
-        <input
-          type="checkbox"
-          :checked="formatForm.fields.includes(field)"
-          @change="toggleFormField(field)"
-        />
-        <span>{{ label }}</span>
+      <label class="switch-row">
+        <input v-model="formatForm.headlineEnabled" type="checkbox" />
+        <span>启用头条区</span>
       </label>
-    </div>
 
-    <div class="format-field-picks">
-      <span class="format-field-title">导出目标</span>
-      <label class="format-field-pick">
-        <input v-model="formatForm.exportMd" type="checkbox" />
-        <span>Markdown</span>
-      </label>
-      <label class="format-field-pick">
-        <input v-model="formatForm.exportHtml" type="checkbox" />
-        <span>HTML</span>
-      </label>
-    </div>
+      <div class="format-field-picks">
+        <span class="format-field-title">条目字段</span>
+        <label v-for="[field, label] in formatFieldOptions" :key="field" class="format-field-pick">
+          <input
+            type="checkbox"
+            :checked="formatForm.fields.includes(field)"
+            @change="toggleFormField(field)"
+          />
+          <span>{{ label }}</span>
+        </label>
+      </div>
 
-    <button type="button" class="config-save" :disabled="creatingFormat" @click="submitCustomFormat">
-      {{ creatingFormat ? "注册中" : "注册格式" }}
-    </button>
-  </aside>
+      <div class="format-field-picks">
+        <span class="format-field-title">导出目标</span>
+        <label class="format-field-pick">
+          <input v-model="formatForm.exportMd" type="checkbox" />
+          <span>Markdown</span>
+        </label>
+        <label class="format-field-pick">
+          <input v-model="formatForm.exportHtml" type="checkbox" />
+          <span>HTML</span>
+        </label>
+      </div>
+
+      <button type="button" class="config-save" :disabled="creatingFormat" @click="submitCustomFormat">
+        {{ creatingFormat ? "注册中" : "注册格式" }}
+      </button>
+    </aside>
+  </div>
 </template>

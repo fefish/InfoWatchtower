@@ -121,7 +121,7 @@
     "admin_reset": "Super admins can issue one temporary password and set users.status=must_change_password only for external_provider=local users; external identities are managed by their provider."
   },
   "profile_self_service": {
-    "status": "design_final_pending_implementation (2026-07); fact source docs/backend/identity-access-design.md section 4.4",
+    "status": "implemented (2026-07-08): PATCH /api/auth/me in backend/app/api/routes/auth.py + /account profile card in frontend/src/pages/AccountPage.vue; covered by backend/tests/test_auth.py and frontend AccountPage spec. Fact source docs/backend/identity-access-design.md section 4.4",
     "endpoint": "PATCH /api/auth/me (self path; deliberately not reusing the super_admin PATCH /api/users/{id}, whose permission and audit semantics differ)",
     "editable_fields": ["display_name", "department", "email"],
     "field_rules": {

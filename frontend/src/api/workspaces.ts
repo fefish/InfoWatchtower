@@ -270,8 +270,12 @@ export interface DiscoverableWorkspaceRecord {
   workspace_role: string | null;
 }
 
-export async function fetchDiscoverableWorkspaces(): Promise<DiscoverableWorkspaceRecord[]> {
-  return requestJson<DiscoverableWorkspaceRecord[]>("/api/workspaces/discover");
+// 可选 q：对 name/description 做大小写不敏感 contains 过滤；过滤范围仍严格限于
+// internal_public，private 工作台任何关键词都不出现（workspace-configuration-design §14.1）。
+export async function fetchDiscoverableWorkspaces(q?: string): Promise<DiscoverableWorkspaceRecord[]> {
+  const keyword = (q ?? "").trim();
+  const suffix = keyword ? `?q=${encodeURIComponent(keyword)}` : "";
+  return requestJson<DiscoverableWorkspaceRecord[]>(`/api/workspaces/discover${suffix}`);
 }
 
 export interface WorkspaceSubscriptionRecord {
@@ -297,5 +301,64 @@ export async function updateWorkspaceVisibility(
   return requestJson<WorkspaceRecord>(`/api/workspaces/${workspaceCode}/visibility`, {
     method: "PATCH",
     body: JSON.stringify({ visibility })
+  });
+}
+
+// --- 工作台加入码（workspace-configuration-design §14，契约 workspace_model.json join_code） ---
+// 与全局邀请码互补：加入码面向已注册用户的团队自助入台，只授 viewer/member、
+// 不建号、不改全局角色；每台至多一个 active 码，「轮换」= 旧码即刻失效 + 新码生成。
+
+export interface WorkspaceJoinCodeRecord {
+  code: string;
+  default_role: string;
+  expires_at: string | null;
+  max_uses: number | null;
+  use_count: number;
+  created_at: string;
+  created_by: string | null;
+}
+
+export interface WorkspaceJoinCodeCreatePayload {
+  default_role?: "viewer" | "member";
+  expires_in_days?: number | null;
+  max_uses?: number | null;
+}
+
+/** 当前 active 加入码；无码时后端返回 null（workspace admin/owner 可读）。 */
+export async function fetchWorkspaceJoinCode(
+  workspaceCode: string
+): Promise<WorkspaceJoinCodeRecord | null> {
+  return requestJson<WorkspaceJoinCodeRecord | null>(`/api/workspaces/${workspaceCode}/join-code`);
+}
+
+/** 生成加入码；已有 active 码时视为轮换（旧码同事务置 disabled，UI 需先确认）。 */
+export async function createWorkspaceJoinCode(
+  workspaceCode: string,
+  payload: WorkspaceJoinCodeCreatePayload = {}
+): Promise<WorkspaceJoinCodeRecord> {
+  return requestJson<WorkspaceJoinCodeRecord>(`/api/workspaces/${workspaceCode}/join-code`, {
+    method: "POST",
+    body: JSON.stringify({ default_role: payload.default_role ?? "viewer", ...payload })
+  });
+}
+
+/** 幂等停用当前 active 码（无 active 码同样 204）。 */
+export async function disableWorkspaceJoinCode(workspaceCode: string): Promise<void> {
+  await requestVoid(`/api/workspaces/${workspaceCode}/join-code`, { method: "DELETE" });
+}
+
+export interface WorkspaceJoinByCodeRecord {
+  workspace_code: string;
+  workspace_name: string;
+  workspace_role: string;
+  // 本次是否真实新增或重新启用 membership（已是 enabled 成员时 false，幂等不降级）
+  joined: boolean;
+}
+
+/** 凭码加入：失效码统一 400「加入码无效或已失效」（防枚举），连续失败 429 限流。 */
+export async function joinWorkspaceByCode(code: string): Promise<WorkspaceJoinByCodeRecord> {
+  return requestJson<WorkspaceJoinByCodeRecord>("/api/workspaces/join-by-code", {
+    method: "POST",
+    body: JSON.stringify({ code })
   });
 }

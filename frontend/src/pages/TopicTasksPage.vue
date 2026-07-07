@@ -13,6 +13,7 @@ import {
   type TopicTaskRecord
 } from "../api/operations";
 import { fetchWorkspaceMembers, type WorkspaceMemberRecord } from "../api/workspaces";
+import AppModal from "../components/AppModal.vue";
 import { useSessionStore } from "../stores/session";
 import { useWorkspaceStore } from "../stores/workspace";
 
@@ -345,7 +346,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="module-page">
+  <section class="layout-list">
     <header class="module-hero">
       <div>
         <p class="eyebrow">Strategic Loop</p>
@@ -528,20 +529,23 @@ onMounted(() => {
       </article>
     </section>
 
-    <div v-if="detailTask" class="report-modal-backdrop" @click.self="closeTaskDetail">
-      <section class="report-detail-modal task-detail-modal" role="dialog" aria-modal="true" aria-labelledby="task-detail-title">
-        <header class="report-modal-header">
-          <div>
-            <p class="eyebrow">Task Detail</p>
-            <h3 id="task-detail-title">{{ detailTask.title }}</h3>
-            <div class="headline-chip-row">
-              <span class="chip-blue">{{ detailTask.status }}</span>
-              <span v-if="detailTask.is_overdue" class="chip-orange">逾期</span>
-              <span>{{ detailTask.assignee_name || "未指派" }}</span>
-            </div>
-          </div>
-          <button type="button" class="mini-action" @click="closeTaskDetail">关闭</button>
-        </header>
+    <!-- 任务详情：归入 AppModal lg 档（frontend-product-design §10.3 迁移清单第 8 项，
+         旧 report-modal-backdrop/report-detail-modal 私有基座就此收编到全站唯一 Modal 基座）。 -->
+    <AppModal
+      :open="Boolean(detailTask)"
+      :title="detailTask?.title ?? ''"
+      size="lg"
+      @close="closeTaskDetail"
+    >
+      <template #header-meta>
+        <p class="eyebrow">Task Detail</p>
+        <div v-if="detailTask" class="headline-chip-row">
+          <span class="chip-blue">{{ detailTask.status }}</span>
+          <span v-if="detailTask.is_overdue" class="chip-orange">逾期</span>
+          <span>{{ detailTask.assignee_name || "未指派" }}</span>
+        </div>
+      </template>
+      <template v-if="detailTask">
         <div class="task-detail-body">
           <section class="modal-story-detail">
             <article>
@@ -587,7 +591,7 @@ onMounted(() => {
             </article>
           </section>
         </div>
-      </section>
-    </div>
+      </template>
+    </AppModal>
   </section>
 </template>

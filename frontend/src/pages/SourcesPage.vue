@@ -27,6 +27,7 @@ import {
   type DataSourceRecord,
   type SourceImportPreview
 } from "../api/sources";
+import AppModal from "../components/AppModal.vue";
 import { useRuntimeStore } from "../stores/runtime";
 import { useWorkspaceStore } from "../stores/workspace";
 
@@ -74,6 +75,18 @@ const createForm = reactive({
   domainCode: "",
   backfillDays: "7"
 });
+
+// 新增信息源 Modal 的脏状态（frontend-product-design §10.1）：与打开时的快照比对，
+// 有未保存输入时遮罩/Esc/关闭按钮先弹 sm 确认层，不允许静默丢输入。
+const createFormBaseline = ref("");
+
+function createFormSnapshot() {
+  return JSON.stringify({ ...createForm });
+}
+
+const createFormDirty = computed(
+  () => showCreatePanel.value && createFormSnapshot() !== createFormBaseline.value
+);
 
 const counts = computed(() => {
   const next = new Map<string, number>();
@@ -345,6 +358,7 @@ function openCreatePanel() {
   createForm.url = "";
   createForm.domainCode = workspace.current?.default_domain_code ?? "ai";
   createForm.backfillDays = "7";
+  createFormBaseline.value = createFormSnapshot();
   showCreatePanel.value = true;
 }
 
@@ -520,7 +534,7 @@ watch(
 </script>
 
 <template>
-  <section class="source-workbench">
+  <section class="source-workbench layout-list">
     <section class="source-stats-card" aria-label="数据源概览">
       <div class="source-total-stat">
         <strong>{{ sources.length }}</strong>
@@ -694,8 +708,11 @@ watch(
     </section>
   </section>
 
+  <!-- 单源配置：按 frontend-product-design §10.2 三条判定保留的上下文面板（context-panel）——
+       ① 编辑页面列表当前选中的一项；② 需同时看到背后列表以便对照/连续切换；
+       ③ 提交是可反复保存的配置编辑。创建/确认类弹层一律走居中 AppModal。 -->
   <div v-if="selectedSource" class="config-backdrop" @click="closeConfig"></div>
-  <aside v-if="selectedSource" class="config-panel" aria-label="数据源配置">
+  <aside v-if="selectedSource" class="config-panel context-panel" aria-label="数据源配置">
     <header>
       <div>
         <p class="eyebrow">数据源配置</p>
@@ -752,17 +769,18 @@ watch(
     </button>
   </aside>
 
-  <div v-if="showCreatePanel" class="config-backdrop" @click="closeCreatePanel"></div>
-  <aside v-if="showCreatePanel" class="config-panel" aria-label="新增信息源">
-    <header>
-      <div>
-        <p class="eyebrow">数据源池</p>
-        <h3>新增信息源</h3>
-      </div>
-      <button type="button" class="panel-close" @click="closeCreatePanel" title="关闭">
-        <X :size="18" />
-      </button>
-    </header>
+  <!-- 新增信息源：居中 Modal md 档（frontend-product-design §10.3 迁移清单第 3 项）。
+       创建类操作不满足上下文面板判定（§10.2 条件 1/3），原右上 config-panel 浮层收编到 AppModal。 -->
+  <AppModal
+    :open="showCreatePanel"
+    title="新增信息源"
+    size="md"
+    :dirty="createFormDirty"
+    @close="closeCreatePanel"
+  >
+    <template #header-meta>
+      <p class="eyebrow">数据源池</p>
+    </template>
 
     <p class="workspace-form-hint">
       新增源进入全局共享池并自动在当前工作台（{{ workspace.current?.name }}）启用；
@@ -796,46 +814,51 @@ watch(
       <input v-model="createForm.url" :placeholder="createUrlPlaceholder" />
     </label>
 
-    <button type="button" class="config-save" :disabled="creatingSource" @click="submitCreateSource">
-      {{ creatingSource ? "创建中" : "创建并启用" }}
-    </button>
-  </aside>
-
-  <div v-if="importPreview" class="config-backdrop" @click="closeImportPreview"></div>
-  <aside v-if="importPreview" class="config-panel import-preview-panel" aria-label="数据源导入预览">
-    <header>
-      <div>
-        <p class="eyebrow">导入预览</p>
-        <h3>{{ importPreviewCatalog === "tech" ? "Tech Insight Loop 源治理" : "旧种子源" }}</h3>
-      </div>
-      <button type="button" class="panel-close" @click="closeImportPreview" title="关闭">
-        <X :size="18" />
+    <template #footer>
+      <button type="button" class="icon-button" :disabled="creatingSource" @click="submitCreateSource">
+        {{ creatingSource ? "创建中" : "创建并启用" }}
       </button>
-    </header>
+    </template>
+  </AppModal>
 
-    <div class="preview-metrics">
-      <span><strong>{{ importPreview.total }}</strong> 识别记录</span>
-      <span><strong>{{ importPreview.would_create }}</strong> 将新增</span>
-      <span><strong>{{ importPreview.would_update }}</strong> 将更新</span>
-    </div>
+  <!-- 数据源导入预览：居中 Modal sm 档（§10.3 迁移清单第 4 项，决策确认类）。 -->
+  <AppModal
+    :open="Boolean(importPreview)"
+    :title="importPreviewCatalog === 'tech' ? 'Tech Insight Loop 源治理' : '旧种子源'"
+    size="sm"
+    @close="closeImportPreview"
+  >
+    <template #header-meta>
+      <p class="eyebrow">导入预览</p>
+    </template>
 
-    <div class="preview-list">
-      <section v-for="group in importPreviewGroups" :key="group.type" class="preview-group">
-        <header class="preview-group-head">
-          <span class="type-badge">{{ sourceTypeLabel(group.type) }}</span>
-          <small>样本 {{ group.samples.length }} 条</small>
-        </header>
-        <p v-if="group.note" class="preview-group-note">{{ group.note }}</p>
-        <article v-for="sample in group.samples" :key="`${group.type}-${sample.name}-${sample.url}`">
-          <strong>{{ sample.name }}</strong>
-          <span>{{ sourceTypeLabel(sample.source_type) }}</span>
-          <small>{{ sample.url || "无 URL" }}</small>
-        </article>
-      </section>
-    </div>
+    <template v-if="importPreview">
+      <div class="preview-metrics">
+        <span><strong>{{ importPreview.total }}</strong> 识别记录</span>
+        <span><strong>{{ importPreview.would_create }}</strong> 将新增</span>
+        <span><strong>{{ importPreview.would_update }}</strong> 将更新</span>
+      </div>
 
-    <button type="button" class="config-save" :disabled="importing" @click="confirmImport">
-      {{ importing ? "导入中" : "确认导入" }}
-    </button>
-  </aside>
+      <div class="preview-list">
+        <section v-for="group in importPreviewGroups" :key="group.type" class="preview-group">
+          <header class="preview-group-head">
+            <span class="type-badge">{{ sourceTypeLabel(group.type) }}</span>
+            <small>样本 {{ group.samples.length }} 条</small>
+          </header>
+          <p v-if="group.note" class="preview-group-note">{{ group.note }}</p>
+          <article v-for="sample in group.samples" :key="`${group.type}-${sample.name}-${sample.url}`">
+            <strong>{{ sample.name }}</strong>
+            <span>{{ sourceTypeLabel(sample.source_type) }}</span>
+            <small>{{ sample.url || "无 URL" }}</small>
+          </article>
+        </section>
+      </div>
+    </template>
+
+    <template #footer>
+      <button type="button" class="icon-button" :disabled="importing" @click="confirmImport">
+        {{ importing ? "导入中" : "确认导入" }}
+      </button>
+    </template>
+  </AppModal>
 </template>

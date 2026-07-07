@@ -9,9 +9,10 @@
 > 2026-07-07 增量：§6.1/§6.2 pipeline 级自动重试、§8 分层调度模型
 > （实例 env 基线 → 工作台 `schedule_policy` → scheduler DB 驱动触发）、
 > §8.5 调度心跳与可观测、§9 新增 schedule-policy 与 scheduler status API。
-> 这些小节为**设计已定稿待实现**；契约见 `config/contracts/workspace_model.json`
-> 的 `schedule_policy`。生成模型 provider 配置见
-> `docs/backend/generation-provider-design.md`。
+> 这些小节已于 2026-07-08 实现落地（`backend/tests/test_scheduler_policy.py`、
+> `backend/tests/test_pipeline_retry.py` 看护）；契约见
+> `config/contracts/workspace_model.json` 的 `schedule_policy`。生成模型 provider
+> 配置见 `docs/backend/generation-provider-design.md`。
 
 ## 1. 模块定位
 
@@ -114,7 +115,7 @@ job_runs
 如果现阶段不新建完整表，也必须让现有 `ingestion_runs`、`recommendation_runs`、
 `sync_runs`、`export_jobs` 保留等价状态和追溯字段。
 
-### 3.1 数据模型增量（设计已定稿待实现，2026-07-07）
+### 3.1 数据模型增量（2026-07-07 定稿，2026-07-08 已实现）
 
 pipeline run 记录（无论落在新 `pipeline_runs` 表还是现有 run 表的等价字段）增加
 run 级重试链字段：
@@ -195,7 +196,7 @@ skipped
 | sync pull | 是 | failed inbox 允许重放；cursor 只在批成功后推进 |
 | export | 可重试 | 同一 report 生成新 export_job 或复用通过的预检 |
 
-### 6.1 两级重试的分工（设计已定稿待实现）
+### 6.1 两级重试的分工（已实现，2026-07-08）
 
 系统里存在两种"自动重试"，边界必须清晰，不能互相顶替：
 
@@ -214,7 +215,7 @@ skipped
   不可重试类（重试也必然失败，直接终态）：`published_report_conflict`（409）、
   `capability_disabled`（部署形态禁用）、`invalid_parameters`、`workspace_not_found`。
 
-### 6.2 run 级自动重试语义（设计已定稿待实现）
+### 6.2 run 级自动重试语义（已实现，2026-07-08）
 
 - 策略来源：工作台 `schedule_policy.retry`（见 §8.2），字段
   `max_attempts`（失败后最大自动重试次数，不含首跑，默认 1，取值 0-5）和
@@ -265,7 +266,7 @@ scheduler 只负责投递任务，不直接执行重业务。
   下次运行时间预览；今日速览/抓取页运营卡显示 scheduler 心跳、下次运行和
   最近 run 结果（§8.5）。
 
-### 8.1 分层配置模型（设计已定稿待实现）
+### 8.1 分层配置模型（已实现，2026-07-08）
 
 ```text
 第 1 层 实例 env 基线（部署边界，改动需重启 scheduler 进程）
@@ -327,7 +328,7 @@ PATCH /api/workspaces/{code}/schedule-policy    workspace admin+ 或 super_admin
 `weekly_reports` 草稿（复用现有周报候选聚合服务，幂等键
 `workspace_code + week_key`），不自动发布周报；周报发布仍是编辑决策。
 
-### 8.3 scheduler 循环行为（设计已定稿待实现）
+### 8.3 scheduler 循环行为（已实现，2026-07-08）
 
 - tick 周期固定 60s。每个 tick：
   1. 读实例总闸与 `DEPLOY_MODE` 能力开关；采集被禁（intranet）时跳过全部
@@ -360,7 +361,7 @@ PATCH /api/workspaces/{code}/schedule-policy    workspace admin+ 或 super_admin
   `GET /api/ingestion/scheduler`（纯 env 快照）保留为实例基线展示，标注
   "工作台级策略见自动化卡"。
 
-### 8.5 心跳与可观测（设计已定稿待实现）
+### 8.5 心跳与可观测（已实现，2026-07-08）
 
 ```text
 GET /api/pipeline/scheduler/status    登录用户可读；workspaces 数组按调用者
@@ -475,9 +476,9 @@ daily success/failure by workspace
 | scheduler 可靠性不足 | 不重复投递、尊重部署能力、留存投递证据 |
 | 失败恢复不足 | 支持按 step 重试或给出不可重试原因 |
 | API 事件循环压力 | 长任务进入 worker，API 只创建/查询 run |
-| 工作台级调度策略（设计已定稿待实现） | §8.1-§8.3：schedule-policy API + per-workspace 触发 + 兼容规则测试通过 |
-| run 级自动重试（设计已定稿待实现） | §6.2：failed run 按 backoff 自动重试、链路可追溯、终止告警 |
-| 调度心跳可观测（设计已定稿待实现） | §8.5：`GET /api/pipeline/scheduler/status` 心跳/下次运行/最近 run 可自证 |
+| 工作台级调度策略（已实现，`backend/tests/test_scheduler_policy.py`） | §8.1-§8.3：schedule-policy API + per-workspace 触发 + 兼容规则测试通过 |
+| run 级自动重试（已实现，`backend/tests/test_pipeline_retry.py`） | §6.2：failed run 按 backoff 自动重试、链路可追溯、终止告警 |
+| 调度心跳可观测（已实现，`backend/tests/test_scheduler_policy.py`） | §8.5：`GET /api/pipeline/scheduler/status` 心跳/下次运行/最近 run 可自证 |
 
 ## 12. 验收设计
 

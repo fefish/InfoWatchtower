@@ -23,8 +23,7 @@ import {
   GitCompareArrows,
   KeyRound,
   ListChecks,
-  Users,
-  X
+  Users
 } from "lucide-vue-next";
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
@@ -41,6 +40,7 @@ import {
   updateWorkspaceLabelPolicy,
   type WorkspaceLabelPolicyUpdate
 } from "../api/workspaces";
+import AppModal from "../components/AppModal.vue";
 import WorkspaceDiscovery from "../components/WorkspaceDiscovery.vue";
 import { useRuntimeStore } from "../stores/runtime";
 import { useSessionStore } from "../stores/session";
@@ -117,6 +117,21 @@ const aiSqlPrimaryCategories = [
 const aiToolPrimaryCategories = ["工具新功能", "工具新案例", "工具新技术"];
 const aiToolSecondaryLabels = ["cursor", "claude code", "opencode", "codex"];
 
+// 建台向导脏状态（frontend-product-design §10.1）：与打开时的快照比对，
+// 有未保存输入时遮罩/Esc/关闭按钮先弹 sm 确认层，不允许静默丢输入。
+const wizardBaseline = ref("");
+
+function wizardSnapshot() {
+  return JSON.stringify({
+    form: { ...workspaceForm },
+    selected: Array.from(selectedWizardSourceIds.value).sort()
+  });
+}
+
+const workspaceWizardDirty = computed(
+  () => showWorkspaceForm.value && !wizardFinished.value && wizardSnapshot() !== wizardBaseline.value
+);
+
 function openWorkspaceForm() {
   workspaceFormError.value = "";
   wizardStep.value = 1;
@@ -131,6 +146,7 @@ function openWorkspaceForm() {
   workspaceForm.custom_source_type = "rss";
   workspaceForm.custom_source_url = "";
   selectedWizardSourceIds.value = new Set();
+  wizardBaseline.value = wizardSnapshot();
   showWorkspaceForm.value = true;
   void loadWizardSources();
 }
@@ -787,17 +803,19 @@ async function logout() {
     </main>
   </div>
 
-  <div v-if="showWorkspaceForm" class="config-backdrop" @click="closeWorkspaceForm"></div>
-  <aside v-if="showWorkspaceForm" class="config-panel" aria-label="新建工作台">
-    <header>
-      <div>
-        <p class="eyebrow">工作台扩展</p>
-        <h3>{{ wizardFinished ? "工作台已创建" : "新建工作台" }}</h3>
-      </div>
-      <button type="button" class="panel-close" @click="closeWorkspaceForm" title="关闭">
-        <X :size="18" />
-      </button>
-    </header>
+  <!-- 新建工作台向导：居中 Modal md 档（frontend-product-design §10.3 迁移清单第 1 项）。
+       创建类操作不满足上下文面板判定（§10.2 条件 1/3），原右上 config-panel 浮层收编到
+       AppModal 基座；脏表单遮罩/Esc 先确认由 dirty 快照驱动。 -->
+  <AppModal
+    :open="showWorkspaceForm"
+    :title="wizardFinished ? '工作台已创建' : '新建工作台'"
+    size="md"
+    :dirty="workspaceWizardDirty"
+    @close="closeWorkspaceForm"
+  >
+    <template #header-meta>
+      <p class="eyebrow">工作台扩展</p>
+    </template>
 
     <div v-if="!wizardFinished" class="workspace-wizard">
       <div class="wizard-steps" aria-label="创建步骤">
@@ -936,5 +954,5 @@ async function logout() {
         </button>
       </div>
     </div>
-  </aside>
+  </AppModal>
 </template>

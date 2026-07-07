@@ -253,7 +253,7 @@ daily_report_items
   `summary_text`、`key_highlights`、`top_groups` 和
   `summary_generated_by=rule_weekly_summary_v1`。后续 LLM 周报摘要模型必须复用同一字段结构。
 
-### 8.1 模板驱动生成（generation_template，设计已定稿待实现 2026-07-07）
+### 8.1 模板驱动生成（generation_template，2026-07-07 定稿，2026-07-08 已实现）
 
 用户目标："新建周报/日报格式，可以 XML 或 JSON 格式，让模型按照这种板式生成，
 拿到源、去重以后，AI 根据这个板式生成最终的日报，然后展示。"
@@ -344,7 +344,7 @@ PATCH /api/weekly-report-items/{id}
 | 周报正文生成不足 | 周报摘要段规则投影 v1 已完成；后续补 LLM 摘要模型和整篇周报长文生成 |
 | 发布通知继续深化 | 已按 `feedback_policy.notify_on_publish` 写 activity event 并通知同工作台成员；后续与归档、邮件和更多对象关注者联动 |
 | 报告锁定和导出关系不清 | locked 报告可导出不可编辑 |
-| 模板驱动生成（设计已定稿待实现） | §8.1 + `report-renditions-design.md` §10：自定义格式可带 JSON/XML 模板，投影优先、增量字段追加生成、company_sql_v1 零影响 |
+| 模板驱动生成（已实现，`backend/tests/test_generation_template.py`） | §8.1 + `report-renditions-design.md` §10：自定义格式可带 JSON/XML 模板，投影优先、增量字段追加生成、company_sql_v1 零影响 |
 
 ## 12. 验收设计
 

@@ -199,6 +199,27 @@ class GeneratedNews(IdMixin, ScopeMixin, SyncMixin, TimestampMixin, Base):
     generated_by: Mapped[str] = mapped_column(String(64), default="system")
     generation_status: Mapped[str] = mapped_column(String(32), default="draft", index=True)
 
+    # 按 format_code 分桶的模板增量字段产出（report-renditions-design §10.1）。
+    # 与 content_json/insight_json/category 严格隔离：永不进公司 SQL、dedupe 与推荐输入。
+    template_extras_json: Mapped[JsonDict] = mapped_column(JsonColumn, default=dict)
+
     recommendation_item: Mapped[RecommendationItem | None] = relationship(back_populates="generated_news")
     news_item: Mapped[NewsItem] = relationship(back_populates="generated_news_items")
     daily_report_items: Mapped[list[DailyReportItem]] = relationship(back_populates="generated_news")
+
+
+class GenerationUsage(IdMixin, TimestampMixin, Base):
+    """工作台每日模型调用计数（generation_policy.daily_generation_budget 口径）。
+
+    计数按 (workspace_code, day_key) 统计当日模型调用（成功+失败都计，含模板
+    增量字段生成）；超出预算后本日剩余条目按 fallback_behavior 处理。
+    """
+
+    __tablename__ = "generation_daily_usage"
+    __table_args__ = (
+        UniqueConstraint("workspace_code", "day_key", name="uq_generation_daily_usage_ws_day"),
+    )
+
+    workspace_code: Mapped[str] = mapped_column(String(64), index=True)
+    day_key: Mapped[str] = mapped_column(String(10), index=True)
+    calls_total: Mapped[int] = mapped_column(Integer, default=0)

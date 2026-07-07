@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -9,6 +11,12 @@ from app.core.database import get_db_session
 from app.models.identity import User
 from app.models.reports import ReportFormat, ReportRendition
 from app.models.workspace import Workspace
+from app.reports.generation_template import (
+    build_preview_item,
+    generated_field_keys,
+    parse_generation_template,
+    projection_field_keys,
+)
 from app.reports.rendition_html import render_html
 from app.reports.renditions import (
     build_daily_rendition,
@@ -24,6 +32,8 @@ from app.schemas.renditions import (
     REPORT_FORMAT_ITEM_FIELDS,
     ReportFormatCreate,
     ReportFormatRead,
+    ReportFormatTemplateValidate,
+    ReportFormatTemplateValidateRead,
     ReportFormatUpdate,
     ReportRenditionRead,
 )
@@ -49,6 +59,25 @@ def list_report_formats(
     return [_format_to_read(fmt) for fmt in formats]
 
 
+def _template_source_text(source: str | dict) -> str:
+    if isinstance(source, dict):
+        return json.dumps(source, ensure_ascii=False, indent=2)
+    return str(source)
+
+
+def _parse_template_or_422(source: str | dict, carrier: str | None) -> dict:
+    canonical, errors = parse_generation_template(source, carrier)
+    if canonical is None:
+        raise HTTPException(
+            status_code=422,
+            detail=[
+                {"loc": ["body", "generation_template", error["field"]], "msg": error["error"], "type": "value_error"}
+                for error in errors
+            ],
+        )
+    return canonical
+
+
 @router.post("/report-formats", response_model=ReportFormatRead, status_code=status.HTTP_201_CREATED)
 def create_report_format(
     payload: ReportFormatCreate,
@@ -58,6 +87,15 @@ def create_report_format(
     assert_workspace_member(session, current_user, payload.workspace_code, min_role="admin")
     _require_workspace(session, payload.workspace_code)
     _validate_format_options(payload.group_by, payload.item_fields, payload.export_targets)
+    generation_template = None
+    generation_template_source = None
+    if payload.generation_template is not None:
+        generation_template = _parse_template_or_422(
+            payload.generation_template,
+            payload.generation_template_carrier,
+        )
+        generation_template["version"] = 1
+        generation_template_source = _template_source_text(payload.generation_template)
     existing = session.scalar(
         select(ReportFormat).where(
             ReportFormat.workspace_code == payload.workspace_code,
@@ -92,11 +130,34 @@ def create_report_format(
         export_targets={"targets": payload.export_targets},
         enabled=True,
         sort_order=max_sort + 10,
+        generation_template=generation_template,
+        generation_template_source=generation_template_source,
     )
     session.add(fmt)
     session.commit()
     session.refresh(fmt)
     return _format_to_read(fmt)
+
+
+@router.post("/report-formats/validate-template", response_model=ReportFormatTemplateValidateRead)
+def validate_report_format_template(
+    payload: ReportFormatTemplateValidate,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> ReportFormatTemplateValidateRead:
+    """模板干跑校验 + 示例预览（workspace admin+；不落任何表——§10.5）。"""
+    assert_workspace_member(session, current_user, payload.workspace_code, min_role="admin")
+    canonical, errors = parse_generation_template(payload.generation_template, payload.carrier)
+    if canonical is None:
+        return ReportFormatTemplateValidateRead(valid=False, errors=errors)
+    return ReportFormatTemplateValidateRead(
+        valid=True,
+        errors=[],
+        normalized_template=canonical,
+        projection_fields=projection_field_keys(canonical),
+        generated_fields=generated_field_keys(canonical),
+        preview_item=build_preview_item(canonical),
+    )
 
 
 @router.patch("/report-formats/{format_id}", response_model=ReportFormatRead)
@@ -110,6 +171,14 @@ def update_report_format(
     if fmt is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report format not found")
     assert_workspace_member(session, current_user, fmt.workspace_code, min_role="admin")
+
+    # 内置格式（locked company_sql_v1 与 builtin tech_insight_v1）保持
+    # 一份基稿 + 纯投影：提交 generation_template 一律 400（§10.7 断言 6）。
+    if payload.generation_template is not None and (fmt.locked or fmt.builtin):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Builtin formats do not accept generation_template",
+        )
 
     if fmt.locked:
         # locked 内置格式（公司 SQL 口径）只允许启停
@@ -157,6 +226,21 @@ def update_report_format(
         fmt.export_targets = {"targets": payload.export_targets}
     if payload.enabled is not None:
         fmt.enabled = payload.enabled
+    if payload.generation_template is not None:
+        if isinstance(payload.generation_template, str) and not payload.generation_template.strip():
+            # 显式提交空字符串 = 清除模板（回到纯投影格式）
+            fmt.generation_template = None
+            fmt.generation_template_source = None
+        else:
+            canonical = _parse_template_or_422(
+                payload.generation_template,
+                payload.generation_template_carrier,
+            )
+            # version 由服务端维护：每次 PATCH 模板 +1，旧 extras 按版本判定过期
+            previous_version = int((fmt.generation_template or {}).get("version") or 0)
+            canonical["version"] = previous_version + 1
+            fmt.generation_template = canonical
+            fmt.generation_template_source = _template_source_text(payload.generation_template)
     session.commit()
     session.refresh(fmt)
     return _format_to_read(fmt)
@@ -391,6 +475,10 @@ def _format_to_read(fmt: ReportFormat) -> ReportFormatRead:
         export_targets=list((fmt.export_targets or {}).get("targets") or []),
         enabled=fmt.enabled,
         sort_order=fmt.sort_order,
+        generation_template=fmt.generation_template,
+        generation_template_source=fmt.generation_template_source,
+        projection_fields=projection_field_keys(fmt.generation_template),
+        generated_fields=generated_field_keys(fmt.generation_template),
     )
 
 

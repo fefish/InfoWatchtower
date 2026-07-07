@@ -4,6 +4,7 @@ from app.api.routes import (
     auth,
     domain_packs,
     exports,
+    generation,
     groups,
     health,
     ingestion,
@@ -19,6 +20,7 @@ from app.api.routes import (
     search,
     sources,
     sync,
+    workspace_access,
     workspaces,
 )
 
@@ -28,6 +30,8 @@ api_router.include_router(setup.router)
 api_router.include_router(auth.admin_router)
 api_router.include_router(sources.router)
 api_router.include_router(workspaces.router)
+api_router.include_router(workspace_access.router)
+api_router.include_router(generation.router)
 api_router.include_router(groups.router)
 api_router.include_router(domain_packs.router)
 api_router.include_router(ingestion.router)
