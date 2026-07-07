@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.adapters import AdapterRegistry, RawItemInput, SourceFetchContext, create_default_registry
 from app.adapters.base import AdapterNotImplementedError, BROWSER_FETCH_HEADERS
 from app.adapters.page import _extract_links, _fetch_article
+from app.core.config import get_settings
 from app.ingestion.fetch import fetch_source_raw_inputs, upsert_raw_inputs
 from app.models.common import utc_now
 from app.models.content import DataSource, IngestionRun
@@ -151,12 +152,29 @@ async def run_workspace_ingestion(
         "source_succeeded": 0,
         "source_failed": 0,
         "source_skipped_unimplemented": 0,
+        "source_skipped_type_disabled": 0,
         "items_fetched": 0,
         "raw_created": 0,
         "raw_updated": 0,
     }
+    # 部署级允许清单（预设 rss-only）：run 内部过滤，scheduler/API 请求不用感知。
+    active_sources, type_disabled_sources = _split_type_disabled_sources(sources)
+    for source in type_disabled_sources:
+        totals["source_skipped_type_disabled"] += 1
+        source_summaries.append(
+            {
+                "data_source_id": source.id,
+                "name": source.name,
+                "source_type": source.source_type,
+                "status": "skipped_type_disabled",
+                "error": _type_disabled_message(source.source_type),
+                "fetched": 0,
+                "created": 0,
+                "updated": 0,
+            },
+        )
     outcomes = await _fetch_sources_concurrently(
-        sources=sources,
+        sources=active_sources,
         registry=registry,
         concurrency=_normalize_concurrency(request.concurrency),
         source_timeout_seconds=_normalize_timeout(request.source_timeout_seconds),
@@ -202,7 +220,27 @@ async def run_workspace_ingestion(
         if request.max_items_per_source is not None and request.max_items_per_source >= 0:
             # RSS/页面条目按 feed 顺序（新在前）截断，对齐旧系统单源上限行为
             raw_inputs = raw_inputs[: request.max_items_per_source]
-        created, updated = upsert_raw_inputs(session, source, raw_inputs, started_at)
+        try:
+            # SAVEPOINT 级隔离：持久层异常（如唯一约束）只熔断本源，
+            # 已完成的其他源不回滚，run 照常收尾而不是整体 500。
+            with session.begin_nested():
+                created, updated = upsert_raw_inputs(session, source, raw_inputs, started_at)
+        except Exception as exc:  # noqa: BLE001
+            source.last_error = _fetch_error(exc)
+            totals["source_failed"] += 1
+            source_summaries.append(
+                {
+                    "data_source_id": source.id,
+                    "name": source.name,
+                    "source_type": source.source_type,
+                    "status": "failed",
+                    "error": _fetch_error(exc),
+                    "fetched": len(outcome.raw_inputs),
+                    "created": 0,
+                    "updated": 0,
+                },
+            )
+            continue
         totals["source_succeeded"] += 1
         totals["items_fetched"] += len(raw_inputs)
         totals["raw_created"] += created
@@ -230,6 +268,7 @@ async def run_workspace_ingestion(
         run.source_succeeded,
         run.source_failed,
         totals["source_skipped_unimplemented"],
+        totals["source_skipped_type_disabled"],
     )
     run.completed_at = utc_now()
     run.summary_json = {
@@ -238,6 +277,7 @@ async def run_workspace_ingestion(
         "source_ids": source_ids,
         "retry_of_run_id": request.retry_of_run_id,
         "source_skipped_unimplemented": totals["source_skipped_unimplemented"],
+        "source_skipped_type_disabled": totals["source_skipped_type_disabled"],
     }
     session.flush()
     return run
@@ -344,6 +384,7 @@ async def run_historical_backfill(
         "source_succeeded": 0,
         "source_failed": 0,
         "source_skipped_unimplemented": 0,
+        "source_skipped_type_disabled": 0,
         "items_fetched": 0,
         "items_in_target_range": 0,
         "items_out_of_target_range": 0,
@@ -351,8 +392,27 @@ async def run_historical_backfill(
         "raw_created": 0,
         "raw_updated": 0,
     }
+    # 与常规抓取 run 一致：部署级允许清单在 run 内部过滤补采源。
+    active_sources, type_disabled_sources = _split_type_disabled_sources(sources)
+    for source in type_disabled_sources:
+        totals["source_skipped_type_disabled"] += 1
+        source_summaries.append(
+            {
+                "data_source_id": source.id,
+                "name": source.name,
+                "source_type": source.source_type,
+                "status": "skipped_type_disabled",
+                "error": _type_disabled_message(source.source_type),
+                "fetched": 0,
+                "in_target_range": 0,
+                "out_of_target_range": 0,
+                "missing_published_at": 0,
+                "created": 0,
+                "updated": 0,
+            },
+        )
     outcomes = await _fetch_backfill_sources(
-        sources=sources,
+        sources=active_sources,
         registry=registry,
         concurrency=concurrency,
         source_timeout_seconds=source_timeout_seconds,
@@ -410,7 +470,26 @@ async def run_historical_backfill(
             target_day_end=target_day_end,
             include_undated=request.include_undated,
         )
-        created, updated = upsert_raw_inputs(session, source, filtered_inputs, started_at)
+        try:
+            # 与常规 run 相同的 SAVEPOINT 级单源隔离
+            with session.begin_nested():
+                created, updated = upsert_raw_inputs(session, source, filtered_inputs, started_at)
+        except Exception as exc:  # noqa: BLE001
+            source.last_error = _fetch_error(exc)
+            totals["source_failed"] += 1
+            source_summaries.append(
+                {
+                    "data_source_id": source.id,
+                    "name": source.name,
+                    "source_type": source.source_type,
+                    "status": "failed",
+                    "error": _fetch_error(exc),
+                    "fetched": len(outcome.raw_inputs),
+                    "created": 0,
+                    "updated": 0,
+                },
+            )
+            continue
         totals["source_succeeded"] += 1
         totals["items_fetched"] += len(outcome.raw_inputs)
         totals["items_in_target_range"] += date_stats["in_target_range"]
@@ -444,6 +523,7 @@ async def run_historical_backfill(
         run.source_succeeded,
         run.source_failed,
         totals["source_skipped_unimplemented"],
+        totals["source_skipped_type_disabled"],
     )
     run.completed_at = utc_now()
     run.summary_json = {
@@ -458,6 +538,7 @@ async def run_historical_backfill(
         "include_undated": request.include_undated,
         "retry_of_run_id": request.retry_of_run_id,
         "source_skipped_unimplemented": totals["source_skipped_unimplemented"],
+        "source_skipped_type_disabled": totals["source_skipped_type_disabled"],
         "items_in_target_range": totals["items_in_target_range"],
         "items_out_of_target_range": totals["items_out_of_target_range"],
         "items_missing_published_at": totals["items_missing_published_at"],
@@ -743,6 +824,29 @@ def _normalize_source_types(source_types: list[str]) -> list[str]:
     return normalized or list(DEFAULT_INGESTION_SOURCE_TYPES)
 
 
+def _split_type_disabled_sources(
+    sources: list[DataSource],
+) -> tuple[list[DataSource], list[DataSource]]:
+    """按部署级 INGESTION_SOURCE_TYPES 允许清单拆分启用源。
+
+    空清单 = 全部允许（full 预设）。非空时（如 rss-only 预设），
+    不在清单的源不发起抓取，由调用方计入 run 摘要 skipped_type_disabled。
+    """
+    allowlist = get_settings().ingestion_source_type_allowlist
+    if not allowlist:
+        return list(sources), []
+    allowed = [source for source in sources if source.source_type in allowlist]
+    disabled = [source for source in sources if source.source_type not in allowlist]
+    return allowed, disabled
+
+
+def _type_disabled_message(source_type: str) -> str:
+    return (
+        f"source_type '{source_type}' is disabled by the INGESTION_SOURCE_TYPES "
+        "allowlist of this deployment preset"
+    )
+
+
 def _normalize_source_ids(source_ids: list[str] | None) -> list[str]:
     normalized: list[str] = []
     for source_id in source_ids or []:
@@ -907,13 +1011,17 @@ def _run_status(
     source_succeeded: int,
     source_failed: int,
     source_skipped_unimplemented: int = 0,
+    source_skipped_type_disabled: int = 0,
 ) -> str:
     if source_total == 0:
         return "no_sources"
+    skipped = source_skipped_unimplemented + source_skipped_type_disabled
     if source_succeeded > 0:
-        return "partial" if source_failed > 0 or source_skipped_unimplemented > 0 else "completed"
+        return "partial" if source_failed > 0 or skipped > 0 else "completed"
     if source_failed > 0:
         return "failed"
     if source_skipped_unimplemented > 0:
         return "skipped_unimplemented"
+    if source_skipped_type_disabled > 0:
+        return "skipped_type_disabled"
     return "completed"
