@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { CheckCircle2, ClipboardCheck, ListFilter, RefreshCw, Search, TriangleAlert, XCircle } from "lucide-vue-next";
+import { CheckCircle2, ClipboardCheck, ListFilter, Plus, RefreshCw, Search, TriangleAlert, XCircle } from "lucide-vue-next";
 import { computed, onMounted, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 
 import {
+  createRequirement,
   fetchHistoricalFeedbackItems,
   fetchHistoricalJobRuns,
   fetchLegacyImportGaps,
@@ -12,15 +14,20 @@ import {
   type LegacyImportGapItemRecord,
   type QualityArchiveSummaryRecord
 } from "../api/operations";
+import { useSessionStore } from "../stores/session";
 import { useWorkspaceStore } from "../stores/workspace";
 
+const route = useRoute();
 const workspace = useWorkspaceStore();
+const session = useSessionStore();
 const summary = ref<QualityArchiveSummaryRecord | null>(null);
 const feedbackItems = ref<HistoricalFeedbackItemRecord[]>([]);
 const jobRuns = ref<HistoricalJobRunRecord[]>([]);
 const gaps = ref<LegacyImportGapItemRecord[]>([]);
 const loading = ref(false);
+const savingFeedbackId = ref("");
 const error = ref("");
+const message = ref("");
 
 const feedbackFilters = ref({
   feedbackKind: "",
@@ -36,6 +43,13 @@ const feedbackTypeEntries = computed(() => topEntries(summary.value?.by_feedback
 const qualityReasonEntries = computed(() => topEntries(summary.value?.by_quality_reason));
 const jobTypeEntries = computed(() => topEntries(summary.value?.by_job_type));
 const jobStatusEntries = computed(() => topEntries(summary.value?.by_job_status));
+const pendingFeedbackId = computed(() => routeQueryString(route.query.feedback_id));
+const canCreateRequirement = computed(() => {
+  if (session.user?.roles.includes("super_admin")) {
+    return true;
+  }
+  return ["owner", "admin"].includes(workspace.current?.current_user_workspace_role ?? "");
+});
 
 async function loadArchive() {
   if (!workspace.currentCode) {
@@ -76,6 +90,14 @@ function topEntries(value: Record<string, number> | undefined, limit = 6) {
     .slice(0, limit);
 }
 
+function routeQueryString(value: unknown) {
+  return Array.isArray(value) ? String(value[0] ?? "") : String(value ?? "");
+}
+
+function isAnchoredFeedback(item: HistoricalFeedbackItemRecord) {
+  return pendingFeedbackId.value === item.id;
+}
+
 function formatDate(value: string | null) {
   if (!value) return "未记录";
   return new Date(value).toLocaleString("zh-CN", {
@@ -107,6 +129,29 @@ function jobStatusLabel(value: string) {
   return value || "unknown";
 }
 
+async function createRequirementFromFeedback(item: HistoricalFeedbackItemRecord) {
+  savingFeedbackId.value = item.id;
+  error.value = "";
+  message.value = "";
+  try {
+    const reasonText = item.reason || item.comment || item.feedback_type || item.legacy_id;
+    const created = await createRequirement({
+      workspace_code: item.workspace_code,
+      title: `复盘${feedbackKindLabel(item.feedback_kind)}：${reasonText}`,
+      description: `由历史质量归档触发。\n\n用户：${item.user_name || "unknown"}\n类型：${item.feedback_type || "未标注"}\n原因：${item.reason || "无"}\n评论：${item.comment || "无"}`,
+      priority: "medium",
+      status: "open",
+      source_historical_feedback_item_id: item.id,
+      source_note: `${feedbackKindLabel(item.feedback_kind)} ${item.legacy_id} 触发`
+    });
+    message.value = `已创建需求：${created.title}`;
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "从历史反馈创建需求失败";
+  } finally {
+    savingFeedbackId.value = "";
+  }
+}
+
 watch(() => workspace.currentCode, loadArchive);
 onMounted(loadArchive);
 </script>
@@ -126,6 +171,7 @@ onMounted(loadArchive);
     </header>
 
     <p v-if="error" class="form-error">{{ error }}</p>
+    <p v-if="message" class="form-success">{{ message }}</p>
 
     <section class="quality-summary-grid">
       <article class="module-card compact">
@@ -237,7 +283,13 @@ onMounted(loadArchive);
           </button>
         </div>
 
-        <article v-for="item in feedbackItems" :key="item.id" class="quality-row">
+        <article
+          v-for="item in feedbackItems"
+          :key="item.id"
+          class="quality-row"
+          :class="{ anchored: isAnchoredFeedback(item) }"
+          :aria-current="isAnchoredFeedback(item) ? 'true' : undefined"
+        >
           <div class="quality-row-icon" :class="{ danger: item.article_ref_resolved === false }">
             <TriangleAlert v-if="item.article_ref_resolved === false" :size="17" />
             <ClipboardCheck v-else :size="17" />
@@ -251,6 +303,16 @@ onMounted(loadArchive);
               <span :class="{ danger: item.article_ref_resolved === false }">{{ refLabel(item.article_ref_resolved) }}</span>
               <span>{{ formatDate(item.feedback_at) }}</span>
             </div>
+            <button
+              v-if="canCreateRequirement"
+              type="button"
+              class="mini-action"
+              :disabled="savingFeedbackId === item.id"
+              @click="createRequirementFromFeedback(item)"
+            >
+              <Plus :size="15" />
+              <span>{{ savingFeedbackId === item.id ? "创建中" : "转需求" }}</span>
+            </button>
           </div>
         </article>
 

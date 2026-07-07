@@ -11,33 +11,51 @@ import {
   SearchCheck
 } from "lucide-vue-next";
 import { computed, onMounted, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 
 import {
   createHistoricalBackfillRun,
   createIngestionRun,
+  fetchFailedSourceRetrySummary,
   fetchIngestionCoverage,
+  fetchIngestionCoverageTrends,
   fetchIngestionRun,
   fetchIngestionRuns,
   fetchSchedulerConfig,
+  previewManualImport,
+  retryFailedIngestionRun,
   type IngestionCoverageRecord,
   type IngestionCoverageSource,
+  type IngestionCoverageTrendsRecord,
+  type IngestionCoverageTrendPoint,
+  type IngestionFailedSourceRetrySummaryRecord,
   type IngestionRunRecord,
   type IngestionSourceSummary,
+  type ManualImportPreviewRecord,
   type SchedulerConfigRecord
 } from "../api/ingestion";
+import { fetchSources, type DataSourceRecord } from "../api/sources";
+import { useRuntimeStore } from "../stores/runtime";
 import { useWorkspaceStore } from "../stores/workspace";
 
 const workspace = useWorkspaceStore();
+const runtime = useRuntimeStore();
+const route = useRoute();
 const runs = ref<IngestionRunRecord[]>([]);
 const selectedRunId = ref("");
 const loading = ref(false);
 const creating = ref(false);
+const retrying = ref(false);
 const error = ref("");
 const message = ref("");
+const messageTone = ref<"success" | "info" | "warning">("success");
 const mode = ref<"ingestion" | "backfill">("ingestion");
 const coverage = ref<IngestionCoverageRecord | null>(null);
 const coverageLoading = ref(false);
 const coverageDayKey = ref(todayKey());
+const coverageTrends = ref<IngestionCoverageTrendsRecord | null>(null);
+const coverageTrendsLoading = ref(false);
+const failedSourceRetrySummary = ref<IngestionFailedSourceRetrySummaryRecord | null>(null);
 const normalSourceTypes = ref(["rss", "paper_rss"]);
 const backfillSourceTypes = ref(["rss", "paper_rss"]);
 const normalTypeOptions = [
@@ -67,14 +85,23 @@ function toggleNormalType(value: string) {
 
 function toggleBackfillType(value: string) {
   backfillSourceTypes.value = toggleTypeIn(backfillSourceTypes.value, value);
+  clearManualImportPreview();
 }
 const backfillMode = ref("rss_window");
-// 空 = 按当前工作台启用源全量抓取；0 = 只验收接口权限（不真实抓取）
+// 空 = 按当前工作台启用源全量抓取；0 不再允许，避免空跑被误判为成功。
 const normalLimit = ref<number | null>(null);
 const backfillLimit = ref<number | null>(null);
 const targetDayStart = ref(todayKey());
 const targetDayEnd = ref(todayKey());
 const includeUndated = ref(false);
+const manualSourceOptions = ref<DataSourceRecord[]>([]);
+const manualImportSourceId = ref("");
+const manualImportText = ref("");
+const manualImportError = ref("");
+const manualImportFilename = ref("");
+const manualImportFormat = ref<"auto" | "csv" | "sql">("auto");
+const manualImportPreview = ref<ManualImportPreviewRecord | null>(null);
+const previewingManualImport = ref(false);
 
 const selectedRun = computed(() => {
   return runs.value.find((run) => run.id === selectedRunId.value) ?? runs.value[0] ?? null;
@@ -100,6 +127,15 @@ const topCoverageSources = computed(() => {
 const failedSourceCount = computed(
   () => (coverage.value?.sources ?? []).filter((source) => source.run_status === "failed").length
 );
+const messageClass = computed(() => {
+  if (messageTone.value === "warning") {
+    return "form-warning";
+  }
+  if (messageTone.value === "info") {
+    return "form-info";
+  }
+  return "form-success";
+});
 
 function shortError(error: string) {
   const first = (error || "").split("\n")[0];
@@ -130,6 +166,16 @@ const coverageFunnel = computed(() => {
     ["采信成稿", funnel.daily_adopted]
   ];
 });
+const coverageTrendPoints = computed(() => coverageTrends.value?.points ?? []);
+const trendMaxRawCreated = computed(() => Math.max(1, ...coverageTrendPoints.value.map((point) => point.raw_created)));
+const trendMaxFailures = computed(() => Math.max(1, ...coverageTrendPoints.value.map((point) => point.source_failed)));
+const recentTrendSummary = computed(() => {
+  const trends = coverageTrends.value;
+  if (!trends) {
+    return "暂无趋势数据";
+  }
+  return `近 ${trends.days} 天 ${trends.total_runs} 次运行，新增 raw ${trends.total_raw_created}，失败源 ${trends.total_source_failed}，平均成功率 ${percent(trends.average_success_rate)}`;
+});
 const selectedRunTargetRange = computed(() => {
   const run = selectedRun.value;
   if (!run) {
@@ -151,15 +197,39 @@ async function loadRuns() {
   error.value = "";
   try {
     runs.value = await fetchIngestionRuns(workspace.currentCode, 60);
-    if (!runs.value.some((run) => run.id === selectedRunId.value)) {
+    const anchored = await applyRouteRunAnchor();
+    if (!anchored && !runs.value.some((run) => run.id === selectedRunId.value)) {
       selectedRunId.value = runs.value[0]?.id ?? "";
     }
     await loadCoverage();
+    await loadCoverageTrends();
   } catch (exc) {
     error.value = exc instanceof Error ? exc.message : "加载抓取运行失败";
   } finally {
     loading.value = false;
   }
+}
+
+async function applyRouteRunAnchor() {
+  const runId = routeRunId();
+  if (!runId) {
+    return false;
+  }
+  let run = runs.value.find((candidate) => candidate.id === runId);
+  if (!run) {
+    try {
+      const fetched = await fetchIngestionRun(runId);
+      if (fetched.workspace_code !== workspace.currentCode) {
+        return false;
+      }
+      runs.value = [fetched, ...runs.value.filter((candidate) => candidate.id !== fetched.id)];
+      run = fetched;
+    } catch {
+      return false;
+    }
+  }
+  selectedRunId.value = run.id;
+  return true;
 }
 
 async function selectRun(run: IngestionRunRecord) {
@@ -191,8 +261,25 @@ async function loadCoverage() {
   }
 }
 
+async function loadCoverageTrends() {
+  if (!workspace.currentCode) {
+    return;
+  }
+  coverageTrendsLoading.value = true;
+  try {
+    coverageTrends.value = await fetchIngestionCoverageTrends(workspace.currentCode, 14);
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "加载覆盖趋势失败";
+  } finally {
+    coverageTrendsLoading.value = false;
+  }
+}
+
 async function runIngestion() {
   if (!workspace.currentCode) {
+    return;
+  }
+  if (!(await canStartRun(normalSourceTypes.value, normalLimit.value))) {
     return;
   }
   creating.value = true;
@@ -204,7 +291,7 @@ async function runIngestion() {
       source_types: normalSourceTypes.value,
       limit: typeof normalLimit.value === "number" ? normalLimit.value : null
     });
-    message.value = `抓取运行已完成：尝试 ${run.source_total} 个源，成功 ${run.source_succeeded}，失败 ${run.source_failed}`;
+    setRunMessage(run, "抓取运行");
     await loadRuns();
     selectedRunId.value = run.id;
     await loadCoverage();
@@ -219,6 +306,24 @@ async function runBackfill() {
   if (!workspace.currentCode) {
     return;
   }
+  let manualItems: Record<string, unknown>[] = [];
+  if (backfillMode.value === "manual_import") {
+    await loadManualSourceOptions();
+  }
+  if (!(await canStartRun(backfillSourceTypes.value, backfillLimit.value))) {
+    return;
+  }
+  if (backfillMode.value === "manual_import") {
+    const preview = manualImportPreview.value;
+    if (!preview || preview.accepted_count <= 0) {
+      const warning = "请先预览手工导入，并确保至少有 1 条可导入记录。";
+      manualImportError.value = warning;
+      messageTone.value = "warning";
+      message.value = warning;
+      return;
+    }
+    manualItems = preview.accepted_items;
+  }
   creating.value = true;
   error.value = "";
   message.value = "";
@@ -230,9 +335,19 @@ async function runBackfill() {
       source_types: backfillSourceTypes.value,
       limit: typeof backfillLimit.value === "number" ? backfillLimit.value : null,
       include_undated: includeUndated.value,
-      backfill_mode: backfillMode.value
+      backfill_mode: backfillMode.value,
+      manual_items: backfillMode.value === "manual_import" ? manualItems : undefined
     });
-    message.value = `补采运行已完成：目标窗口 ${targetDayStart.value} 至 ${targetDayEnd.value}，入窗 ${summaryNumber(run, "items_in_target_range")}，新建 raw ${run.raw_created}`;
+    if (run.status === "no_sources") {
+      setRunMessage(run, "补采运行");
+    } else if (backfillMode.value === "manual_import") {
+      messageTone.value = "success";
+      message.value = `手工导入已完成：提交 ${manualItems.length} 条，入窗 ${summaryNumber(run, "items_in_target_range")}，新建 raw ${run.raw_created}`;
+      manualImportPreview.value = null;
+    } else {
+      messageTone.value = "success";
+      message.value = `补采运行已完成：目标窗口 ${targetDayStart.value} 至 ${targetDayEnd.value}，入窗 ${summaryNumber(run, "items_in_target_range")}，新建 raw ${run.raw_created}`;
+    }
     coverageDayKey.value = targetDayStart.value;
     await loadRuns();
     selectedRunId.value = run.id;
@@ -242,6 +357,182 @@ async function runBackfill() {
   } finally {
     creating.value = false;
   }
+}
+
+async function loadManualSourceOptions() {
+  if (!workspace.currentCode) {
+    manualSourceOptions.value = [];
+    return [];
+  }
+  const sources = await fetchSources(workspace.currentCode);
+  const enabled = enabledSourcesForTypes(sources, backfillSourceTypes.value);
+  manualSourceOptions.value = enabled;
+  if (!enabled.some((source) => source.id === manualImportSourceId.value)) {
+    manualImportSourceId.value = enabled.length === 1 ? enabled[0].id : "";
+  }
+  return enabled;
+}
+
+async function retryFailedSources() {
+  const run = selectedRun.value;
+  if (!run) {
+    return;
+  }
+  if (!runtime.canIngest) {
+    messageTone.value = "warning";
+    message.value = "当前部署形态为只读消费模式，不能在本地重试失败源。";
+    return;
+  }
+  retrying.value = true;
+  error.value = "";
+  message.value = "";
+  try {
+    const retryRun = await retryFailedIngestionRun(run.id);
+    setRunMessage(retryRun, "失败源重试");
+    await loadRuns();
+    selectedRunId.value = retryRun.id;
+    await loadCoverage();
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "重试失败源失败";
+  } finally {
+    retrying.value = false;
+  }
+}
+
+async function canStartRun(sourceTypes: string[], limit: number | null) {
+  if (!runtime.canIngest) {
+    messageTone.value = "warning";
+    message.value = "当前部署形态为只读消费模式，不能在本地发起抓取或补采。";
+    return false;
+  }
+  if (typeof limit === "number" && limit < 1) {
+    messageTone.value = "warning";
+    message.value = "本次运行源数上限必须为空或大于 0。空表示全部启用源。";
+    return false;
+  }
+  if (!workspace.currentCode) {
+    return false;
+  }
+  const allSources = await fetchSources(workspace.currentCode);
+  const enabled = enabledSourcesForTypes(allSources, sourceTypes);
+  if (enabled.length === 0) {
+    messageTone.value = "warning";
+    message.value = "当前工作台在所选源类型下没有启用源，请先到数据源管理启用或补入口。";
+    return false;
+  }
+  return true;
+}
+
+function enabledSourcesForTypes(sources: DataSourceRecord[], sourceTypes: string[]) {
+  return sources.filter(
+    (source) =>
+      source.enabled &&
+      source.workspace_link_enabled &&
+      sourceTypes.includes(source.source_type)
+  );
+}
+
+async function previewManualImportRows() {
+  manualImportError.value = "";
+  manualImportPreview.value = null;
+  if (!workspace.currentCode) {
+    return;
+  }
+  if (!manualImportText.value.trim()) {
+    const warning = "请上传或粘贴 CSV/SQL 内容后再预览。";
+    manualImportError.value = warning;
+    messageTone.value = "warning";
+    message.value = warning;
+    return;
+  }
+  previewingManualImport.value = true;
+  error.value = "";
+  try {
+    const preview = await previewManualImport({
+      workspace_code: workspace.currentCode,
+      source_types: backfillSourceTypes.value,
+      default_data_source_id: manualImportSourceId.value.trim(),
+      input_text: manualImportText.value,
+      input_format: manualImportFormat.value,
+      filename: manualImportFilename.value
+    });
+    manualImportPreview.value = preview;
+    if (preview.accepted_count > 0) {
+      messageTone.value = preview.rejected_count > 0 ? "info" : "success";
+      message.value = `手工导入预览完成：可导入 ${preview.accepted_count} 条，需修正 ${preview.rejected_count} 条。`;
+    } else {
+      const warning = "手工导入预览没有可导入记录，请下载错误报告并修正后重试。";
+      manualImportError.value = warning;
+      messageTone.value = "warning";
+      message.value = warning;
+    }
+  } catch (exc) {
+    const warning = exc instanceof Error ? exc.message : "手工导入预览失败";
+    manualImportError.value = warning;
+    messageTone.value = "warning";
+    message.value = warning;
+  } finally {
+    previewingManualImport.value = false;
+  }
+}
+
+async function handleManualImportFile(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) {
+    return;
+  }
+  manualImportFilename.value = file.name;
+  manualImportText.value = await file.text();
+  if (manualImportFormat.value === "auto") {
+    const lowerName = file.name.toLowerCase();
+    if (lowerName.endsWith(".sql")) {
+      manualImportFormat.value = "sql";
+    } else if (lowerName.endsWith(".csv")) {
+      manualImportFormat.value = "csv";
+    }
+  }
+  clearManualImportPreview();
+}
+
+function clearManualImportPreview() {
+  manualImportPreview.value = null;
+  manualImportError.value = "";
+}
+
+function downloadManualImportErrorReport() {
+  const report = manualImportPreview.value?.error_report_csv || "";
+  if (!report) {
+    return;
+  }
+  const blob = new Blob([report], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${manualImportFilename.value || "manual-import"}-error-report.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function setRunMessage(run: IngestionRunRecord, prefix: string) {
+  if (run.status === "no_sources") {
+    messageTone.value = "warning";
+    message.value = `${prefix}未执行：${String((run.summary_json ?? {}).hint || "没有匹配的启用源。")}`;
+    return;
+  }
+  const skipped = summaryNumber(run, "source_skipped_unimplemented");
+  if (run.status === "skipped_unimplemented" || skipped > 0) {
+    messageTone.value = run.items_fetched > 0 ? "info" : "warning";
+    message.value = `${prefix}包含 ${skipped || run.source_total} 个尚未实现的源类型：这些源未计入成功或失败，请查看每源明细。`;
+    return;
+  }
+  if (run.items_fetched === 0) {
+    messageTone.value = "info";
+    message.value = `${prefix}已完成但未返回条目：尝试 ${run.source_total} 个源，成功 ${run.source_succeeded}，失败 ${run.source_failed}。请查看每源明细和 RSS 窗口。`;
+    return;
+  }
+  messageTone.value = "success";
+  message.value = `${prefix}已完成：尝试 ${run.source_total} 个源，成功 ${run.source_succeeded}，失败 ${run.source_failed}`;
 }
 
 function replaceRun(updated: IngestionRunRecord) {
@@ -301,6 +592,18 @@ function coverageNumber(source: IngestionCoverageSource, key: keyof IngestionCov
   return typeof value === "number" ? value : 0;
 }
 
+function trendRawHeight(point: IngestionCoverageTrendPoint) {
+  return `${Math.max(4, Math.round((point.raw_created / trendMaxRawCreated.value) * 100))}%`;
+}
+
+function trendFailureHeight(point: IngestionCoverageTrendPoint) {
+  return `${Math.max(3, Math.round((point.source_failed / trendMaxFailures.value) * 100))}%`;
+}
+
+function percent(value: number) {
+  return `${Math.round((value || 0) * 100)}%`;
+}
+
 function runTypeLabel(runType: string) {
   return runType === "historical_backfill" ? "历史补采" : "常规抓取";
 }
@@ -309,8 +612,17 @@ function runStatusLabel(status: string) {
   if (status === "completed") {
     return "完成";
   }
+  if (status === "partial") {
+    return "部分完成";
+  }
   if (status === "failed") {
     return "失败";
+  }
+  if (status === "no_sources") {
+    return "无可用源";
+  }
+  if (status === "skipped_unimplemented") {
+    return "源类型未实现";
   }
   return status;
 }
@@ -324,6 +636,9 @@ function sourceStatusLabel(status?: string) {
   }
   if (status === "skipped") {
     return "跳过";
+  }
+  if (status === "skipped_unimplemented") {
+    return "尚未实现";
   }
   if (status === "not_run") {
     return "未运行";
@@ -350,12 +665,29 @@ function todayKey() {
   }).format(new Date());
 }
 
+function routeRunId() {
+  const value = route.query.run_id;
+  return typeof value === "string" ? value : "";
+}
+
 watch(
   () => workspace.currentCode,
   () => {
     runs.value = [];
     selectedRunId.value = "";
+    clearManualImportPreview();
     void loadRuns();
+    void loadCoverageTrends();
+    void loadFailedSourceRetrySummary();
+  }
+);
+
+watch(
+  () => route.query.run_id,
+  async () => {
+    if (await applyRouteRunAnchor()) {
+      await loadCoverage();
+    }
   }
 );
 
@@ -363,15 +695,48 @@ watch(coverageDayKey, () => {
   void loadCoverage();
 });
 
+watch(
+  [backfillMode, backfillSourceTypes],
+  () => {
+    if (backfillMode.value === "manual_import") {
+      void loadManualSourceOptions();
+    }
+    clearManualImportPreview();
+  },
+  { deep: true }
+);
+
 const schedulerConfig = ref<SchedulerConfigRecord | null>(null);
 
 async function loadSchedulerConfig() {
   schedulerConfig.value = await fetchSchedulerConfig().catch(() => null);
 }
 
+async function loadFailedSourceRetrySummary() {
+  if (!workspace.currentCode) {
+    failedSourceRetrySummary.value = null;
+    return;
+  }
+  failedSourceRetrySummary.value = await fetchFailedSourceRetrySummary(workspace.currentCode).catch(() => null);
+}
+
+function retryPolicyLine() {
+  const summary = failedSourceRetrySummary.value;
+  const policy = summary?.policy ?? {};
+  const enabled = Boolean(policy.enabled ?? schedulerConfig.value?.failed_source_auto_retry_enabled);
+  const attempts = policy.max_attempts ?? schedulerConfig.value?.failed_source_retry_max_attempts ?? 0;
+  const limit = policy.limit ?? schedulerConfig.value?.failed_source_retry_limit ?? 0;
+  if (!summary) {
+    return "状态未知";
+  }
+  return `${enabled ? "已开启" : "未开启"} · 到期 ${summary.due_count} · 阻塞 ${summary.blocked_count} · 上限 ${attempts} 次 / ${limit} run`;
+}
+
 onMounted(() => {
   void loadRuns();
   void loadSchedulerConfig();
+  void loadCoverageTrends();
+  void loadFailedSourceRetrySummary();
 });
 </script>
 
@@ -389,7 +754,7 @@ onMounted(() => {
           <span>刷新</span>
         </button>
         <button
-          v-if="mode === 'ingestion'"
+          v-if="runtime.canIngest && mode === 'ingestion'"
           type="button"
           class="icon-button"
           :disabled="creating"
@@ -398,7 +763,7 @@ onMounted(() => {
           <PlayCircle :size="17" />
           <span>{{ creating ? "运行中" : "运行抓取" }}</span>
         </button>
-        <button v-else type="button" class="icon-button" :disabled="creating" @click="runBackfill">
+        <button v-else-if="runtime.canIngest" type="button" class="icon-button" :disabled="creating" @click="runBackfill">
           <SearchCheck :size="17" />
           <span>{{ creating ? "补采中" : "运行补采" }}</span>
         </button>
@@ -406,7 +771,7 @@ onMounted(() => {
     </header>
 
     <p v-if="error" class="form-error">{{ error }}</p>
-    <p v-if="message" class="form-success">{{ message }}</p>
+    <p v-if="message" :class="messageClass">{{ message }}</p>
 
     <section class="module-card compact ingestion-command">
       <div class="policy-tabs ingestion-tabs">
@@ -435,9 +800,9 @@ onMounted(() => {
         </div>
         <label>
           本次运行源数上限
-          <input v-model.number="normalLimit" type="number" min="0" placeholder="空 = 全部启用源" />
+          <input v-model.number="normalLimit" type="number" min="1" placeholder="空 = 全部启用源" />
         </label>
-        <p class="muted-line">留空按当前工作台全部启用源真实抓取；填 0 只验收接口和权限（不触发外网抓取）。自动定时抓取见下方「自动调度」卡片。</p>
+        <p class="muted-line">留空按当前工作台全部启用源真实抓取；源数上限必须大于 0。自动定时抓取见下方「自动调度」卡片。</p>
       </div>
 
       <div v-else class="run-command backfill-command">
@@ -481,14 +846,73 @@ onMounted(() => {
         </div>
         <label>
           本次运行源数上限
-          <input v-model.number="backfillLimit" type="number" min="0" placeholder="空 = 全部启用源" />
+          <input v-model.number="backfillLimit" type="number" min="1" placeholder="空 = 全部启用源" />
         </label>
+        <template v-if="backfillMode === 'manual_import'">
+          <label>
+            手工条目归属源
+            <select v-model="manualImportSourceId" @focus="loadManualSourceOptions" @change="clearManualImportPreview">
+              <option value="">选择已启用数据源</option>
+              <option v-for="source in manualSourceOptions" :key="source.id" :value="source.id">
+                {{ source.name }} · {{ source.source_type }}
+              </option>
+            </select>
+          </label>
+          <label>
+            导入格式
+            <select v-model="manualImportFormat" @change="clearManualImportPreview">
+              <option value="auto">自动识别</option>
+              <option value="csv">CSV</option>
+              <option value="sql">SQL INSERT</option>
+            </select>
+          </label>
+          <label>
+            上传文件
+            <input type="file" accept=".csv,.sql,.txt,text/csv,text/plain" @change="handleManualImportFile" />
+          </label>
+          <label class="manual-import-field">
+            CSV / SQL / 粘贴条目
+            <textarea
+              v-model="manualImportText"
+              rows="5"
+              @input="clearManualImportPreview"
+              placeholder="source_title,source_url,raw_content,published_at&#10;示例新闻,https://example.com/news,正文,2026-07-05T09:00:00Z"
+            />
+          </label>
+          <div class="inline-actions">
+            <button type="button" class="mini-action active" :disabled="previewingManualImport" @click="previewManualImportRows">
+              <SearchCheck :size="15" />
+              <span>{{ previewingManualImport ? "预览中" : "预览导入" }}</span>
+            </button>
+            <button
+              v-if="manualImportPreview?.error_report_csv"
+              type="button"
+              class="mini-action"
+              @click="downloadManualImportErrorReport"
+            >
+              下载错误报告
+            </button>
+          </div>
+          <div v-if="manualImportPreview" class="manual-preview-summary">
+            <strong>预览结果：可导入 {{ manualImportPreview.accepted_count }} 条，需修正 {{ manualImportPreview.rejected_count }} 条</strong>
+            <p>{{ manualImportPreview.filename || "粘贴内容" }} · {{ manualImportPreview.input_format }} · 共 {{ manualImportPreview.total_rows }} 行</p>
+            <ul v-if="manualImportPreview.errors.length">
+              <li v-for="item in manualImportPreview.errors.slice(0, 3)" :key="`${item.row_number}-${item.code}`">
+                第 {{ item.row_number }} 行：{{ item.message }}
+              </li>
+            </ul>
+          </div>
+          <p v-if="manualImportError" class="form-warning">{{ manualImportError }}</p>
+          <p class="muted-line">
+            CSV 第一行必须是表头；SQL v1 只支持带列名的 INSERT ... VALUES。支持 data_source_id/source_id、source_title/title、source_url/url、raw_content/content/summary、published_at、entry_key。未提供 data_source_id 时使用上方归属源。
+          </p>
+        </template>
         <label class="switch-row">
           <input v-model="includeUndated" type="checkbox" />
           纳入无发布日期条目
         </label>
         <p class="muted-line">
-          rss_window 只能补回当前 feed 窗口中仍存在的历史条目；sitemap/归档页依赖数据源 fetch_config 中配置的 sitemap_url、archive_url 或 page_url；manual_import 预留后端入口，当前页面暂不上传文件。
+          rss_window 只能补回当前 feed 窗口中仍存在的历史条目；sitemap/归档页依赖数据源 fetch_config 中配置的 sitemap_url、archive_url 或 page_url；manual_import 会把粘贴条目写入 raw_items 并保留原始 payload。
         </p>
       </div>
     </section>
@@ -508,6 +932,12 @@ onMounted(() => {
         <span>模式：{{ schedulerConfig.job_mode === "daily_pipeline" ? "抓取→去重→推荐→日报全链路" : "仅抓取" }}</span>
         <span>目标日偏移：{{ schedulerConfig.day_offset_days }} 天</span>
         <span>单源上限：{{ schedulerConfig.max_items_per_source ?? "不限" }}</span>
+        <span>失败源自动重试：{{ retryPolicyLine() }}</span>
+      </div>
+      <div v-if="failedSourceRetrySummary?.runs.length" class="coverage-strip">
+        <span v-for="run in failedSourceRetrySummary.runs.slice(0, 3)" :key="run.run_id">
+          {{ run.due ? "到期" : run.blocked ? "阻塞" : "等待" }} · {{ run.failed_source_count }} 源 · {{ run.run_key }}
+        </span>
       </div>
       <p class="muted-line">{{ schedulerConfig?.config_hint || "固定抓取时间通过部署 env 的 INGESTION_SCHEDULER_* 配置，改后重启 scheduler 服务生效。" }}</p>
     </section>
@@ -546,6 +976,41 @@ onMounted(() => {
         </div>
       </template>
       <p v-else class="empty-state compact">选择工作台和日期后查看覆盖漏斗。</p>
+    </section>
+
+    <section class="module-card compact coverage-trends" aria-label="近14日覆盖趋势">
+      <div class="card-title-row">
+        <div>
+          <p class="eyebrow">Coverage Trend</p>
+          <h3>近 14 日覆盖趋势</h3>
+          <p class="muted-line">{{ recentTrendSummary }}</p>
+        </div>
+        <span class="metric-pill">{{ percent(coverageTrends?.average_success_rate ?? 0) }} 成功率</span>
+      </div>
+      <div v-if="coverageTrendsLoading" class="empty-state compact">覆盖趋势加载中...</div>
+      <template v-else-if="coverageTrends">
+        <div class="coverage-trend-bars" role="list" aria-label="每日 raw 新增和失败源趋势">
+          <article v-for="point in coverageTrendPoints" :key="point.day_key" role="listitem" class="coverage-trend-day">
+            <div class="coverage-trend-columns">
+              <span class="coverage-trend-bar raw" :style="{ height: trendRawHeight(point) }" :title="`raw 新增 ${point.raw_created}`" />
+              <span class="coverage-trend-bar failed" :style="{ height: trendFailureHeight(point) }" :title="`失败源 ${point.source_failed}`" />
+            </div>
+            <strong>{{ point.raw_created }}</strong>
+            <span>{{ point.day_key.slice(5) }}</span>
+          </article>
+        </div>
+        <div v-if="coverageTrends.top_failed_sources.length" class="coverage-failure-list">
+          <article v-for="source in coverageTrends.top_failed_sources.slice(0, 4)" :key="source.data_source_id">
+            <div>
+              <strong>{{ source.name }}</strong>
+              <span>{{ source.source_type }} · {{ source.failure_count }} 次失败</span>
+            </div>
+            <p>{{ shortError(source.last_error) || "无错误摘要" }}</p>
+          </article>
+        </div>
+        <p v-else class="empty-state compact">近 14 日没有失败源记录。</p>
+      </template>
+      <p v-else class="empty-state compact">暂无趋势数据。</p>
     </section>
 
     <div v-if="latestRun" class="module-stats">
@@ -605,6 +1070,16 @@ onMounted(() => {
             <span v-if="selectedRun.run_type === 'historical_backfill'">
               入窗 {{ summaryNumber(selectedRun, "items_in_target_range") }}
             </span>
+            <button
+              v-if="runtime.canIngest && selectedRun.source_failed > 0"
+              type="button"
+              class="icon-button compact"
+              :disabled="retrying"
+              @click="retryFailedSources"
+            >
+              <RefreshCw :size="15" />
+              <span>{{ retrying ? "重试中" : `重试失败源 ${selectedRun.source_failed}` }}</span>
+            </button>
           </div>
         </div>
         <div v-if="!selectedRun" class="empty-state">选择一次运行查看每源覆盖详情。</div>
@@ -631,7 +1106,10 @@ onMounted(() => {
               v-for="source in topCoverageSources"
               :key="source.data_source_id"
               class="source-coverage-row"
-              :class="{ failed: source.run_status === 'failed' }"
+              :class="{
+                failed: source.run_status === 'failed',
+                skipped: source.run_status === 'skipped_unimplemented'
+              }"
             >
               <div class="feed-icon" :class="{ indigo: source.run_status === 'succeeded' || source.run_status === 'completed' }">
                 <Rss v-if="source.source_type === 'rss' || source.source_type === 'paper_rss'" :size="18" />
@@ -643,7 +1121,13 @@ onMounted(() => {
                     <h3>{{ source.name || "未命名数据源" }}</h3>
                     <p class="muted-line">{{ source.source_type || "unknown" }}</p>
                   </div>
-                  <span class="status-on" :class="{ failed: source.run_status === 'failed' }">
+                  <span
+                    class="status-on"
+                    :class="{
+                      failed: source.run_status === 'failed',
+                      skipped: source.run_status === 'skipped_unimplemented'
+                    }"
+                  >
                     {{ sourceStatusLabel(source.run_status) }}
                   </span>
                 </div>
@@ -666,7 +1150,7 @@ onMounted(() => {
               </div>
               <CheckCircle2 v-if="source.run_status === 'succeeded' || source.run_status === 'completed'" :size="18" />
             </article>
-            <p v-if="topCoverageSources.length === 0" class="empty-state">这次运行没有每源明细，可能是 limit=0 或旧运行记录。</p>
+            <p v-if="topCoverageSources.length === 0" class="empty-state">这次运行没有每源明细，可能是没有匹配启用源或旧运行记录。</p>
           </div>
         </template>
       </article>

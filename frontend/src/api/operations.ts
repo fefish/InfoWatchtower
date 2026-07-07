@@ -1,3 +1,24 @@
+import { requestBlob, requestJson } from "./http";
+
+export interface RequirementSourceLinkRecord {
+  id: string;
+  link_type: string;
+  note: string;
+  insight_id: string | null;
+  daily_report_item_id: string | null;
+  weekly_report_item_id: string | null;
+  entity_milestone_id: string | null;
+  historical_report_id: string | null;
+  historical_feedback_item_id: string | null;
+  news_item_id: string | null;
+  raw_item_id: string | null;
+  source_object_type: string;
+  source_title: string;
+  source_url: string | null;
+  data_source_name: string | null;
+  created_at: string;
+}
+
 export interface RequirementRecord {
   id: string;
   workspace_code: string;
@@ -10,10 +31,84 @@ export interface RequirementRecord {
   owner_user_id: string | null;
   owner_name: string | null;
   source_count: number;
+  source_links: RequirementSourceLinkRecord[];
   task_count: number;
   metadata_json: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+}
+
+export interface InsightRecord {
+  id: string;
+  workspace_code: string;
+  domain_code: string;
+  news_item_id: string;
+  raw_item_id: string | null;
+  title: string;
+  summary: string;
+  insight_type: string;
+  status: string;
+  source_report_type: string;
+  source_report_id: string | null;
+  source_report_item_id: string | null;
+  source_title: string;
+  source_url: string | null;
+  data_source_name: string | null;
+  implication_count: number;
+  confidence_score: number;
+  metadata_json: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InsightCreatePayload {
+  workspace_code: string;
+  domain_code?: string;
+  news_item_id: string;
+  raw_item_id?: string | null;
+  title: string;
+  summary?: string;
+  insight_type?: string;
+  status?: string;
+  source_report_type?: string;
+  source_report_id?: string | null;
+  source_report_item_id?: string | null;
+  confidence_score?: number;
+}
+
+export interface InsightUpdatePayload {
+  title?: string;
+  summary?: string;
+  insight_type?: string;
+  status?: string;
+  confidence_score?: number;
+}
+
+export interface StrategicImplicationRecord {
+  id: string;
+  workspace_code: string;
+  domain_code: string;
+  insight_id: string;
+  insight_title: string | null;
+  title: string;
+  description: string;
+  implication_type: string;
+  metadata_json: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface StrategicImplicationCreatePayload {
+  insight_id: string;
+  title: string;
+  description?: string;
+  implication_type?: string;
+}
+
+export interface StrategicImplicationUpdatePayload {
+  title?: string;
+  description?: string;
+  implication_type?: string;
 }
 
 export interface RequirementCreatePayload {
@@ -24,6 +119,16 @@ export interface RequirementCreatePayload {
   priority?: string;
   status?: string;
   due_at?: string | null;
+  owner_user_id?: string | null;
+  source_daily_report_item_id?: string | null;
+  source_weekly_report_item_id?: string | null;
+  source_entity_milestone_id?: string | null;
+  source_historical_report_id?: string | null;
+  source_historical_feedback_item_id?: string | null;
+  source_news_item_id?: string | null;
+  source_raw_item_id?: string | null;
+  source_insight_id?: string | null;
+  source_note?: string;
 }
 
 export interface RequirementUpdatePayload {
@@ -32,6 +137,8 @@ export interface RequirementUpdatePayload {
   priority?: string;
   status?: string;
   due_at?: string | null;
+  owner_user_id?: string | null;
+  metadata_json?: Record<string, unknown> | null;
 }
 
 export interface TopicTaskRecord {
@@ -44,8 +151,12 @@ export interface TopicTaskRecord {
   description: string;
   status: string;
   due_at: string | null;
+  is_overdue: boolean;
+  blocked_reason: string;
   assignee_user_id: string | null;
   assignee_name: string | null;
+  requirement_source_count: number;
+  requirement_source_links: RequirementSourceLinkRecord[];
   metadata_json: Record<string, unknown>;
   created_at: string;
   updated_at: string;
@@ -59,6 +170,7 @@ export interface TopicTaskCreatePayload {
   description?: string;
   status?: string;
   due_at?: string | null;
+  assignee_user_id?: string | null;
 }
 
 export interface TopicTaskUpdatePayload {
@@ -67,6 +179,27 @@ export interface TopicTaskUpdatePayload {
   description?: string;
   status?: string;
   due_at?: string | null;
+  assignee_user_id?: string | null;
+  metadata_json?: Record<string, unknown> | null;
+}
+
+export interface TopicTaskBatchUpdatePayload {
+  workspace_code: string;
+  task_ids: string[];
+  status?: string | null;
+  blocked_reason?: string | null;
+}
+
+export interface TopicTaskBatchUpdateResult {
+  updated_count: number;
+  tasks: TopicTaskRecord[];
+}
+
+export interface TopicTaskFilters {
+  status?: string;
+  assigneeUserId?: string;
+  assignedToMe?: boolean;
+  due?: "overdue" | "due_today";
 }
 
 export interface SyncRunRecord {
@@ -82,16 +215,115 @@ export interface SyncRunRecord {
   created_at: string;
 }
 
+export type SyncHealthStatus = "ok" | "warning" | "critical" | "inactive";
+
+export interface SyncHealthAlertRecord {
+  severity: "warning" | "critical";
+  code: string;
+  message: string;
+  object_type: string | null;
+}
+
+export interface SyncCursorHealthRecord {
+  object_type: string;
+  cursor: string;
+  last_pulled_at: string | null;
+  last_status: string;
+  last_error: string;
+  age_seconds: number | null;
+  status: SyncHealthStatus;
+  warnings: string[];
+}
+
+export interface SyncHealthRecord {
+  status: SyncHealthStatus;
+  generated_at: string;
+  sync_role: string;
+  summary: string;
+  thresholds: {
+    warning_after_seconds: number;
+    critical_after_seconds: number;
+    pull_interval_seconds: number;
+  };
+  cursor_count: number;
+  missing_cursor_count: number;
+  stale_cursor_count: number;
+  failed_cursor_count: number;
+  failed_inbox_count: number;
+  failed_inbox_by_object_type: Record<string, number>;
+  failed_inbox_retry_due_count: number;
+  failed_inbox_retry_blocked_count: number;
+  failed_inbox_next_retry_at: string | null;
+  failed_inbox_retry_policy: {
+    enabled?: boolean;
+    base_delay_seconds?: number;
+    max_delay_seconds?: number;
+    max_attempts?: number;
+    limit?: number;
+    [key: string]: unknown;
+  };
+  open_conflict_count: number;
+  recent_failed_run_count: number;
+  last_run: SyncRunRecord | null;
+  cursors: SyncCursorHealthRecord[];
+  alerts: SyncHealthAlertRecord[];
+}
+
 export interface SyncPackageExportRecord {
   sync_run: SyncRunRecord;
   package_manifest: Record<string, unknown>;
   records: Record<string, unknown>[];
 }
 
+export interface SyncConflictRecord {
+  id: string;
+  sync_run_id: string;
+  package_id: string | null;
+  source_instance_id: string | null;
+  target_instance_id: string | null;
+  direction: string | null;
+  object_type: string;
+  object_id: string;
+  local_revision: number;
+  incoming_revision: number;
+  field_name: string;
+  local_value_json: Record<string, unknown>;
+  incoming_value_json: Record<string, unknown>;
+  conflict_reason: string;
+  status: string;
+  resolution_json: Record<string, unknown>;
+  resolved_by_user_id: string | null;
+  resolved_by_name: string | null;
+  resolved_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type SyncConflictResolveStrategy =
+  | "keep_local"
+  | "ignored"
+  | "retry_after_dependency"
+  | "use_incoming"
+  | "manual_merge";
+
+export interface SyncConflictResolvePayload {
+  strategy: SyncConflictResolveStrategy;
+  reason?: string;
+  merged_json?: Record<string, unknown> | null;
+}
+
+export interface SyncConflictFilters {
+  status?: "open" | "resolved" | "ignored" | "retry_after_dependency" | "all";
+  objectType?: string;
+  syncRunId?: string;
+  limit?: number;
+}
+
 export interface AuditLogRecord {
   id: string;
   user_id: string | null;
   user_name: string | null;
+  workspace_code: string;
   action: string;
   object_type: string;
   object_id: string;
@@ -229,6 +461,7 @@ export interface EntityMilestoneListItem {
   source_name: string;
   board: string;
   selected_for_timeline: boolean;
+  curation_status: string;
   importance_score: number;
   importance_level: string;
   article_ref_resolved: boolean | null;
@@ -246,6 +479,27 @@ export interface EntityMilestoneDetailRecord extends EntityMilestoneListItem {
   event_dedupe_key: string;
   legacy_refs: Record<string, unknown>;
   metadata_json: Record<string, unknown>;
+}
+
+export interface EntityMilestoneUpdatePayload {
+  event_title?: string | null;
+  event_type?: string | null;
+  event_time?: string | null;
+  event_brief?: string | null;
+  event_content?: string | null;
+  impact_brief?: string | null;
+  impact?: string | null;
+  timeline_brief?: string | null;
+  source_url?: string | null;
+  source_name?: string | null;
+  board?: string | null;
+  selected_for_timeline?: boolean | null;
+  importance_level?: string | null;
+  importance_score?: number | null;
+  confidence_score?: number | null;
+  curation_status?: string | null;
+  curation_note?: string | null;
+  metadata_json?: Record<string, unknown> | null;
 }
 
 export interface QualityArchiveSummaryRecord {
@@ -361,23 +615,6 @@ export interface HistoricalJobRunFilters {
   limit?: number;
 }
 
-async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    credentials: "same-origin",
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {})
-    },
-    ...init
-  });
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    const detail = typeof body.detail === "string" ? body.detail : `HTTP ${response.status}`;
-    throw new Error(detail);
-  }
-  return response.json() as Promise<T>;
-}
-
 function requireWorkspaceCode(workspaceCode: string | undefined): string {
   if (!workspaceCode) {
     throw new Error("workspace_code is required");
@@ -388,6 +625,64 @@ function requireWorkspaceCode(workspaceCode: string | undefined): string {
 export async function fetchRequirements(workspaceCode: string): Promise<RequirementRecord[]> {
   const params = new URLSearchParams({ workspace_code: workspaceCode });
   return requestJson<RequirementRecord[]>(`/api/requirements?${params.toString()}`);
+}
+
+export async function fetchInsights(
+  workspaceCode: string,
+  filters: { status?: string; q?: string } = {}
+): Promise<InsightRecord[]> {
+  const params = new URLSearchParams({ workspace_code: workspaceCode });
+  if (filters.status) {
+    params.set("status", filters.status);
+  }
+  if (filters.q) {
+    params.set("q", filters.q);
+  }
+  return requestJson<InsightRecord[]>(`/api/insights?${params.toString()}`);
+}
+
+export async function createInsight(payload: InsightCreatePayload): Promise<InsightRecord> {
+  return requestJson<InsightRecord>("/api/insights", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function updateInsight(id: string, payload: InsightUpdatePayload): Promise<InsightRecord> {
+  return requestJson<InsightRecord>(`/api/insights/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function fetchStrategicImplications(
+  workspaceCode: string,
+  insightId?: string
+): Promise<StrategicImplicationRecord[]> {
+  const params = new URLSearchParams({ workspace_code: workspaceCode });
+  if (insightId) {
+    params.set("insight_id", insightId);
+  }
+  return requestJson<StrategicImplicationRecord[]>(`/api/strategic-implications?${params.toString()}`);
+}
+
+export async function createStrategicImplication(
+  payload: StrategicImplicationCreatePayload
+): Promise<StrategicImplicationRecord> {
+  return requestJson<StrategicImplicationRecord>("/api/strategic-implications", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function updateStrategicImplication(
+  id: string,
+  payload: StrategicImplicationUpdatePayload
+): Promise<StrategicImplicationRecord> {
+  return requestJson<StrategicImplicationRecord>(`/api/strategic-implications/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
 }
 
 export async function createRequirement(payload: RequirementCreatePayload): Promise<RequirementRecord> {
@@ -407,9 +702,28 @@ export async function updateRequirement(
   });
 }
 
-export async function fetchTopicTasks(workspaceCode: string): Promise<TopicTaskRecord[]> {
+export async function fetchTopicTasks(
+  workspaceCode: string,
+  filters: TopicTaskFilters = {}
+): Promise<TopicTaskRecord[]> {
   const params = new URLSearchParams({ workspace_code: workspaceCode });
+  if (filters.status) {
+    params.set("status", filters.status);
+  }
+  if (filters.assigneeUserId) {
+    params.set("assignee_user_id", filters.assigneeUserId);
+  }
+  if (filters.assignedToMe) {
+    params.set("assigned_to_me", "true");
+  }
+  if (filters.due) {
+    params.set("due", filters.due);
+  }
   return requestJson<TopicTaskRecord[]>(`/api/topic-tasks?${params.toString()}`);
+}
+
+export async function fetchTopicTask(id: string): Promise<TopicTaskRecord> {
+  return requestJson<TopicTaskRecord>(`/api/topic-tasks/${id}`);
 }
 
 export async function createTopicTask(payload: TopicTaskCreatePayload): Promise<TopicTaskRecord> {
@@ -426,8 +740,19 @@ export async function updateTopicTask(id: string, payload: TopicTaskUpdatePayloa
   });
 }
 
+export async function batchUpdateTopicTasks(payload: TopicTaskBatchUpdatePayload): Promise<TopicTaskBatchUpdateResult> {
+  return requestJson<TopicTaskBatchUpdateResult>("/api/topic-tasks/batch", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
 export async function fetchSyncRuns(): Promise<SyncRunRecord[]> {
   return requestJson<SyncRunRecord[]>("/api/sync-runs");
+}
+
+export async function fetchSyncHealth(): Promise<SyncHealthRecord> {
+  return requestJson<SyncHealthRecord>("/api/sync/health");
 }
 
 export async function createSyncRun(): Promise<SyncRunRecord> {
@@ -438,20 +763,65 @@ export async function createSyncRun(): Promise<SyncRunRecord> {
   return result.sync_run;
 }
 
-export async function fetchSyncPackageDownload(packageId: string): Promise<Blob> {
-  const response = await fetch(`/api/sync/packages/${encodeURIComponent(packageId)}/download`, {
-    credentials: "same-origin"
+export async function createSyncPullRun(): Promise<SyncRunRecord> {
+  return requestJson<SyncRunRecord>("/api/sync/pull-runs", {
+    method: "POST"
   });
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    const detail = typeof body.detail === "string" ? body.detail : `HTTP ${response.status}`;
-    throw new Error(detail);
-  }
-  return response.blob();
 }
 
-export async function fetchAuditLogs(): Promise<AuditLogRecord[]> {
-  return requestJson<AuditLogRecord[]>("/api/audit-logs");
+export async function retryFailedSyncInbox(): Promise<SyncRunRecord> {
+  return requestJson<SyncRunRecord>("/api/sync/inbox/retry-failed", {
+    method: "POST"
+  });
+}
+
+export async function fetchSyncPackageDownload(packageId: string): Promise<Blob> {
+  return requestBlob(`/api/sync/packages/${encodeURIComponent(packageId)}/download`);
+}
+
+export async function fetchSyncConflicts(filters: SyncConflictFilters = {}): Promise<SyncConflictRecord[]> {
+  const params = new URLSearchParams({
+    status: filters.status ?? "open",
+    limit: String(filters.limit ?? 50)
+  });
+  if (filters.objectType) params.set("object_type", filters.objectType);
+  if (filters.syncRunId) params.set("sync_run_id", filters.syncRunId);
+  return requestJson<SyncConflictRecord[]>(`/api/sync/conflicts?${params.toString()}`);
+}
+
+export async function resolveSyncConflict(
+  id: string,
+  payload: SyncConflictResolvePayload
+): Promise<SyncConflictRecord> {
+  return requestJson<SyncConflictRecord>(`/api/sync/conflicts/${id}/resolve`, {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export interface AuditLogFilters {
+  workspaceCode?: string;
+  action?: string;
+  objectType?: string;
+  limit?: number;
+}
+
+export async function fetchAuditLogs(filters: AuditLogFilters = {}): Promise<AuditLogRecord[]> {
+  const params = new URLSearchParams();
+  if (filters.workspaceCode) {
+    params.set("workspace_code", filters.workspaceCode);
+  }
+  if (filters.action) {
+    params.set("action", filters.action);
+  }
+  if (filters.objectType) {
+    params.set("object_type", filters.objectType);
+  }
+  if (filters.limit) {
+    params.set("limit", String(filters.limit));
+  }
+  const query = params.toString();
+  return requestJson<AuditLogRecord[]>(query ? `/api/audit-logs?${query}` : "/api/audit-logs");
 }
 
 export async function fetchHistoricalReportSummary(workspaceCode: string): Promise<HistoricalReportSummaryRecord> {
@@ -538,6 +908,16 @@ export async function fetchEntityMilestones(
 
 export async function fetchEntityMilestoneDetail(id: string): Promise<EntityMilestoneDetailRecord> {
   return requestJson<EntityMilestoneDetailRecord>(`/api/entity-milestones/${id}`);
+}
+
+export async function updateEntityMilestone(
+  id: string,
+  payload: EntityMilestoneUpdatePayload
+): Promise<EntityMilestoneDetailRecord> {
+  return requestJson<EntityMilestoneDetailRecord>(`/api/entity-milestones/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
 }
 
 export async function fetchQualityArchiveSummary(workspaceCode: string): Promise<QualityArchiveSummaryRecord> {

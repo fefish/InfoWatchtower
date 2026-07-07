@@ -1,4 +1,4 @@
-import { createRouter, createWebHistory } from "vue-router";
+import { createRouter, createWebHistory, type Router, type RouterHistory, type RouteRecordRaw } from "vue-router";
 
 import AccountPage from "../pages/AccountPage.vue";
 import AppShell from "../layouts/AppShell.vue";
@@ -10,9 +10,11 @@ import EntityMilestonesPage from "../pages/EntityMilestonesPage.vue";
 import ExportsPage from "../pages/ExportsPage.vue";
 import HistoricalReportsPage from "../pages/HistoricalReportsPage.vue";
 import IngestionRunsPage from "../pages/IngestionRunsPage.vue";
+import InsightsPage from "../pages/InsightsPage.vue";
 import InvitePage from "../pages/InvitePage.vue";
 import LoginPage from "../pages/LoginPage.vue";
 import NewsPage from "../pages/NewsPage.vue";
+import NotificationsPage from "../pages/NotificationsPage.vue";
 import QualityArchivePage from "../pages/QualityArchivePage.vue";
 import RecommendationsPage from "../pages/RecommendationsPage.vue";
 import RequirementsPage from "../pages/RequirementsPage.vue";
@@ -23,12 +25,11 @@ import SetupPage from "../pages/SetupPage.vue";
 import TopicTasksPage from "../pages/TopicTasksPage.vue";
 import UsersPage from "../pages/UsersPage.vue";
 import WeeklyReportsPage from "../pages/WeeklyReportsPage.vue";
+import { useRuntimeStore } from "../stores/runtime";
 import { useSessionStore } from "../stores/session";
 import { useSetupStore } from "../stores/setup";
 
-export const router = createRouter({
-  history: createWebHistory(),
-  routes: [
+export const routes: RouteRecordRaw[] = [
     {
       path: "/login",
       name: "login",
@@ -66,6 +67,11 @@ export const router = createRouter({
           path: "account",
           name: "account",
           component: AccountPage
+        },
+        {
+          path: "notifications",
+          name: "notifications",
+          component: NotificationsPage
         },
         {
           path: "sources",
@@ -138,6 +144,11 @@ export const router = createRouter({
           component: RequirementsPage
         },
         {
+          path: "insights",
+          name: "insights",
+          component: InsightsPage
+        },
+        {
           path: "tasks",
           name: "tasks",
           component: TopicTasksPage
@@ -154,42 +165,60 @@ export const router = createRouter({
         }
       ]
     }
-  ]
-});
+];
 
-router.beforeEach(async (to) => {
-  const setup = useSetupStore();
-  if (!setup.checked) {
-    await setup.loadStatus();
-  }
-  if (setup.needsSetup) {
-    return to.path === "/setup" ? true : "/setup";
-  }
-  if (to.path === "/setup") {
-    return "/login";
-  }
+export function installRouterGuards(appRouter: Router) {
+  appRouter.beforeEach(async (to) => {
+    const setup = useSetupStore();
+    if (!setup.checked) {
+      await setup.loadStatus();
+    }
+    const runtime = useRuntimeStore();
+    if (!runtime.checked) {
+      await runtime.load();
+    }
+    if (setup.needsSetup) {
+      return to.path === "/setup" ? true : "/setup";
+    }
+    if (to.path === "/setup") {
+      return "/login";
+    }
 
-  const session = useSessionStore();
-  if (!session.checked) {
-    await session.loadCurrentUser();
-  }
+    const session = useSessionStore();
+    if (!session.checked) {
+      await session.loadCurrentUser();
+    }
 
-  if (to.path === "/login") {
-    return session.isAuthenticated ? "/dashboard" : true;
-  }
+    if (to.path === "/login") {
+      return session.isAuthenticated ? "/dashboard" : true;
+    }
 
-  if (to.path.startsWith("/invite/")) {
+    if (to.path.startsWith("/invite/")) {
+      return true;
+    }
+
+    if (!session.isAuthenticated) {
+      return {
+        path: "/login",
+        query: { redirect: to.fullPath }
+      };
+    }
+    if (session.user?.status === "must_change_password" && to.path !== "/account") {
+      return "/account";
+    }
     return true;
-  }
+  });
+}
 
-  if (!session.isAuthenticated) {
-    return {
-      path: "/login",
-      query: { redirect: to.fullPath }
-    };
-  }
-  if (session.user?.status === "must_change_password" && to.path !== "/account") {
-    return "/account";
-  }
-  return true;
-});
+// history base 跟随构建期 VITE_BASE_PATH（vite.config.ts 注入 import.meta.env.BASE_URL），
+// 支撑门户子路径部署（如 /watchtower/）。
+export function createInfoWatchtowerRouter(history: RouterHistory = createWebHistory(import.meta.env.BASE_URL)) {
+  const appRouter = createRouter({
+    history,
+    routes
+  });
+  installRouterGuards(appRouter);
+  return appRouter;
+}
+
+export const router = createInfoWatchtowerRouter();

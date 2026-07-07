@@ -50,7 +50,7 @@ async function submitSetup() {
     await runOptionalImports();
     router.replace("/dashboard");
   } catch (exc) {
-    error.value = exc instanceof Error ? exc.message : "初始化失败";
+    error.value = setupErrorMessage(exc);
   } finally {
     loading.value = false;
   }
@@ -74,6 +74,16 @@ async function runOptionalImports() {
   } finally {
     importing.value = false;
   }
+}
+
+function setupErrorMessage(exc: unknown) {
+  if (!(exc instanceof Error)) {
+    return "初始化失败";
+  }
+  if (exc.message.includes("Setup already completed") || exc.message.includes("410")) {
+    return "首次设置已完成，请返回登录页。";
+  }
+  return exc.message;
 }
 </script>
 

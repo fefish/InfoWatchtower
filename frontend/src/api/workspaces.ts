@@ -1,3 +1,5 @@
+import { requestJson, requestVoid } from "./http";
+
 export interface WorkspaceRecord {
   code: string;
   name: string;
@@ -5,6 +7,7 @@ export interface WorkspaceRecord {
   workspace_type: string;
   default_domain_code: string;
   enabled: boolean;
+  current_user_workspace_role?: string | null;
 }
 
 export interface WorkspaceSectionRecord {
@@ -40,6 +43,35 @@ export interface WorkspaceLabelPolicyUpdate {
   fallback_category: string;
 }
 
+export interface WorkspaceFeedbackPolicy {
+  workspace_code: string;
+  viewer_can_react: boolean;
+  viewer_can_rate: boolean;
+  viewer_can_comment: boolean;
+  viewer_can_edit: boolean;
+  notify_on_comment: boolean;
+  notify_on_publish: boolean;
+}
+
+export interface WorkspaceFeedbackPolicyUpdate {
+  viewer_can_react: boolean;
+  viewer_can_rate: boolean;
+  viewer_can_comment: boolean;
+  viewer_can_edit: boolean;
+  notify_on_comment: boolean;
+  notify_on_publish: boolean;
+}
+
+export interface WorkspaceDepartmentMembershipTarget {
+  department: string;
+  workspace_role: string;
+}
+
+export interface WorkspaceAuthMembershipMapping {
+  workspace_code: string;
+  department_workspaces: WorkspaceDepartmentMembershipTarget[];
+}
+
 export interface WorkspaceUpdatePayload {
   name?: string;
   description?: string;
@@ -63,23 +95,6 @@ export interface WorkspaceMemberRecord {
   };
   workspace_role: string;
   enabled: boolean;
-}
-
-async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    credentials: "same-origin",
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {})
-    },
-    ...init
-  });
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    const detail = typeof body.detail === "string" ? body.detail : `HTTP ${response.status}`;
-    throw new Error(detail);
-  }
-  return response.json() as Promise<T>;
 }
 
 export interface WorkspaceCreatePayload {
@@ -117,7 +132,7 @@ export async function fetchWorkspaceMembers(workspaceCode: string): Promise<Work
 
 export async function upsertWorkspaceMember(
   workspaceCode: string,
-  payload: { user_id: string; workspace_role: string }
+  payload: { user_id: string; workspace_role: string; confirm_dangerous_change?: boolean }
 ): Promise<WorkspaceMemberRecord> {
   return requestJson<WorkspaceMemberRecord>(`/api/workspaces/${workspaceCode}/members`, {
     method: "POST",
@@ -125,16 +140,35 @@ export async function upsertWorkspaceMember(
   });
 }
 
-export async function removeWorkspaceMember(workspaceCode: string, userId: string): Promise<void> {
-  const response = await fetch(`/api/workspaces/${workspaceCode}/members/${userId}`, {
-    method: "DELETE",
-    credentials: "same-origin"
-  });
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    const detail = typeof body.detail === "string" ? body.detail : `HTTP ${response.status}`;
-    throw new Error(detail);
+export async function removeWorkspaceMember(
+  workspaceCode: string,
+  userId: string,
+  options: { confirmDangerousChange?: boolean } = {}
+): Promise<void> {
+  const params = new URLSearchParams();
+  if (options.confirmDangerousChange) {
+    params.set("confirm_dangerous_change", "true");
   }
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  await requestVoid(`/api/workspaces/${workspaceCode}/members/${userId}${suffix}`, {
+    method: "DELETE"
+  });
+}
+
+export async function fetchWorkspaceAuthMembershipMapping(
+  workspaceCode: string
+): Promise<WorkspaceAuthMembershipMapping> {
+  return requestJson<WorkspaceAuthMembershipMapping>(`/api/workspaces/${workspaceCode}/auth-membership-mapping`);
+}
+
+export async function updateWorkspaceAuthMembershipMapping(
+  workspaceCode: string,
+  payload: { department_workspaces: WorkspaceDepartmentMembershipTarget[] }
+): Promise<WorkspaceAuthMembershipMapping> {
+  return requestJson<WorkspaceAuthMembershipMapping>(`/api/workspaces/${workspaceCode}/auth-membership-mapping`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
 }
 
 export async function fetchWorkspaceSections(workspaceCode: string): Promise<WorkspaceSectionRecord[]> {
@@ -150,6 +184,20 @@ export async function updateWorkspaceLabelPolicy(
   payload: WorkspaceLabelPolicyUpdate
 ): Promise<WorkspaceLabelPolicy> {
   return requestJson<WorkspaceLabelPolicy>(`/api/workspaces/${workspaceCode}/label-policy`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function fetchWorkspaceFeedbackPolicy(workspaceCode: string): Promise<WorkspaceFeedbackPolicy> {
+  return requestJson<WorkspaceFeedbackPolicy>(`/api/workspaces/${workspaceCode}/feedback-policy`);
+}
+
+export async function updateWorkspaceFeedbackPolicy(
+  workspaceCode: string,
+  payload: WorkspaceFeedbackPolicyUpdate
+): Promise<WorkspaceFeedbackPolicy> {
+  return requestJson<WorkspaceFeedbackPolicy>(`/api/workspaces/${workspaceCode}/feedback-policy`, {
     method: "PATCH",
     body: JSON.stringify(payload)
   });

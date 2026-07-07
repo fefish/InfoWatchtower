@@ -25,9 +25,11 @@ import {
   type WeeklyReportRecord
 } from "../api/reports";
 import { fetchSources, type DataSourceRecord } from "../api/sources";
+import { useRuntimeStore } from "../stores/runtime";
 import { useWorkspaceStore } from "../stores/workspace";
 
 const workspace = useWorkspaceStore();
+const runtime = useRuntimeStore();
 
 const health = ref<HealthResponse | null>(null);
 const coverage = ref<IngestionCoverageRecord | null>(null);
@@ -241,7 +243,8 @@ async function loadBriefing(workspaceCode: string) {
         </ol>
         <div v-else class="briefing-empty">
           <p>今天还没有候选。</p>
-          <RouterLink class="briefing-empty-action" to="/ingestion-runs">先跑一次抓取 →</RouterLink>
+          <RouterLink v-if="runtime.canIngest" class="briefing-empty-action" to="/ingestion-runs">先跑一次抓取 →</RouterLink>
+          <RouterLink v-else class="briefing-empty-action" to="/daily-reports">查看日报 →</RouterLink>
         </div>
       </article>
 
@@ -322,7 +325,7 @@ async function loadBriefing(workspaceCode: string) {
           </li>
         </ul>
         <p v-else class="fail-none">最近抓取没有失败源。</p>
-        <RouterLink v-if="needsEntryCount > 0" class="entry-alert" to="/sources">
+        <RouterLink v-if="runtime.canIngest && needsEntryCount > 0" class="entry-alert" to="/sources">
           {{ needsEntryCount }} 个源待补入口，去数据源管理处理 <ArrowRight :size="13" />
         </RouterLink>
       </article>
@@ -332,12 +335,12 @@ async function loadBriefing(workspaceCode: string) {
           <h3>快捷入口</h3>
         </header>
         <div class="action-row">
-          <RouterLink class="action-tile" to="/ingestion-runs">
+          <RouterLink v-if="runtime.canIngest" class="action-tile" to="/ingestion-runs">
             <BarChart3 :size="17" />
             <strong>抓取与覆盖</strong>
             <span>跑今日流水线、看覆盖漏斗</span>
           </RouterLink>
-          <RouterLink class="action-tile" to="/sources">
+          <RouterLink v-if="runtime.canIngest" class="action-tile" to="/sources">
             <span class="action-tile-icons"><Radio :size="17" /><Plus :size="12" /></span>
             <strong>新增信息源</strong>
             <span>自建源或启用共享源</span>

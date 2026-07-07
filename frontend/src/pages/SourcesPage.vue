@@ -22,18 +22,22 @@ import {
   fetchSources,
   importLegacySources,
   importTechInsightLoopSources,
+  previewSourceImport,
   updateSourceDefinition,
   updateSourceWorkspaceConfig,
-  type DataSourceRecord
+  type DataSourceRecord,
+  type SourceImportPreview
 } from "../api/sources";
 import {
   fetchWorkspaceLabelPolicy,
   updateWorkspaceLabelPolicy,
   type WorkspaceLabelPolicy
 } from "../api/workspaces";
+import { useRuntimeStore } from "../stores/runtime";
 import { useWorkspaceStore } from "../stores/workspace";
 
 const workspace = useWorkspaceStore();
+const runtime = useRuntimeStore();
 const sources = ref<DataSourceRecord[]>([]);
 const loading = ref(false);
 const importing = ref(false);
@@ -42,6 +46,10 @@ const savingConfig = ref(false);
 const fetchingSourceId = ref("");
 const error = ref("");
 const lastImportMessage = ref("");
+const lastImportTone = ref<"success" | "info" | "warning">("success");
+const importPreview = ref<SourceImportPreview | null>(null);
+const importPreviewCatalog = ref<"legacy" | "tech">("legacy");
+const previewLoading = ref(false);
 const selectedSource = ref<DataSourceRecord | null>(null);
 const activePolicyTab = ref<"level1" | "level2" | "format">("level1");
 
@@ -132,6 +140,7 @@ const savingDefinition = ref(false);
 const customSourceTypes = [
   { value: "rss", label: "RSS" },
   { value: "paper_rss", label: "论文 RSS" },
+  { value: "paper_api", label: "论文 API" },
   { value: "page_manual", label: "页面手工" },
   { value: "page_monitor", label: "页面监控" }
 ];
@@ -173,6 +182,12 @@ const currentPolicyPreset = computed(() => {
   }
   return workspacePolicyPresets.ai_sql;
 });
+const canManageIngestion = computed(() => runtime.canIngest);
+const createUrlPlaceholder = computed(() =>
+  createForm.sourceType === "paper_api"
+    ? "https://api.semanticscholar.org/graph/v1/paper/search/bulk?query=artificial%20intelligence"
+    : "https://..."
+);
 
 async function loadWorkspacePolicy() {
   if (!workspace.currentCode) {
@@ -221,13 +236,74 @@ async function loadSources() {
   }
 }
 
+const importMessageClass = computed(() => {
+  if (lastImportTone.value === "info") {
+    return "form-info";
+  }
+  if (lastImportTone.value === "warning") {
+    return "form-warning";
+  }
+  return "form-success";
+});
+
+function setResultMessage(text: string, tone: "success" | "info" | "warning" = "success") {
+  lastImportMessage.value = text;
+  lastImportTone.value = tone;
+}
+
+async function openImportPreview(catalog: "legacy" | "tech") {
+  if (!canManageIngestion.value) {
+    setResultMessage("当前部署形态为只读消费模式，不能导入或抓取数据源。", "warning");
+    return;
+  }
+  previewLoading.value = true;
+  error.value = "";
+  lastImportMessage.value = "";
+  try {
+    importPreviewCatalog.value = catalog;
+    importPreview.value = await previewSourceImport(catalog);
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "加载导入预览失败";
+  } finally {
+    previewLoading.value = false;
+  }
+}
+
+function closeImportPreview() {
+  importPreview.value = null;
+}
+
+async function confirmImport() {
+  if (!importPreview.value || !canManageIngestion.value) {
+    return;
+  }
+  const catalog = importPreviewCatalog.value;
+  importPreview.value = null;
+  if (catalog === "tech") {
+    await importTechSources();
+  } else {
+    await importSeeds();
+  }
+}
+
 async function importSeeds() {
   importing.value = true;
   error.value = "";
   lastImportMessage.value = "";
   try {
     const result = await importLegacySources();
-    lastImportMessage.value = `导入完成：新增 ${result.created}，更新 ${result.updated}，总计 ${result.total}`;
+    if (result.total === 0) {
+      setResultMessage("未发现可导入的旧种子源：请检查种子文件路径或部署挂载是否缺失。", "warning");
+    } else if (result.created === 0) {
+      setResultMessage(
+        result.updated > 0
+          ? `源已全部存在，本次更新 ${result.updated} 条元数据`
+          : "源已全部存在，本次未发生变更",
+        "info"
+      );
+    } else {
+      setResultMessage(`导入完成：新增 ${result.created}，更新 ${result.updated}，总计 ${result.total}`);
+    }
     await loadSources();
   } catch (exc) {
     error.value = exc instanceof Error ? exc.message : "导入旧种子源失败";
@@ -242,7 +318,20 @@ async function importTechSources() {
   lastImportMessage.value = "";
   try {
     const result = await importTechInsightLoopSources();
-    lastImportMessage.value = `Tech 源导入完成：新增 ${result.created}，更新 ${result.updated}，识别 ${result.total} 行，可抓取入口 ${result.fetchable}，待补入口 ${result.metadata_only}`;
+    if (result.total === 0) {
+      setResultMessage("未识别到 Tech 源数据：请检查种子文件路径或部署挂载是否缺失。", "warning");
+    } else if (result.created === 0) {
+      setResultMessage(
+        result.updated > 0
+          ? `源已全部存在，本次更新 ${result.updated} 条元数据（识别 ${result.total} 行）`
+          : "源已全部存在，本次未发生变更",
+        "info"
+      );
+    } else {
+      setResultMessage(
+        `Tech 源导入完成：新增 ${result.created}，更新 ${result.updated}，识别 ${result.total} 行，可抓取入口 ${result.fetchable}，待补入口 ${result.metadata_only}`
+      );
+    }
     await loadSources();
   } catch (exc) {
     error.value = exc instanceof Error ? exc.message : "导入 Tech Insight Loop 源失败";
@@ -253,9 +342,10 @@ async function importTechSources() {
 
 function canFetchSource(source: DataSourceRecord) {
   return (
+    canManageIngestion.value &&
     source.enabled &&
     source.workspace_link_enabled &&
-    ["rss", "paper_rss", "page_manual", "page_monitor"].includes(source.source_type)
+    ["rss", "paper_rss", "paper_api", "page_manual", "page_monitor"].includes(source.source_type)
   );
 }
 
@@ -267,6 +357,7 @@ function sourceTypeLabel(type: string) {
   const labels: Record<string, string> = {
     rss: "RSS",
     paper_rss: "论文 RSS",
+    paper_api: "论文 API",
     wiseflow: "Wiseflow",
     page_manual: "页面手工",
     page_monitor: "页面监控",
@@ -279,6 +370,7 @@ function sourceIcon(type: string) {
   const icons = {
     rss: Rss,
     paper_rss: FileText,
+    paper_api: FileText,
     wiseflow: Bot,
     page_manual: Globe2,
     page_monitor: Monitor,
@@ -317,6 +409,10 @@ function fillConfigForm(source: DataSourceRecord) {
 }
 
 function openCreatePanel() {
+  if (!canManageIngestion.value) {
+    setResultMessage("当前部署形态为只读消费模式，不能新增本地采集源。", "warning");
+    return;
+  }
   createForm.name = "";
   createForm.sourceType = "rss";
   createForm.url = "";
@@ -660,12 +756,20 @@ async function saveConfig() {
 }
 
 async function fetchOneSource(source: DataSourceRecord) {
+  if (!canFetchSource(source)) {
+    setResultMessage("该源当前不可抓取：请确认部署形态、源入口和工作台启用状态。", "warning");
+    return;
+  }
   fetchingSourceId.value = source.id;
   error.value = "";
   lastImportMessage.value = "";
   try {
-    const result = await fetchSource(source.id);
-    lastImportMessage.value = `抓取完成：${source.name}，拉取 ${result.fetched}，新增 ${result.created}，更新 ${result.updated}`;
+    const result = await fetchSource(source.id, workspace.currentCode || undefined);
+    if (result.fetched === 0) {
+      setResultMessage(`抓取完成但未返回条目：${source.name}。请检查源当天是否发布、RSS 窗口和最近失败原因。`, "info");
+    } else {
+      setResultMessage(`抓取完成：${source.name}，拉取 ${result.fetched}，新增 ${result.created}，更新 ${result.updated}`);
+    }
     await loadSources();
   } catch (exc) {
     error.value = exc instanceof Error ? exc.message : "抓取数据源失败";
@@ -707,7 +811,13 @@ watch(
       </div>
 
       <div class="source-stats-actions">
-        <button type="button" class="icon-button" @click="openCreatePanel" title="自建信息源">
+        <button
+          v-if="canManageIngestion"
+          type="button"
+          class="icon-button"
+          @click="openCreatePanel"
+          title="自建信息源"
+        >
           <Plus :size="16" />
           <span>新增源</span>
         </button>
@@ -715,15 +825,23 @@ watch(
           <RefreshCw :size="16" />
           <span>刷新</span>
         </button>
-        <button type="button" class="icon-button" :disabled="importing" @click="importSeeds" title="导入旧种子源">
+        <button
+          v-if="canManageIngestion"
+          type="button"
+          class="icon-button"
+          :disabled="importing || previewLoading"
+          @click="openImportPreview('legacy')"
+          title="导入旧种子源"
+        >
           <DownloadCloud :size="16" />
-          <span>{{ importing ? "导入中" : "导入数据" }}</span>
+          <span>{{ importing || previewLoading ? "检查中" : "导入数据" }}</span>
         </button>
         <button
+          v-if="canManageIngestion"
           type="button"
           class="icon-button secondary"
-          :disabled="importing"
-          @click="importTechSources"
+          :disabled="importing || previewLoading"
+          @click="openImportPreview('tech')"
           title="导入 Tech Insight Loop 源治理"
         >
           <DownloadCloud :size="16" />
@@ -733,7 +851,7 @@ watch(
     </section>
 
     <p v-if="error" class="form-error">{{ error }}</p>
-    <p v-if="lastImportMessage" class="form-success">{{ lastImportMessage }}</p>
+    <p v-if="lastImportMessage" :class="importMessageClass">{{ lastImportMessage }}</p>
 
     <section class="source-page-grid">
       <div class="source-list">
@@ -797,6 +915,10 @@ watch(
           </div>
 
           <div class="source-actions">
+            <RouterLink class="table-action" :to="`/sources/${source.id}`" title="查看数据源详情">
+              <FileText :size="14" />
+              <span>详情</span>
+            </RouterLink>
             <button type="button" class="table-action" @click="openConfig(source)" title="配置数据源">
               <Settings :size="14" />
               <span>配置</span>
@@ -816,7 +938,9 @@ watch(
         </article>
       </div>
 
-      <p v-if="!loading && sources.length === 0" class="empty-state">暂无数据源，可先导入旧种子源。</p>
+      <p v-if="!loading && sources.length === 0" class="empty-state">
+        {{ canManageIngestion ? "暂无数据源，可先导入旧种子源。" : "当前为只读消费模式，等待外网同步后会显示数据源。" }}
+      </p>
       </div>
 
       <aside class="control-rail">
@@ -1131,11 +1255,42 @@ watch(
     </div>
     <label class="config-url-field">
       <span>URL / RSS 入口</span>
-      <input v-model="createForm.url" placeholder="https://..." />
+      <input v-model="createForm.url" :placeholder="createUrlPlaceholder" />
     </label>
 
     <button type="button" class="config-save" :disabled="creatingSource" @click="submitCreateSource">
       {{ creatingSource ? "创建中" : "创建并启用" }}
+    </button>
+  </aside>
+
+  <div v-if="importPreview" class="config-backdrop" @click="closeImportPreview"></div>
+  <aside v-if="importPreview" class="config-panel import-preview-panel" aria-label="数据源导入预览">
+    <header>
+      <div>
+        <p class="eyebrow">导入预览</p>
+        <h3>{{ importPreviewCatalog === "tech" ? "Tech Insight Loop 源治理" : "旧种子源" }}</h3>
+      </div>
+      <button type="button" class="panel-close" @click="closeImportPreview" title="关闭">
+        <X :size="18" />
+      </button>
+    </header>
+
+    <div class="preview-metrics">
+      <span><strong>{{ importPreview.total }}</strong> 识别记录</span>
+      <span><strong>{{ importPreview.would_create }}</strong> 将新增</span>
+      <span><strong>{{ importPreview.would_update }}</strong> 将更新</span>
+    </div>
+
+    <div class="preview-list">
+      <article v-for="sample in importPreview.samples" :key="`${sample.source_type}-${sample.name}-${sample.url}`">
+        <strong>{{ sample.name }}</strong>
+        <span>{{ sourceTypeLabel(sample.source_type) }}</span>
+        <small>{{ sample.url || "无 URL" }}</small>
+      </article>
+    </div>
+
+    <button type="button" class="config-save" :disabled="importing" @click="confirmImport">
+      {{ importing ? "导入中" : "确认导入" }}
     </button>
   </aside>
 </template>

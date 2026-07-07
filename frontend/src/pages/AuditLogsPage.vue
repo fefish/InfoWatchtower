@@ -11,10 +11,13 @@ const loading = ref(false);
 const error = ref("");
 
 async function loadLogs() {
+  if (!workspace.currentCode) {
+    return;
+  }
   loading.value = true;
   error.value = "";
   try {
-    logs.value = await fetchAuditLogs();
+    logs.value = await fetchAuditLogs({ workspaceCode: workspace.currentCode, limit: 80 });
   } catch (exc) {
     error.value = exc instanceof Error ? exc.message : "加载审计日志失败";
   } finally {
@@ -56,7 +59,7 @@ onMounted(loadLogs);
         <div class="feed-icon"><ShieldCheck :size="18" /></div>
         <div>
           <h3>{{ log.action }}</h3>
-          <p>{{ log.user_name || log.user_id || "system" }} · {{ log.object_type }} · {{ log.object_id }}</p>
+          <p>{{ log.workspace_code }} · {{ log.user_name || log.user_id || "system" }} · {{ log.object_type }} · {{ log.object_id }}</p>
           <div class="coverage-metrics">
             <span>{{ new Date(log.created_at).toLocaleString("zh-CN", { hour12: false }) }}</span>
             <span>{{ detailLine(log) }}</span>

@@ -1,3 +1,5 @@
+import { requestJson } from "./http";
+
 export interface NewsItemRecord {
   id: string;
   workspace_code: string;
@@ -28,6 +30,7 @@ export interface DedupeGroupItemRecord {
   duplicate_reason: string;
   rank_score: number;
   title: string;
+  source_type: string;
   source_name: string;
   source_url: string | null;
 }
@@ -68,6 +71,21 @@ export interface DedupeGroupDailyReportRecord {
   category: string;
 }
 
+export interface DedupeGroupLineageNodeRecord {
+  object_type: string;
+  object_id: string | null;
+  label: string;
+  status: string;
+  review_note: string;
+  target_path: string | null;
+  occurred_at: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface DedupeGroupLineageRecord {
+  nodes: DedupeGroupLineageNodeRecord[];
+}
+
 export interface DedupeGroupRecord {
   id: string;
   workspace_code: string;
@@ -75,11 +93,14 @@ export interface DedupeGroupRecord {
   dedupe_key: string;
   winner_news_item_id: string | null;
   winner_title: string | null;
+  winner_published_at: string | null;
+  winner_source_type: string | null;
   item_count: number;
   status: string;
   items: DedupeGroupItemRecord[];
   recommendation: DedupeGroupRecommendationRecord | null;
   daily_report: DedupeGroupDailyReportRecord | null;
+  lineage: DedupeGroupLineageRecord;
 }
 
 export interface NewsNormalizeResult {
@@ -93,28 +114,37 @@ export interface NewsNormalizeResult {
   losers: number;
 }
 
-async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    credentials: "same-origin",
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {})
-    },
-    ...init
-  });
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    const detail = typeof body.detail === "string" ? body.detail : `HTTP ${response.status}`;
-    throw new Error(detail);
-  }
-  return response.json() as Promise<T>;
-}
-
 export async function fetchDedupeGroups(
   workspaceCode: string,
-  limit = 80
+  limit = 80,
+  filters: {
+    q?: string;
+    recommendationStatus?: string;
+    dailyStatus?: string;
+    admissionLevel?: string;
+    sourceType?: string;
+    sort?: string;
+  } = {}
 ): Promise<DedupeGroupRecord[]> {
   const params = new URLSearchParams({ workspace_code: workspaceCode, limit: String(limit) });
+  if (filters.q) {
+    params.set("q", filters.q);
+  }
+  if (filters.recommendationStatus && filters.recommendationStatus !== "all") {
+    params.set("recommendation_status", filters.recommendationStatus);
+  }
+  if (filters.dailyStatus && filters.dailyStatus !== "all") {
+    params.set("daily_status", filters.dailyStatus);
+  }
+  if (filters.admissionLevel) {
+    params.set("admission_level", filters.admissionLevel);
+  }
+  if (filters.sourceType) {
+    params.set("source_type", filters.sourceType);
+  }
+  if (filters.sort) {
+    params.set("sort", filters.sort);
+  }
   return requestJson<DedupeGroupRecord[]>(`/api/dedupe-groups?${params.toString()}`);
 }
 

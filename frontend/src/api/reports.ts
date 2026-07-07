@@ -1,3 +1,6 @@
+import { requestJson } from "./http";
+import type { EntityMilestoneDetailRecord, RequirementRecord, TopicTaskRecord } from "./operations";
+
 export interface RecommendationRunCreate {
   workspace_code: string;
   day_key?: string | null;
@@ -112,6 +115,27 @@ export interface DailyReportGenerationRerunResult {
   skipped_total: number;
 }
 
+export interface DailyReportBulkAdoptPayload {
+  workspace_code: string;
+  day_key: string;
+  dedupe_group_ids: string[];
+  generation_timeout_seconds?: number;
+}
+
+export interface DailyReportBulkRejectPayload {
+  workspace_code: string;
+  day_key: string;
+  dedupe_group_ids: string[];
+}
+
+export interface DailyReportBulkAdoptResult {
+  report: DailyReportRecord;
+  created_total: number;
+  updated_total: number;
+  skipped_total: number;
+  skipped_items: Array<{ dedupe_group_id: string; reason: string }>;
+}
+
 export interface CommentRecord {
   id: string;
   user_id: string;
@@ -129,6 +153,10 @@ export interface WeeklyReportItemRecord {
   generated_news: GeneratedNewsRecord | null;
   adoption_status: number;
   sort_order: number;
+  weekly_score: number;
+  final_score: number;
+  heat_score: number;
+  feedback_score: number;
   editor_title: string | null;
   editor_summary: string | null;
   editor_content_json: Record<string, unknown> | null;
@@ -161,21 +189,85 @@ export interface WeeklyReportItemUpdatePayload {
   editor_content_json?: Record<string, unknown>;
 }
 
-async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    credentials: "same-origin",
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {})
-    },
-    ...init
-  });
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    const detail = typeof body.detail === "string" ? body.detail : `HTTP ${response.status}`;
-    throw new Error(detail);
-  }
-  return response.json() as Promise<T>;
+export interface StrategyLoopInsightRecord {
+  id: string;
+  workspace_code: string;
+  domain_code: string;
+  news_item_id: string;
+  raw_item_id: string | null;
+  title: string;
+  summary: string;
+  insight_type: string;
+  status: string;
+  source_report_type: string;
+  source_report_id: string | null;
+  source_report_item_id: string | null;
+  confidence_score: number;
+  metadata_json: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface StrategyLoopImplicationRecord {
+  id: string;
+  workspace_code: string;
+  domain_code: string;
+  insight_id: string;
+  title: string;
+  description: string;
+  implication_type: string;
+  metadata_json: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ReportItemStrategyLoopPayload {
+  insight_title?: string | null;
+  insight_summary?: string | null;
+  insight_type?: string;
+  confidence_score?: number;
+  implication_title?: string | null;
+  implication_description?: string | null;
+  implication_type?: string;
+  requirement_title?: string | null;
+  requirement_description?: string | null;
+  requirement_priority?: string;
+  requirement_status?: string;
+  requirement_due_at?: string | null;
+  owner_user_id?: string | null;
+  source_note?: string;
+  create_task?: boolean;
+  task_title?: string | null;
+  task_description?: string | null;
+  task_status?: string;
+  task_due_at?: string | null;
+  task_assignee_user_id?: string | null;
+  metadata_json?: Record<string, unknown>;
+}
+
+export interface ReportItemStrategyLoopResult {
+  insight: StrategyLoopInsightRecord;
+  implication: StrategyLoopImplicationRecord;
+  requirement: RequirementRecord;
+  task: TopicTaskRecord | null;
+}
+
+export interface ReportItemEntityMilestonePayload {
+  entity_name: string;
+  entity_type?: string;
+  entity_rank?: string;
+  tracked_entity_id?: string | null;
+  event_title?: string | null;
+  event_type?: string;
+  event_time?: string | null;
+  event_brief?: string | null;
+  impact_brief?: string | null;
+  board?: string | null;
+  importance_level?: string;
+  importance_score?: number;
+  confidence_score?: number;
+  source_note?: string;
+  metadata_json?: Record<string, unknown>;
 }
 
 export async function createRecommendationRun(
@@ -230,6 +322,64 @@ export async function updateDailyReportItem(
 ): Promise<DailyReportItemRecord> {
   return requestJson<DailyReportItemRecord>(`/api/daily-report-items/${itemId}`, {
     method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function bulkAdoptDailyReportCandidates(
+  payload: DailyReportBulkAdoptPayload
+): Promise<DailyReportBulkAdoptResult> {
+  return requestJson<DailyReportBulkAdoptResult>("/api/daily-reports/bulk-adopt-from-candidates", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function bulkRejectDailyReportCandidates(
+  payload: DailyReportBulkRejectPayload
+): Promise<DailyReportBulkAdoptResult> {
+  return requestJson<DailyReportBulkAdoptResult>("/api/daily-reports/bulk-reject-from-candidates", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function createDailyReportItemInsight(
+  itemId: string,
+  payload: ReportItemStrategyLoopPayload
+): Promise<ReportItemStrategyLoopResult> {
+  return requestJson<ReportItemStrategyLoopResult>(`/api/daily-report-items/${itemId}/insights`, {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function createWeeklyReportItemInsight(
+  itemId: string,
+  payload: ReportItemStrategyLoopPayload
+): Promise<ReportItemStrategyLoopResult> {
+  return requestJson<ReportItemStrategyLoopResult>(`/api/weekly-report-items/${itemId}/insights`, {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function createDailyReportItemEntityMilestone(
+  itemId: string,
+  payload: ReportItemEntityMilestonePayload
+): Promise<EntityMilestoneDetailRecord> {
+  return requestJson<EntityMilestoneDetailRecord>(`/api/daily-report-items/${itemId}/entity-milestones`, {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function createWeeklyReportItemEntityMilestone(
+  itemId: string,
+  payload: ReportItemEntityMilestonePayload
+): Promise<EntityMilestoneDetailRecord> {
+  return requestJson<EntityMilestoneDetailRecord>(`/api/weekly-report-items/${itemId}/entity-milestones`, {
+    method: "POST",
     body: JSON.stringify(payload)
   });
 }

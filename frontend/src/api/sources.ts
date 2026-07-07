@@ -1,3 +1,5 @@
+import { requestJson } from "./http";
+
 export interface DataSourceRecord {
   id: string;
   workspace_code: string;
@@ -30,6 +32,42 @@ export interface DataSourceRecord {
   workspace_clustering_config: Record<string, unknown>;
 }
 
+export interface SourceRecentRawRecord {
+  id: string;
+  source_title: string;
+  source_url: string | null;
+  raw_content_excerpt: string;
+  fetched_at: string;
+  published_at: string | null;
+}
+
+export interface SourceRunSummaryRecord {
+  run_id: string;
+  run_key: string;
+  run_type: string;
+  status: string;
+  completed_at: string | null;
+  fetched: number;
+  created: number;
+  updated: number;
+  error: string;
+}
+
+export interface SourceTrendPointRecord {
+  day_key: string;
+  raw_count: number;
+}
+
+export interface SourceDetailRecord {
+  source: DataSourceRecord;
+  raw_count: number;
+  news_count: number;
+  recent_raw_items: SourceRecentRawRecord[];
+  recent_runs: SourceRunSummaryRecord[];
+  error_logs: SourceRunSummaryRecord[];
+  raw_trend: SourceTrendPointRecord[];
+}
+
 export interface LegacySeedImportResult {
   created: number;
   updated: number;
@@ -42,6 +80,20 @@ export interface TechInsightLoopImportResult {
   total: number;
   fetchable: number;
   metadata_only: number;
+}
+
+export interface SourceImportPreviewSample {
+  name: string;
+  source_type: string;
+  url: string | null;
+}
+
+export interface SourceImportPreview {
+  catalog: string;
+  total: number;
+  would_create: number;
+  would_update: number;
+  samples: SourceImportPreviewSample[];
 }
 
 export interface SourceWorkspaceConfigUpdate {
@@ -83,26 +135,19 @@ export interface SourceDefinitionUpdatePayload {
   backfill_days?: number;
 }
 
-async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    credentials: "same-origin",
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {})
-    },
-    ...init
-  });
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    const detail = typeof body.detail === "string" ? body.detail : `HTTP ${response.status}`;
-    throw new Error(detail);
-  }
-  return response.json() as Promise<T>;
-}
-
 export async function fetchSources(workspaceCode?: string): Promise<DataSourceRecord[]> {
   const params = workspaceCode ? `?${new URLSearchParams({ workspace_code: workspaceCode }).toString()}` : "";
   return requestJson<DataSourceRecord[]>(`/api/sources${params}`);
+}
+
+export async function fetchSourceDetail(sourceId: string, workspaceCode?: string): Promise<SourceDetailRecord> {
+  const params = workspaceCode ? `?${new URLSearchParams({ workspace_code: workspaceCode }).toString()}` : "";
+  return requestJson<SourceDetailRecord>(`/api/sources/${sourceId}${params}`);
+}
+
+export async function previewSourceImport(catalog: "legacy" | "tech"): Promise<SourceImportPreview> {
+  const params = new URLSearchParams({ catalog });
+  return requestJson<SourceImportPreview>(`/api/sources/import-preview?${params.toString()}`);
 }
 
 export async function importLegacySources(): Promise<LegacySeedImportResult> {

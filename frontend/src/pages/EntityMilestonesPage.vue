@@ -1,12 +1,29 @@
 <script setup lang="ts">
-import { CircleDot, Clock3, GitBranch, Link2, RefreshCw, Search, TriangleAlert, UserRound } from "lucide-vue-next";
-import { computed, onMounted, ref, watch } from "vue";
+import {
+  CheckCircle2,
+  CircleDot,
+  CircleSlash2,
+  Clock3,
+  GitBranch,
+  Link2,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Save,
+  Search,
+  TriangleAlert,
+  UserRound
+} from "lucide-vue-next";
+import { computed, onMounted, reactive, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 
 import {
+  createRequirement,
   fetchEntityMilestoneDetail,
   fetchEntityMilestones,
   fetchEntityTimelineSummary,
   fetchTrackedEntities,
+  updateEntityMilestone,
   type EntityMilestoneDetailRecord,
   type EntityMilestoneListItem,
   type EntityTimelineSummaryRecord,
@@ -14,6 +31,7 @@ import {
 } from "../api/operations";
 import { useWorkspaceStore } from "../stores/workspace";
 
+const route = useRoute();
 const workspace = useWorkspaceStore();
 const summary = ref<EntityTimelineSummaryRecord | null>(null);
 const entities = ref<TrackedEntityListItem[]>([]);
@@ -22,7 +40,20 @@ const selectedEntityId = ref("");
 const selected = ref<EntityMilestoneDetailRecord | null>(null);
 const loading = ref(false);
 const detailLoading = ref(false);
+const savingId = ref("");
+const editing = ref(false);
 const error = ref("");
+const message = ref("");
+
+const editDraft = reactive({
+  title: "",
+  eventType: "",
+  eventBrief: "",
+  impactBrief: "",
+  board: "",
+  importanceLevel: "medium",
+  importanceScore: 70
+});
 
 const filters = ref({
   entityQuery: "",
@@ -37,6 +68,22 @@ const selectedEntity = computed(() => entities.value.find((item) => item.id === 
 const eventTypes = computed(() => Object.keys(summary.value?.by_event_type ?? {}).sort());
 const entityTypes = computed(() => Object.keys(summary.value?.by_entity_type ?? {}).sort());
 const importanceLevels = computed(() => Object.keys(summary.value?.by_importance_level ?? {}).sort());
+const pendingEntityId = computed(() => routeQueryString(route.query.entity_id));
+const pendingMilestoneId = computed(() => routeQueryString(route.query.milestone_id));
+const roleRank: Record<string, number> = {
+  viewer: 0,
+  member: 1,
+  admin: 2,
+  owner: 3
+};
+const canManageMilestone = computed(
+  () => roleRank[workspace.current?.current_user_workspace_role ?? ""] >= 2
+);
+const canGovernSelected = computed(() => canManageMilestone.value && selected.value?.legacy_system === "current");
+
+function routeQueryString(value: unknown) {
+  return Array.isArray(value) ? String(value[0] ?? "") : String(value ?? "");
+}
 
 async function loadAll() {
   if (!workspace.currentCode) {
@@ -51,7 +98,14 @@ async function loadAll() {
     ]);
     summary.value = nextSummary;
     entities.value = nextEntities;
-    if (!selectedEntityId.value && nextEntities.length > 0) {
+    const routeMilestoneId = pendingMilestoneId.value;
+    if (routeMilestoneId) {
+      const anchoredMilestone = await fetchEntityMilestoneDetail(routeMilestoneId);
+      selected.value = anchoredMilestone;
+      selectedEntityId.value = anchoredMilestone.tracked_entity_id;
+    } else if (pendingEntityId.value && nextEntities.some((item) => item.id === pendingEntityId.value)) {
+      selectedEntityId.value = pendingEntityId.value;
+    } else if ((!selectedEntityId.value || !nextEntities.some((item) => item.id === selectedEntityId.value)) && nextEntities.length > 0) {
       selectedEntityId.value = nextEntities[0].id;
     }
     await loadMilestones();
@@ -62,10 +116,11 @@ async function loadAll() {
   }
 }
 
-async function loadMilestones() {
+async function loadMilestones(options: { useRouteAnchor?: boolean } = {}) {
   if (!workspace.currentCode) {
     return;
   }
+  const useRouteAnchor = options.useRouteAnchor ?? true;
   loading.value = true;
   error.value = "";
   try {
@@ -79,10 +134,13 @@ async function loadMilestones() {
       hasUnresolvedRefs: filters.value.unresolvedOnly ? true : null
     });
     milestones.value = nextMilestones;
-    if (nextMilestones.length > 0) {
+    const routeMilestoneId = useRouteAnchor ? pendingMilestoneId.value : "";
+    if (routeMilestoneId && nextMilestones.some((item) => item.id === routeMilestoneId)) {
+      await selectMilestone(routeMilestoneId);
+    } else if (nextMilestones.length > 0 && (!routeMilestoneId || selected.value?.id !== routeMilestoneId)) {
       await selectMilestone(nextMilestones[0].id);
     } else {
-      selected.value = null;
+      selected.value = routeMilestoneId && selected.value?.id === routeMilestoneId ? selected.value : null;
     }
   } catch (exc) {
     error.value = exc instanceof Error ? exc.message : "加载实体事件失败";
@@ -93,7 +151,7 @@ async function loadMilestones() {
 
 async function selectEntity(id: string) {
   selectedEntityId.value = id;
-  await loadMilestones();
+  await loadMilestones({ useRouteAnchor: false });
 }
 
 async function selectMilestone(id: string) {
@@ -101,11 +159,108 @@ async function selectMilestone(id: string) {
   error.value = "";
   try {
     selected.value = await fetchEntityMilestoneDetail(id);
+    syncEditDraft();
+    editing.value = false;
   } catch (exc) {
     error.value = exc instanceof Error ? exc.message : "加载事件详情失败";
   } finally {
     detailLoading.value = false;
   }
+}
+
+function syncEditDraft() {
+  if (!selected.value) {
+    return;
+  }
+  editDraft.title = selected.value.title;
+  editDraft.eventType = selected.value.event_type;
+  editDraft.eventBrief = selected.value.event_brief || selected.value.event_content || "";
+  editDraft.impactBrief = selected.value.impact_brief || selected.value.impact || "";
+  editDraft.board = selected.value.board;
+  editDraft.importanceLevel = selected.value.importance_level;
+  editDraft.importanceScore = selected.value.importance_score;
+}
+
+async function saveMilestoneEdit() {
+  if (!selected.value || !canGovernSelected.value) {
+    return;
+  }
+  savingId.value = selected.value.id;
+  error.value = "";
+  message.value = "";
+  try {
+    selected.value = await updateEntityMilestone(selected.value.id, {
+      event_title: editDraft.title,
+      event_type: editDraft.eventType,
+      event_brief: editDraft.eventBrief,
+      impact_brief: editDraft.impactBrief,
+      timeline_brief: editDraft.eventBrief,
+      board: editDraft.board,
+      importance_level: editDraft.importanceLevel,
+      importance_score: Number(editDraft.importanceScore)
+    });
+    editing.value = false;
+    message.value = "实体事件已更新";
+    await loadMilestones({ useRouteAnchor: false });
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "更新实体事件失败";
+  } finally {
+    savingId.value = "";
+  }
+}
+
+async function setCurationStatus(status: "confirmed" | "revoked") {
+  if (!selected.value || !canGovernSelected.value) {
+    return;
+  }
+  savingId.value = selected.value.id;
+  error.value = "";
+  message.value = "";
+  try {
+    selected.value = await updateEntityMilestone(selected.value.id, {
+      curation_status: status,
+      selected_for_timeline: status === "confirmed",
+      curation_note: status === "confirmed" ? "人工确认进入时间线" : "人工撤销时间线展示"
+    });
+    message.value = status === "confirmed" ? "实体事件已确认" : "实体事件已撤销";
+    await loadMilestones({ useRouteAnchor: false });
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "更新实体事件状态失败";
+  } finally {
+    savingId.value = "";
+  }
+}
+
+async function createRequirementFromMilestone() {
+  if (!selected.value || !workspace.currentCode || !canManageMilestone.value) {
+    return;
+  }
+  savingId.value = selected.value.id;
+  error.value = "";
+  message.value = "";
+  try {
+    const created = await createRequirement({
+      workspace_code: workspace.currentCode,
+      title: `跟进：${selected.value.title}`,
+      description: selected.value.event_brief || selected.value.event_content || selected.value.timeline_brief,
+      priority: selected.value.importance_level === "high" ? "high" : "medium",
+      source_entity_milestone_id: selected.value.id,
+      source_note: "由实体大事记事件触发"
+    });
+    message.value = `已创建跟进需求：${created.title}`;
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "创建跟进需求失败";
+  } finally {
+    savingId.value = "";
+  }
+}
+
+function isAnchoredEntity(entity: TrackedEntityListItem) {
+  return pendingEntityId.value === entity.id || selected.value?.tracked_entity_id === entity.id && pendingMilestoneId.value === selected.value?.id;
+}
+
+function isAnchoredMilestone(item: EntityMilestoneListItem) {
+  return pendingMilestoneId.value === item.id;
 }
 
 function formatDate(value: string | null) {
@@ -131,6 +286,12 @@ watch(
     void loadAll();
   }
 );
+watch(
+  () => [pendingEntityId.value, pendingMilestoneId.value] as const,
+  () => {
+    void loadAll();
+  }
+);
 onMounted(loadAll);
 </script>
 
@@ -149,6 +310,7 @@ onMounted(loadAll);
     </header>
 
     <p v-if="error" class="form-error">{{ error }}</p>
+    <p v-if="message" class="form-success">{{ message }}</p>
 
     <section class="timeline-summary-grid">
       <article class="module-card compact">
@@ -231,7 +393,8 @@ onMounted(loadAll);
           :key="entity.id"
           type="button"
           class="entity-row"
-          :class="{ selected: selectedEntityId === entity.id }"
+          :class="{ selected: selectedEntityId === entity.id, anchored: isAnchoredEntity(entity) }"
+          :aria-current="isAnchoredEntity(entity) ? 'true' : undefined"
           @click="selectEntity(entity.id)"
         >
           <span class="feed-icon indigo"><UserRound :size="17" /></span>
@@ -257,7 +420,8 @@ onMounted(loadAll);
           v-for="item in milestones"
           :key="item.id"
           class="milestone-row"
-          :class="{ selected: selected?.id === item.id }"
+          :class="{ selected: selected?.id === item.id, anchored: isAnchoredMilestone(item) }"
+          :aria-current="isAnchoredMilestone(item) ? 'true' : undefined"
           @click="selectMilestone(item.id)"
         >
           <span class="timeline-dot"><CircleDot :size="16" /></span>
@@ -266,6 +430,7 @@ onMounted(loadAll);
               <span>{{ formatDate(item.event_time) }}</span>
               <span>{{ item.event_type || "未分类" }}</span>
               <span>{{ item.importance_level }} · {{ item.importance_score.toFixed(0) }}</span>
+              <span>{{ item.curation_status }}</span>
             </div>
             <h3>{{ item.title }}</h3>
             <p>{{ item.timeline_brief || item.board || item.source_name || "暂无摘要" }}</p>
@@ -290,7 +455,7 @@ onMounted(loadAll);
         <div v-if="selected">
           <div class="card-title-row">
             <div>
-              <p class="eyebrow">{{ selected.entity_name }} · {{ selected.importance_level }}</p>
+              <p class="eyebrow">{{ selected.entity_name }} · {{ selected.importance_level }} · {{ selected.curation_status }}</p>
               <h3>{{ selected.title }}</h3>
             </div>
             <span class="metric-pill">{{ detailLoading ? "loading" : selected.legacy_id }}</span>
@@ -303,6 +468,45 @@ onMounted(loadAll);
               <Link2 :size="15" />来源
             </a>
           </div>
+
+          <div v-if="canGovernSelected" class="milestone-actions">
+            <button type="button" class="mini-action" @click="editing = !editing">
+              <Pencil :size="15" />
+              <span>{{ editing ? "收起编辑" : "编辑事件" }}</span>
+            </button>
+            <button type="button" class="mini-action" :disabled="savingId === selected.id" @click="setCurationStatus('confirmed')">
+              <CheckCircle2 :size="15" />
+              <span>确认</span>
+            </button>
+            <button type="button" class="mini-action" :disabled="savingId === selected.id" @click="setCurationStatus('revoked')">
+              <CircleSlash2 :size="15" />
+              <span>撤销</span>
+            </button>
+            <button type="button" class="mini-action" :disabled="savingId === selected.id" @click="createRequirementFromMilestone">
+              <Plus :size="15" />
+              <span>转需求</span>
+            </button>
+          </div>
+
+          <form v-if="editing && canGovernSelected" class="milestone-edit-form" @submit.prevent="saveMilestoneEdit">
+            <label>标题<input v-model="editDraft.title" /></label>
+            <label>类型<input v-model="editDraft.eventType" /></label>
+            <label>板块<input v-model="editDraft.board" /></label>
+            <label>等级
+              <select v-model="editDraft.importanceLevel">
+                <option value="high">high</option>
+                <option value="medium">medium</option>
+                <option value="low">low</option>
+              </select>
+            </label>
+            <label>重要分<input v-model.number="editDraft.importanceScore" type="number" min="0" max="100" /></label>
+            <label class="wide">事件摘要<textarea v-model="editDraft.eventBrief" rows="3" /></label>
+            <label class="wide">影响摘要<textarea v-model="editDraft.impactBrief" rows="3" /></label>
+            <button type="submit" class="icon-button" :disabled="savingId === selected.id || !editDraft.title.trim()">
+              <Save :size="16" />
+              <span>{{ savingId === selected.id ? "保存中" : "保存事件" }}</span>
+            </button>
+          </form>
 
           <section class="detail-block">
             <p class="eyebrow">Event</p>
@@ -528,6 +732,41 @@ onMounted(loadAll);
 
 .detail-strip {
   margin: 12px 0;
+}
+
+.milestone-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.milestone-edit-form {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 12px 0 16px;
+}
+
+.milestone-edit-form label {
+  color: var(--color-slate-500);
+  display: grid;
+  font-size: 12px;
+  font-weight: 800;
+  gap: 6px;
+}
+
+.milestone-edit-form input,
+.milestone-edit-form select,
+.milestone-edit-form textarea {
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 10px;
+  padding: 9px 10px;
+}
+
+.milestone-edit-form .wide,
+.milestone-edit-form button {
+  grid-column: 1 / -1;
 }
 
 .detail-block {

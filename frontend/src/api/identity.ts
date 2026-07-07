@@ -1,3 +1,4 @@
+import { requestJson } from "./http";
 import type { InviteRecord, SessionUser, UserRole } from "./auth";
 
 export interface RoleRecord {
@@ -7,21 +8,33 @@ export interface RoleRecord {
   description: string;
 }
 
-async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    credentials: "same-origin",
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {})
-    },
-    ...init
-  });
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    const detail = typeof body.detail === "string" ? body.detail : `HTTP ${response.status}`;
-    throw new Error(detail);
-  }
-  return response.json() as Promise<T>;
+export interface PermissionChangeDiff {
+  field: string;
+  label: string;
+  before: unknown;
+  after: unknown;
+  explanation: string;
+}
+
+export interface PermissionChangeRecord {
+  id: string;
+  action: string;
+  object_type: string;
+  object_id: string;
+  actor_name: string | null;
+  created_at: string;
+  scope: string;
+  title: string;
+  summary: string;
+  rollback_available: boolean;
+  rollback_reason: string | null;
+  diffs: PermissionChangeDiff[];
+}
+
+export interface PermissionRollbackResultItem {
+  audit_log_id: string;
+  status: string;
+  message: string;
 }
 
 export async function fetchUsers(workspaceCode?: string): Promise<SessionUser[]> {
@@ -37,6 +50,24 @@ export async function updateUserRoles(userId: string, roleCodes: UserRole[]): Pr
   return requestJson<SessionUser>(`/api/users/${userId}/roles`, {
     method: "PATCH",
     body: JSON.stringify({ role_codes: roleCodes })
+  });
+}
+
+export async function fetchPermissionChanges(workspaceCode?: string): Promise<PermissionChangeRecord[]> {
+  const params = new URLSearchParams({ limit: "30" });
+  if (workspaceCode) {
+    params.set("workspace_code", workspaceCode);
+  }
+  return requestJson<PermissionChangeRecord[]>(`/api/identity/permission-changes?${params.toString()}`);
+}
+
+export async function rollbackPermissionChanges(payload: {
+  audit_log_ids: string[];
+  confirm_dangerous_change?: boolean;
+}): Promise<{ results: PermissionRollbackResultItem[] }> {
+  return requestJson<{ results: PermissionRollbackResultItem[] }>("/api/identity/permission-rollbacks", {
+    method: "POST",
+    body: JSON.stringify(payload)
   });
 }
 

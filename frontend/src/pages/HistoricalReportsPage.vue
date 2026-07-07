@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { Archive, Database, FileText, GitBranch, RefreshCw, Search, TriangleAlert } from "lucide-vue-next";
+import { Archive, Database, FileText, GitBranch, Plus, RefreshCw, Search, TriangleAlert } from "lucide-vue-next";
 import { computed, onMounted, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 
 import {
+  createRequirement,
   fetchHistoricalReportDetail,
   fetchHistoricalReports,
   fetchHistoricalReportSummary,
@@ -15,9 +17,12 @@ import {
   type LegacyImportMetricRecord,
   type LegacyImportSummaryRecord
 } from "../api/operations";
+import { useSessionStore } from "../stores/session";
 import { useWorkspaceStore } from "../stores/workspace";
 
+const route = useRoute();
 const workspace = useWorkspaceStore();
+const session = useSessionStore();
 const summary = ref<HistoricalReportSummaryRecord | null>(null);
 const legacySummary = ref<LegacyImportSummaryRecord | null>(null);
 const legacyGaps = ref<LegacyImportGapItemRecord[]>([]);
@@ -25,7 +30,11 @@ const reports = ref<HistoricalReportListItem[]>([]);
 const selected = ref<HistoricalReportDetailRecord | null>(null);
 const loading = ref(false);
 const detailLoading = ref(false);
+const savingRequirement = ref(false);
 const error = ref("");
+const message = ref("");
+const requirementTitle = ref("");
+const requirementNote = ref("");
 
 const filters = ref({
   reportType: "",
@@ -42,6 +51,17 @@ const selectedRefs = computed(() => {
   const unresolved = Array.isArray(refs.unresolved) ? refs.unresolved : [];
   return { resolved, unresolved };
 });
+const pendingHistoricalReportId = computed(() => routeQueryString(route.query.id));
+const canCreateRequirement = computed(() => {
+  if (session.user?.roles.includes("super_admin")) {
+    return true;
+  }
+  return ["owner", "admin"].includes(workspace.current?.current_user_workspace_role ?? "");
+});
+
+function routeQueryString(value: unknown) {
+  return Array.isArray(value) ? String(value[0] ?? "") : String(value ?? "");
+}
 
 async function loadReports() {
   if (!workspace.currentCode) {
@@ -69,7 +89,13 @@ async function loadReports() {
     legacyGaps.value = nextLegacyGaps;
     reports.value = nextReports;
     if (nextReports.length > 0) {
-      await selectReport(nextReports[0].id);
+      const routeReportId = pendingHistoricalReportId.value;
+      const selectedId = routeReportId && nextReports.some((item) => item.id === routeReportId)
+        ? routeReportId
+        : nextReports[0].id;
+      await selectReport(selectedId);
+    } else if (pendingHistoricalReportId.value) {
+      await selectReport(pendingHistoricalReportId.value);
     } else {
       selected.value = null;
     }
@@ -80,15 +106,56 @@ async function loadReports() {
   }
 }
 
+function isAnchoredReport(report: HistoricalReportListItem) {
+  return pendingHistoricalReportId.value === report.id;
+}
+
 async function selectReport(id: string) {
   detailLoading.value = true;
   error.value = "";
   try {
     selected.value = await fetchHistoricalReportDetail(id);
+    syncRequirementDraft();
   } catch (exc) {
     error.value = exc instanceof Error ? exc.message : "加载历史报告详情失败";
   } finally {
     detailLoading.value = false;
+  }
+}
+
+function syncRequirementDraft() {
+  if (!selected.value) {
+    requirementTitle.value = "";
+    requirementNote.value = "";
+    return;
+  }
+  requirementTitle.value = `跟进历史报告：${selected.value.title}`;
+  requirementNote.value = `历史报告 ${selected.value.legacy_id} 触发`;
+}
+
+async function createRequirementFromHistoricalReport() {
+  if (!selected.value || !requirementTitle.value.trim()) {
+    return;
+  }
+  savingRequirement.value = true;
+  error.value = "";
+  message.value = "";
+  try {
+    const contentExcerpt = selected.value.content.slice(0, 1000);
+    const created = await createRequirement({
+      workspace_code: selected.value.workspace_code,
+      title: requirementTitle.value.trim(),
+      description: `由历史报告触发。\n\n${contentExcerpt}`,
+      priority: "medium",
+      status: "open",
+      source_historical_report_id: selected.value.id,
+      source_note: requirementNote.value.trim() || `历史报告 ${selected.value.legacy_id} 触发`
+    });
+    message.value = `已创建需求：${created.title}`;
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "从历史报告创建需求失败";
+  } finally {
+    savingRequirement.value = false;
   }
 }
 
@@ -125,6 +192,11 @@ function gapKindLabel(item: LegacyImportGapItemRecord) {
 }
 
 watch(() => workspace.currentCode, loadReports);
+watch(pendingHistoricalReportId, (id) => {
+  if (id && selected.value?.id !== id) {
+    void selectReport(id);
+  }
+});
 onMounted(loadReports);
 </script>
 
@@ -143,6 +215,7 @@ onMounted(loadReports);
     </header>
 
     <p v-if="error" class="form-error">{{ error }}</p>
+    <p v-if="message" class="form-success">{{ message }}</p>
 
     <section class="module-card legacy-import-panel">
       <div class="card-title-row">
@@ -286,7 +359,8 @@ onMounted(loadReports);
           v-for="report in reports"
           :key="report.id"
           class="ops-row historical-row"
-          :class="{ selected: selected?.id === report.id }"
+          :class="{ selected: selected?.id === report.id, anchored: isAnchoredReport(report) }"
+          :aria-current="isAnchoredReport(report) ? 'true' : undefined"
           @click="selectReport(report.id)"
         >
           <div class="feed-icon indigo"><FileText :size="18" /></div>
@@ -329,6 +403,30 @@ onMounted(loadReports);
           <article class="historical-content">
             <pre>{{ selected.content }}</pre>
           </article>
+
+          <section v-if="canCreateRequirement" class="historical-requirement-form">
+            <div>
+              <p class="eyebrow">Requirement</p>
+              <h4>转为内部需求</h4>
+            </div>
+            <label>
+              <span>需求标题</span>
+              <input v-model="requirementTitle" />
+            </label>
+            <label>
+              <span>来源说明</span>
+              <textarea v-model="requirementNote" rows="2" />
+            </label>
+            <button
+              type="button"
+              class="mini-action"
+              :disabled="savingRequirement || !requirementTitle.trim()"
+              @click="createRequirementFromHistoricalReport"
+            >
+              <Plus :size="15" />
+              <span>{{ savingRequirement ? "创建中" : "转需求" }}</span>
+            </button>
+          </section>
 
           <section class="historical-ref-panel">
             <div>
@@ -600,6 +698,40 @@ onMounted(loadReports);
 
 .historical-content pre {
   padding: 16px;
+}
+
+.historical-requirement-form {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0;
+  border: 1px solid #dbeafe;
+  border-radius: 12px;
+  padding: 12px;
+  background: #eff6ff;
+}
+
+.historical-requirement-form h4 {
+  margin: 0;
+  color: #0f172a;
+}
+
+.historical-requirement-form label {
+  display: grid;
+  gap: 6px;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.historical-requirement-form input,
+.historical-requirement-form textarea {
+  width: 100%;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #fff;
+  color: #0f172a;
+  font: inherit;
 }
 
 .historical-ref-panel {
