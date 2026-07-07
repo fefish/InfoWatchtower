@@ -17,6 +17,7 @@ def main() -> int:
     errors.extend(validate_button_actions(contract))
     errors.extend(validate_router_links(contract))
     errors.extend(validate_banned_placeholder_text(contract))
+    errors.extend(validate_modal_rule(contract))
     errors.extend(validate_global_controls(contract))
     if errors:
         print("frontend-control-governance: failed", file=sys.stderr)
@@ -59,6 +60,55 @@ def validate_banned_placeholder_text(contract: dict[str, Any]) -> list[str]:
         for text in banned:
             if text in content:
                 errors.append(f"{relative(path)} contains banned placeholder text: {text}")
+    return errors
+
+
+def validate_modal_rule(contract: dict[str, Any]) -> list[str]:
+    """统一弹窗系统扫描（frontend-product-design §10，契约 modal_rule）。
+
+    - config-panel（右侧上下文面板）只允许出现在 context_panel_whitelist 列出的文件里，
+      且必须带 context-panel 正式化标记类（§10.2 三条判定通过的两处：单源配置、格式管理）。
+    - 任何带 modal-backdrop 类的组件必须在同组件内提供 role="dialog" 与 aria-modal="true"
+      （AppModal 基座自带；禁止再造无障碍语义缺失的私有弹层）。
+    """
+    rule = contract.get("modal_rule")
+    if not rule:
+        return []
+    errors: list[str] = []
+    whitelist = {entry.split(" ", 1)[0] for entry in rule.get("context_panel_whitelist", [])}
+    config_panel_re = re.compile(r'class="[^"]*\bconfig-panel\b[^"]*"')
+    # config-panel 白名单扫描面：layouts + pages（components 下的发现工作台迁移归 WP3-G，
+    # 落位后 components 里不应再有 config-panel，可再收紧扫描面）。
+    for path in iter_vue_files(rule.get("scanned_paths", contract["button_action_rule"]["scanned_paths"])):
+        content = path.read_text(encoding="utf-8")
+        for match in config_panel_re.finditer(content):
+            line = line_number(content, match.start())
+            if relative(path) not in whitelist:
+                errors.append(
+                    f"{relative(path)}:{line} config-panel overlay is not in the modal_rule "
+                    "context panel whitelist; use the centered AppModal base instead"
+                )
+            elif "context-panel" not in match.group(0):
+                errors.append(
+                    f"{relative(path)}:{line} whitelisted config-panel must carry the "
+                    "context-panel marker class (frontend-product-design section 10.2)"
+                )
+    # modal-backdrop 无障碍语义扫描面：layouts + pages + components（含 AppModal 基座本身）。
+    # 只匹配 class 属性里的类 token，注释里提到 modal-backdrop 不算。
+    backdrop_re = re.compile(r'class="[^"]*\bmodal-backdrop\b[^"]*"')
+    backdrop_paths = rule.get(
+        "backdrop_scanned_paths",
+        [*contract["button_action_rule"]["scanned_paths"], "frontend/src/components"],
+    )
+    for path in iter_vue_files(backdrop_paths):
+        content = path.read_text(encoding="utf-8")
+        if not backdrop_re.search(content):
+            continue
+        if 'role="dialog"' not in content or 'aria-modal="true"' not in content:
+            errors.append(
+                f'{relative(path)} uses modal-backdrop without role="dialog" and '
+                'aria-modal="true" in the same component'
+            )
     return errors
 
 

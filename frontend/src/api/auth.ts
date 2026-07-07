@@ -101,6 +101,24 @@ export async function fetchMe(): Promise<AuthResponse> {
   return requestAuth("/api/auth/me");
 }
 
+export interface ProfileUpdatePayload {
+  display_name?: string;
+  department?: string;
+  email?: string;
+}
+
+/**
+ * 本地账号资料自助编辑（identity-access-design §4.4，契约 auth_modes.json
+ * profile_self_service）：只有 display_name/department/email 三字段可改；
+ * 外部身份后端返回 400「Profile is managed externally」，游客被中央写门禁 403。
+ */
+export async function updateProfile(payload: ProfileUpdatePayload): Promise<AuthResponse> {
+  return requestAuth("/api/auth/me", {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+}
+
 export async function logout(): Promise<void> {
   // 401 视为已登出，不抛错；其余失败仍上抛，交由调用方提示。
   const response = await requestRaw("/api/auth/logout", { method: "POST" });
