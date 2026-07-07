@@ -501,6 +501,102 @@ class EntityMilestoneDetailRead(EntityMilestoneListItem):
     metadata_json: dict[str, Any]
 
 
+class TrackedEntityCreate(BaseModel):
+    workspace_code: str
+    domain_code: str = "ai"
+    name: str = Field(min_length=1)
+    entity_type: str = "company"
+    rank: str = ""
+    aliases: list[str] = Field(default_factory=list)
+    notes: str = ""
+    influence_score: float = Field(default=0.0, ge=0)
+
+
+class TrackedEntityUpdate(BaseModel):
+    name: str | None = None
+    entity_type: str | None = None
+    rank: str | None = None
+    aliases: list[str] | None = None
+    notes: str | None = None
+    influence_score: float | None = Field(default=None, ge=0)
+
+
+class EntityMilestoneManualCreate(BaseModel):
+    tracked_entity_id: str
+    event_title: str = Field(min_length=1)
+    event_type: str = "manual"
+    event_time: datetime | None = None
+    event_brief: str = ""
+    impact_brief: str = ""
+    source_url: str | None = None
+    source_name: str = ""
+    board: str = ""
+    importance_level: str = "medium"
+    importance_score: float = Field(default=70.0, ge=0, le=100)
+    confidence_score: float = Field(default=1.0, ge=0, le=1)
+    news_item_id: str | None = None
+    note: str = ""
+    metadata_json: dict[str, Any] = Field(default_factory=dict)
+
+
+class EntityTimelineMonthGroupRead(BaseModel):
+    month: str
+    milestone_count: int
+    candidate_count: int
+    milestones: list[EntityMilestoneListItem]
+
+
+class TrackedEntityTimelineRead(BaseModel):
+    entity: TrackedEntityListItem
+    total_milestones: int
+    candidate_count: int
+    confirmed_count: int
+    groups: list[EntityTimelineMonthGroupRead]
+
+
+class ReportArchiveSourceStat(BaseModel):
+    name: str
+    count: int
+
+
+class ReportArchiveListItem(BaseModel):
+    id: str
+    origin: str
+    report_type: str
+    workspace_code: str
+    title: str
+    date_key: str
+    month: str
+    status: str
+    published_at: datetime | None
+    item_count: int
+    adopted_count: int
+    headline_count: int
+    adoption_rate: float
+    top_sources: list[ReportArchiveSourceStat]
+    detail_kind: str
+    detail_id: str
+    content_excerpt: str = ""
+
+
+class ReportArchiveMonthBucket(BaseModel):
+    month: str
+    count: int
+
+
+class ReportArchiveSummaryRead(BaseModel):
+    workspace_code: str
+    total: int
+    published_daily: int
+    published_weekly: int
+    legacy_reports: int
+    total_items: int
+    total_adopted: int
+    average_adoption_rate: float
+    months: list[ReportArchiveMonthBucket]
+    latest_published_at: datetime | None
+
+
 class QualityArchiveSummaryRead(BaseModel):
     workspace_code: str
     total_feedback: int

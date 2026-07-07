@@ -481,6 +481,110 @@ export interface EntityMilestoneDetailRecord extends EntityMilestoneListItem {
   metadata_json: Record<string, unknown>;
 }
 
+export interface TrackedEntityCreatePayload {
+  workspace_code: string;
+  domain_code?: string;
+  name: string;
+  entity_type?: string;
+  rank?: string;
+  aliases?: string[];
+  notes?: string;
+  influence_score?: number;
+}
+
+export interface TrackedEntityUpdatePayload {
+  name?: string;
+  entity_type?: string;
+  rank?: string;
+  aliases?: string[];
+  notes?: string;
+  influence_score?: number;
+}
+
+export interface EntityMilestoneManualCreatePayload {
+  tracked_entity_id: string;
+  event_title: string;
+  event_type?: string;
+  event_time?: string | null;
+  event_brief?: string;
+  impact_brief?: string;
+  source_url?: string | null;
+  source_name?: string;
+  board?: string;
+  importance_level?: string;
+  importance_score?: number;
+  confidence_score?: number;
+  news_item_id?: string | null;
+  note?: string;
+}
+
+export interface EntityTimelineMonthGroupRecord {
+  month: string;
+  milestone_count: number;
+  candidate_count: number;
+  milestones: EntityMilestoneListItem[];
+}
+
+export interface TrackedEntityTimelineRecord {
+  entity: TrackedEntityListItem;
+  total_milestones: number;
+  candidate_count: number;
+  confirmed_count: number;
+  groups: EntityTimelineMonthGroupRecord[];
+}
+
+export interface ReportArchiveSourceStat {
+  name: string;
+  count: number;
+}
+
+export interface ReportArchiveListItem {
+  id: string;
+  origin: "published" | "legacy";
+  report_type: string;
+  workspace_code: string;
+  title: string;
+  date_key: string;
+  month: string;
+  status: string;
+  published_at: string | null;
+  item_count: number;
+  adopted_count: number;
+  headline_count: number;
+  adoption_rate: number;
+  top_sources: ReportArchiveSourceStat[];
+  detail_kind: "daily_report" | "weekly_report" | "historical_report";
+  detail_id: string;
+  content_excerpt: string;
+}
+
+export interface ReportArchiveMonthBucket {
+  month: string;
+  count: number;
+}
+
+export interface ReportArchiveSummaryRecord {
+  workspace_code: string;
+  total: number;
+  published_daily: number;
+  published_weekly: number;
+  legacy_reports: number;
+  total_items: number;
+  total_adopted: number;
+  average_adoption_rate: number;
+  months: ReportArchiveMonthBucket[];
+  latest_published_at: string | null;
+}
+
+export interface ReportArchiveFilters {
+  workspaceCode?: string;
+  month?: string;
+  reportType?: string;
+  origin?: string;
+  query?: string;
+  limit?: number;
+}
+
 export interface EntityMilestoneUpdatePayload {
   event_title?: string | null;
   event_type?: string | null;
@@ -908,6 +1012,59 @@ export async function fetchEntityMilestones(
 
 export async function fetchEntityMilestoneDetail(id: string): Promise<EntityMilestoneDetailRecord> {
   return requestJson<EntityMilestoneDetailRecord>(`/api/entity-milestones/${id}`);
+}
+
+export async function createTrackedEntity(payload: TrackedEntityCreatePayload): Promise<TrackedEntityListItem> {
+  return requestJson<TrackedEntityListItem>("/api/tracked-entities", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function updateTrackedEntity(
+  id: string,
+  payload: TrackedEntityUpdatePayload
+): Promise<TrackedEntityListItem> {
+  return requestJson<TrackedEntityListItem>(`/api/tracked-entities/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function deleteTrackedEntity(id: string): Promise<{ status: string; id: string }> {
+  return requestJson<{ status: string; id: string }>(`/api/tracked-entities/${id}`, {
+    method: "DELETE"
+  });
+}
+
+export async function fetchTrackedEntityTimeline(id: string): Promise<TrackedEntityTimelineRecord> {
+  return requestJson<TrackedEntityTimelineRecord>(`/api/tracked-entities/${id}/timeline`);
+}
+
+export async function createEntityMilestone(
+  payload: EntityMilestoneManualCreatePayload
+): Promise<EntityMilestoneDetailRecord> {
+  return requestJson<EntityMilestoneDetailRecord>("/api/entity-milestones", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function fetchReportArchive(filters: ReportArchiveFilters = {}): Promise<ReportArchiveListItem[]> {
+  const params = new URLSearchParams({
+    workspace_code: requireWorkspaceCode(filters.workspaceCode),
+    limit: String(filters.limit ?? 60)
+  });
+  if (filters.month) params.set("month", filters.month);
+  if (filters.reportType) params.set("report_type", filters.reportType);
+  if (filters.origin) params.set("origin", filters.origin);
+  if (filters.query) params.set("q", filters.query);
+  return requestJson<ReportArchiveListItem[]>(`/api/report-archive?${params.toString()}`);
+}
+
+export async function fetchReportArchiveSummary(workspaceCode: string): Promise<ReportArchiveSummaryRecord> {
+  const params = new URLSearchParams({ workspace_code: workspaceCode });
+  return requestJson<ReportArchiveSummaryRecord>(`/api/report-archive/summary?${params.toString()}`);
 }
 
 export async function updateEntityMilestone(

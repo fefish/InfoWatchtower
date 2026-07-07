@@ -6,6 +6,7 @@ import json
 import zipfile
 from datetime import date, datetime, time, timezone
 from typing import Any
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
@@ -41,15 +42,18 @@ from app.models.legacy import (
     HistoricalReport,
     TrackedEntity,
 )
-from app.models.reports import DailyReportItem, WeeklyReportItem
+from app.models.reports import DailyReport, DailyReportItem, WeeklyReport, WeeklyReportItem
 from app.models.strategy import Insight, Requirement, RequirementSourceLink, StrategicImplication, TopicTask
 from app.models.sync import SyncOutbox, SyncRun
 from app.models.workspace import Workspace, WorkspaceMembership
+from app.reports.weekly import InvalidWeekKeyError, week_bounds
 from app.schemas.operations import (
     AuditLogRead,
     EntityMilestoneDetailRead,
     EntityMilestoneListItem,
+    EntityMilestoneManualCreate,
     EntityMilestoneUpdate,
+    EntityTimelineMonthGroupRead,
     EntityTimelineSummaryRead,
     HistoricalFeedbackListItem,
     HistoricalJobRunListItem,
@@ -62,6 +66,10 @@ from app.schemas.operations import (
     LegacyImportGapItemRead,
     LegacyImportSummaryRead,
     QualityArchiveSummaryRead,
+    ReportArchiveListItem,
+    ReportArchiveMonthBucket,
+    ReportArchiveSourceStat,
+    ReportArchiveSummaryRead,
     ReportItemEntityMilestoneCreate,
     ReportItemStrategyLoopCreate,
     ReportItemStrategyLoopRead,
@@ -84,7 +92,10 @@ from app.schemas.operations import (
     TopicTaskCreate,
     TopicTaskRead,
     TopicTaskUpdate,
+    TrackedEntityCreate,
     TrackedEntityListItem,
+    TrackedEntityTimelineRead,
+    TrackedEntityUpdate,
 )
 from app.sync.apply import apply_sync_records
 from app.sync.records import sort_records_by_dependency
@@ -1126,6 +1137,74 @@ def get_historical_report(
     return _historical_report_to_detail(report)
 
 
+@router.get("/report-archive/summary", response_model=ReportArchiveSummaryRead)
+def get_report_archive_summary(
+    workspace_code: str = Query(...),
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> ReportArchiveSummaryRead:
+    """统一归档统计：已发布日报/周报 + legacy 导入报告的总量、月份分布与平均采信率。"""
+
+    assert_workspace_member(session, current_user, workspace_code, min_role="viewer")
+    entries = _report_archive_entries(session, workspace_code=workspace_code)
+    published = [entry for entry in entries if entry.origin == "published"]
+    month_counts: dict[str, int] = {}
+    for entry in entries:
+        if entry.month:
+            month_counts[entry.month] = month_counts.get(entry.month, 0) + 1
+    total_items = sum(entry.item_count for entry in published)
+    total_adopted = sum(entry.adopted_count for entry in published)
+    rated = [entry.adoption_rate for entry in published if entry.item_count > 0]
+    published_ats = [entry.published_at for entry in published if entry.published_at]
+    return ReportArchiveSummaryRead(
+        workspace_code=workspace_code,
+        total=len(entries),
+        published_daily=sum(1 for entry in published if entry.report_type == "daily"),
+        published_weekly=sum(1 for entry in published if entry.report_type == "weekly"),
+        legacy_reports=sum(1 for entry in entries if entry.origin == "legacy"),
+        total_items=total_items,
+        total_adopted=total_adopted,
+        average_adoption_rate=round(sum(rated) / len(rated), 4) if rated else 0.0,
+        months=[
+            ReportArchiveMonthBucket(month=month, count=count)
+            for month, count in sorted(month_counts.items(), reverse=True)
+        ],
+        latest_published_at=max(published_ats) if published_ats else None,
+    )
+
+
+@router.get("/report-archive", response_model=list[ReportArchiveListItem])
+def list_report_archive(
+    workspace_code: str = Query(...),
+    month: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}$"),
+    report_type: str | None = Query(default=None, pattern="^(daily|weekly)$"),
+    origin: str | None = Query(default=None, pattern="^(published|legacy)$"),
+    q: str | None = Query(default=None),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=60, ge=1, le=300),
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> list[ReportArchiveListItem]:
+    """统一归档列表：回溯任意一天/一周发过什么、质量如何（条目数/采信率/头条/来源分布）。"""
+
+    assert_workspace_member(session, current_user, workspace_code, min_role="viewer")
+    entries = _report_archive_entries(session, workspace_code=workspace_code)
+    if month:
+        entries = [entry for entry in entries if entry.month == month]
+    if report_type:
+        entries = [entry for entry in entries if entry.report_type == report_type]
+    if origin:
+        entries = [entry for entry in entries if entry.origin == origin]
+    if q and q.strip():
+        needle = q.strip().lower()
+        entries = [
+            entry
+            for entry in entries
+            if needle in entry.title.lower() or needle in entry.content_excerpt.lower()
+        ]
+    return entries[offset: offset + limit]
+
+
 @router.get("/entity-timeline/summary", response_model=EntityTimelineSummaryRead)
 def get_entity_timeline_summary(
     workspace_code: str = Query(...),
@@ -1212,6 +1291,178 @@ def list_tracked_entities(
     return [_tracked_entity_to_list_item(session, entity) for entity in entities]
 
 
+@router.post("/tracked-entities", response_model=TrackedEntityListItem)
+def create_tracked_entity(
+    payload: TrackedEntityCreate,
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> TrackedEntityListItem:
+    assert_workspace_member(session, current_user, payload.workspace_code, min_role="admin")
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="name is required")
+    existing = session.scalar(
+        select(TrackedEntity).where(
+            TrackedEntity.workspace_code == payload.workspace_code,
+            func.lower(TrackedEntity.name) == name.lower(),
+        ),
+    )
+    if existing is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Tracked entity already exists")
+    entity = TrackedEntity(
+        workspace_code=payload.workspace_code,
+        domain_code=payload.domain_code,
+        visibility_scope="workspace",
+        sync_policy="outbox",
+        legacy_system="current",
+        legacy_table="tracked_entities",
+        legacy_id=f"{payload.workspace_code}:{hashlib.sha1(name.lower().encode('utf-8')).hexdigest()[:16]}",
+        name=name,
+        entity_type=payload.entity_type.strip(),
+        rank=payload.rank.strip(),
+        aliases_json=_normalized_aliases(payload.aliases),
+        influence_score=payload.influence_score,
+        notes=payload.notes,
+        metadata_json={"created_from": "entity_milestones_page", "created_by_user_id": current_user.id},
+    )
+    session.add(entity)
+    session.flush()
+    write_audit(
+        session,
+        current_user,
+        "tracked_entity.create",
+        "tracked_entity",
+        entity.id,
+        {"workspace_code": entity.workspace_code, "name": entity.name, "entity_type": entity.entity_type},
+    )
+    session.commit()
+    return _tracked_entity_to_list_item(session, _load_tracked_entity(session, entity.id))
+
+
+@router.patch("/tracked-entities/{entity_id}", response_model=TrackedEntityListItem)
+def update_tracked_entity(
+    entity_id: str,
+    payload: TrackedEntityUpdate,
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> TrackedEntityListItem:
+    entity = _load_tracked_entity(session, entity_id)
+    assert_workspace_member(session, current_user, entity.workspace_code, min_role="admin")
+    if entity.legacy_system != "current":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Imported legacy entity is immutable")
+    if payload.name is not None:
+        name = payload.name.strip()
+        if not name:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="name is required")
+        duplicate = session.scalar(
+            select(TrackedEntity).where(
+                TrackedEntity.workspace_code == entity.workspace_code,
+                func.lower(TrackedEntity.name) == name.lower(),
+                TrackedEntity.id != entity.id,
+            ),
+        )
+        if duplicate is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Tracked entity already exists")
+        entity.name = name
+    if payload.entity_type is not None:
+        entity.entity_type = payload.entity_type.strip()
+    if payload.rank is not None:
+        entity.rank = payload.rank.strip()
+    if payload.aliases is not None:
+        entity.aliases_json = _normalized_aliases(payload.aliases)
+    if payload.notes is not None:
+        entity.notes = payload.notes
+    if payload.influence_score is not None:
+        entity.influence_score = payload.influence_score
+    write_audit(
+        session,
+        current_user,
+        "tracked_entity.update",
+        "tracked_entity",
+        entity.id,
+        {"workspace_code": entity.workspace_code, "name": entity.name},
+    )
+    session.commit()
+    return _tracked_entity_to_list_item(session, _load_tracked_entity(session, entity.id))
+
+
+@router.delete("/tracked-entities/{entity_id}")
+def delete_tracked_entity(
+    entity_id: str,
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> dict[str, str]:
+    entity = _load_tracked_entity(session, entity_id)
+    assert_workspace_member(session, current_user, entity.workspace_code, min_role="admin")
+    if entity.legacy_system != "current":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Imported legacy entity is immutable")
+    milestone_count = session.scalar(
+        select(func.count()).select_from(EntityMilestone).where(EntityMilestone.tracked_entity_id == entity.id),
+    ) or 0
+    if milestone_count:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tracked entity still has milestones; remove or keep them before deleting",
+        )
+    write_audit(
+        session,
+        current_user,
+        "tracked_entity.delete",
+        "tracked_entity",
+        entity.id,
+        {"workspace_code": entity.workspace_code, "name": entity.name},
+    )
+    session.delete(entity)
+    session.commit()
+    return {"status": "deleted", "id": entity_id}
+
+
+@router.get("/tracked-entities/{entity_id}/timeline", response_model=TrackedEntityTimelineRead)
+def get_tracked_entity_timeline(
+    entity_id: str,
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> TrackedEntityTimelineRead:
+    entity = _load_tracked_entity(session, entity_id)
+    assert_workspace_member(session, current_user, entity.workspace_code, min_role="viewer")
+    milestones = session.scalars(
+        select(EntityMilestone)
+        .options(selectinload(EntityMilestone.tracked_entity))
+        .where(EntityMilestone.tracked_entity_id == entity.id)
+        .order_by(
+            EntityMilestone.event_time.desc().nullslast(),
+            EntityMilestone.importance_score.desc(),
+            EntityMilestone.created_at.desc(),
+        ),
+    ).all()
+    groups: dict[str, list[EntityMilestone]] = {}
+    for milestone in milestones:
+        month = milestone.event_time.strftime("%Y-%m") if milestone.event_time else "未标注时间"
+        groups.setdefault(month, []).append(milestone)
+    candidate_total = 0
+    confirmed_total = 0
+    group_reads: list[EntityTimelineMonthGroupRead] = []
+    for month, month_milestones in groups.items():
+        candidate_count = sum(1 for item in month_milestones if _milestone_curation_status(item) == "candidate")
+        candidate_total += candidate_count
+        confirmed_total += sum(1 for item in month_milestones if _milestone_curation_status(item) == "confirmed")
+        group_reads.append(
+            EntityTimelineMonthGroupRead(
+                month=month,
+                milestone_count=len(month_milestones),
+                candidate_count=candidate_count,
+                milestones=[_entity_milestone_to_list_item(item) for item in month_milestones],
+            ),
+        )
+    return TrackedEntityTimelineRead(
+        entity=_tracked_entity_to_list_item(session, entity),
+        total_milestones=len(milestones),
+        candidate_count=candidate_total,
+        confirmed_count=confirmed_total,
+        groups=group_reads,
+    )
+
+
 @router.get("/entity-milestones", response_model=list[EntityMilestoneListItem])
 def list_entity_milestones(
     workspace_code: str = Query(...),
@@ -1223,6 +1474,7 @@ def list_entity_milestones(
     start_date: date | None = Query(default=None),
     end_date: date | None = Query(default=None),
     q: str | None = Query(default=None),
+    curation_status: str | None = Query(default=None),
     has_unresolved_refs: bool | None = Query(default=None),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=80, ge=1, le=300),
@@ -1241,6 +1493,8 @@ def list_entity_milestones(
         q=q,
     )
     milestones = session.scalars(statement).all()
+    if curation_status:
+        milestones = [item for item in milestones if _milestone_curation_status(item) == curation_status]
     if has_unresolved_refs is not None:
         milestones = [
             item
@@ -1294,6 +1548,87 @@ def update_entity_milestone(
     session.commit()
     loaded = _load_entity_milestone_source(session, milestone.id)
     return _entity_milestone_to_detail(loaded)
+
+
+@router.post("/entity-milestones", response_model=EntityMilestoneDetailRead)
+def create_entity_milestone(
+    payload: EntityMilestoneManualCreate,
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> EntityMilestoneDetailRead:
+    """人工补录里程碑：admin 为已跟踪实体补一条已确认的时间线事件。"""
+
+    entity = _load_tracked_entity(session, payload.tracked_entity_id)
+    assert_workspace_member(session, current_user, entity.workspace_code, min_role="admin")
+    title = payload.event_title.strip()
+    if not title:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="event_title is required")
+    news_item = None
+    if payload.news_item_id:
+        news_item = session.get(NewsItem, payload.news_item_id)
+        if news_item is None or news_item.workspace_code != entity.workspace_code:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="News item not found in workspace")
+    brief = payload.event_brief.strip() or title
+    current_refs: dict[str, Any] = {}
+    if news_item is not None:
+        current_refs = {
+            "news_item_id": news_item.id,
+            "raw_item_id": news_item.raw_item_id,
+            "data_source_id": news_item.data_source_id,
+        }
+    milestone = EntityMilestone(
+        workspace_code=entity.workspace_code,
+        domain_code=entity.domain_code,
+        visibility_scope="workspace",
+        sync_policy="outbox",
+        legacy_system="current",
+        legacy_table="manual_entity_milestones",
+        legacy_id=f"manual:{uuid4().hex}",
+        tracked_entity_id=entity.id,
+        legacy_entity_id=entity.legacy_id,
+        raw_item_id=news_item.raw_item_id if news_item is not None else None,
+        event_time=payload.event_time or utc_now(),
+        event_type=payload.event_type.strip() or "manual",
+        title=title,
+        event_content=brief,
+        impact=payload.impact_brief.strip(),
+        event_brief=brief,
+        impact_brief=payload.impact_brief.strip(),
+        timeline_brief=brief,
+        source_url=payload.source_url or (news_item.source_url if news_item is not None else None),
+        source_name=payload.source_name.strip() or (news_item.source_name if news_item is not None else ""),
+        board=payload.board.strip(),
+        selected_for_timeline=True,
+        confidence_score=payload.confidence_score,
+        importance_score=payload.importance_score,
+        importance_level=payload.importance_level,
+        event_dedupe_key="",
+        metadata_json={
+            **(payload.metadata_json or {}),
+            "curation_status": "confirmed",
+            "created_from": "manual_timeline_entry",
+            "curation_note": payload.note.strip(),
+            "created_by_user_id": current_user.id,
+            "updated_by_user_id": current_user.id,
+            "current_refs": current_refs,
+        },
+    )
+    session.add(milestone)
+    session.flush()
+    write_audit(
+        session,
+        current_user,
+        "entity_milestone.manual_create",
+        "entity_milestone",
+        milestone.id,
+        {
+            "workspace_code": milestone.workspace_code,
+            "tracked_entity_id": entity.id,
+            "news_item_id": news_item.id if news_item is not None else None,
+        },
+    )
+    session.commit()
+    return _entity_milestone_to_detail(_load_entity_milestone_source(session, milestone.id))
 
 
 def _create_sync_export_package(
@@ -2104,7 +2439,7 @@ def _apply_entity_milestone_update(
         metadata.update(payload.metadata_json)
     if payload.curation_status is not None:
         curation_status = payload.curation_status.strip()
-        if curation_status not in {"draft", "confirmed", "revoked"}:
+        if curation_status not in {"draft", "candidate", "confirmed", "revoked"}:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="invalid curation_status")
         metadata["curation_status"] = curation_status
         if curation_status == "confirmed":
@@ -3060,3 +3395,166 @@ def _content_excerpt(content: str, limit: int = 180) -> str:
     if len(compact) <= limit:
         return compact
     return f"{compact[:limit].rstrip()}..."
+
+
+def _load_tracked_entity(session: Session, entity_id: str) -> TrackedEntity:
+    entity = session.get(TrackedEntity, entity_id)
+    if entity is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tracked entity not found")
+    return entity
+
+
+def _normalized_aliases(aliases: list[str]) -> list[str]:
+    normalized: list[str] = []
+    for alias in aliases:
+        cleaned = (alias or "").strip()
+        if cleaned and cleaned not in normalized:
+            normalized.append(cleaned)
+    return normalized
+
+
+def _report_archive_entries(session: Session, *, workspace_code: str) -> list[ReportArchiveListItem]:
+    """合并三路归档来源并按时间倒序：已发布日报、已发布周报、legacy 导入历史报告。"""
+
+    dated_entries: list[tuple[datetime, ReportArchiveListItem]] = []
+
+    daily_reports = session.scalars(
+        select(DailyReport)
+        .options(
+            selectinload(DailyReport.items)
+            .selectinload(DailyReportItem.generated_news)
+            .selectinload(GeneratedNews.news_item),
+        )
+        .where(DailyReport.workspace_code == workspace_code, DailyReport.status == "published"),
+    ).unique().all()
+    for report in daily_reports:
+        dated_entries.append(_daily_report_archive_entry(report))
+
+    weekly_reports = session.scalars(
+        select(WeeklyReport)
+        .options(
+            selectinload(WeeklyReport.items)
+            .selectinload(WeeklyReportItem.generated_news)
+            .selectinload(GeneratedNews.news_item),
+        )
+        .where(WeeklyReport.workspace_code == workspace_code, WeeklyReport.status == "published"),
+    ).unique().all()
+    for report in weekly_reports:
+        dated_entries.append(_weekly_report_archive_entry(report))
+
+    legacy_reports = session.scalars(
+        select(HistoricalReport).where(HistoricalReport.workspace_code == workspace_code),
+    ).all()
+    for report in legacy_reports:
+        dated_entries.append(_legacy_report_archive_entry(report))
+
+    dated_entries.sort(key=lambda pair: _archive_sort_value(pair[0]), reverse=True)
+    return [entry for _, entry in dated_entries]
+
+
+def _archive_sort_value(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def _top_sources(source_names: list[str], limit: int = 3) -> list[ReportArchiveSourceStat]:
+    counts: dict[str, int] = {}
+    for name in source_names:
+        cleaned = (name or "").strip()
+        if cleaned:
+            counts[cleaned] = counts.get(cleaned, 0) + 1
+    ranked = sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))
+    return [ReportArchiveSourceStat(name=name, count=count) for name, count in ranked[:limit]]
+
+
+def _daily_report_archive_entry(report: DailyReport) -> tuple[datetime, ReportArchiveListItem]:
+    items = report.items or []
+    adopted = [item for item in items if item.adoption_status == 2]
+    source_names = [
+        item.generated_news.news_item.source_name
+        for item in adopted
+        if item.generated_news is not None and item.generated_news.news_item is not None
+    ]
+    sort_time = report.published_at or report.created_at
+    entry = ReportArchiveListItem(
+        id=report.id,
+        origin="published",
+        report_type="daily",
+        workspace_code=report.workspace_code,
+        title=report.title,
+        date_key=report.day_key,
+        month=report.day_key[:7],
+        status=report.status,
+        published_at=report.published_at,
+        item_count=len(items),
+        adopted_count=len(adopted),
+        headline_count=sum(1 for item in adopted if item.is_headline),
+        adoption_rate=round(len(adopted) / len(items), 4) if items else 0.0,
+        top_sources=_top_sources(source_names),
+        detail_kind="daily_report",
+        detail_id=report.id,
+        content_excerpt=_content_excerpt(report.summary),
+    )
+    return sort_time, entry
+
+
+def _weekly_report_archive_entry(report: WeeklyReport) -> tuple[datetime, ReportArchiveListItem]:
+    items = report.items or []
+    adopted = [item for item in items if item.adoption_status == 2]
+    source_names = [
+        item.generated_news.news_item.source_name
+        for item in adopted
+        if item.generated_news is not None and item.generated_news.news_item is not None
+    ]
+    try:
+        month = week_bounds(report.week_key)[0].strftime("%Y-%m")
+    except InvalidWeekKeyError:
+        month = report.created_at.strftime("%Y-%m")
+    sort_time = report.published_at or report.created_at
+    entry = ReportArchiveListItem(
+        id=report.id,
+        origin="published",
+        report_type="weekly",
+        workspace_code=report.workspace_code,
+        title=report.title,
+        date_key=report.week_key,
+        month=month,
+        status=report.status,
+        published_at=report.published_at,
+        item_count=len(items),
+        adopted_count=len(adopted),
+        headline_count=0,
+        adoption_rate=round(len(adopted) / len(items), 4) if items else 0.0,
+        top_sources=_top_sources(source_names),
+        detail_kind="weekly_report",
+        detail_id=report.id,
+        content_excerpt=_content_excerpt(report.summary),
+    )
+    return sort_time, entry
+
+
+def _legacy_report_archive_entry(report: HistoricalReport) -> tuple[datetime, ReportArchiveListItem]:
+    resolved_count, unresolved_count = report_ref_counts(report)
+    ref_total = resolved_count + unresolved_count
+    sort_time = report.period_start_at or report.created_at
+    entry = ReportArchiveListItem(
+        id=report.id,
+        origin="legacy",
+        report_type=report.report_type if report.report_type in {"daily", "weekly"} else "daily",
+        workspace_code=report.workspace_code,
+        title=report.title,
+        date_key=report.period_start_at.date().isoformat() if report.period_start_at else "",
+        month=report.period_start_at.strftime("%Y-%m") if report.period_start_at else "",
+        status=report.status,
+        published_at=report.period_start_at,
+        item_count=ref_total,
+        adopted_count=ref_total,
+        headline_count=0,
+        adoption_rate=1.0 if ref_total else 0.0,
+        top_sources=[],
+        detail_kind="historical_report",
+        detail_id=report.id,
+        content_excerpt=_content_excerpt(report.content),
+    )
+    return sort_time, entry
