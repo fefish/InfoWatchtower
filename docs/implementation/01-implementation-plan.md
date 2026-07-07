@@ -608,3 +608,162 @@ backup restore smoke test
 | 内网适配 | `intranet_header` 已有，IDaaS 仍是计划 | `intranet_oidc` code flow adapter | 公司登录拿到工号/姓名后能映射本地用户 |
 | 多环境同步 | 表结构、策略设计和 `sync-runs` 记录页已有 | sync package 导出/导入 | 公网公开信号能同步到内网，敏感数据不回流 |
 | 板块扩展 | domain pack 目录和概念已设计 | 硬件/半导体等 domain pack 样例 | 新板块不改主链路即可接入源、标签、评分和导出 |
+
+## 17. 第三轮实施工作包（2026-07-07 设计定稿 → 全量实现）
+
+2026-07-07 设计轮（自动化/生成轨道 + 体验系统轨道）已把三大后端能力和五项体验能力
+按实现级规格定稿（见 `docs/architecture/capability-map.md` §4.3 汇总表），本章把
+它们拆成可并行领取的实施工作包。规则：
+
+- 每个 WP 的唯一验收基准是「设计事实源 §号 + 契约键」，不得实现成与设计有出入的
+  "看起来可用"版本；实现后把 `api-and-ui-implementation.md` 待实现端点块移入已实现表、
+  把 capability-map §4.3 对应行移入 §4.1、把 page-specs 对应「未做」改「已做」。
+- 契约状态位同步：实现落地时把对应 contract 里的
+  `design_final_pending_implementation` 状态改为实现事实（如
+  `deployment_modes.json` `planned_startup_failfast_rules` 条目移入
+  `startup_failfast_rules`、`notifications.json` `planned_event_types` 移入
+  `implemented_event_types_v1`）。
+- 公共门禁（每个 WP 提交前必跑）：
+
+```bash
+cd backend && .venv/bin/python -m pytest -q        # 严禁在仓库根跑
+cd frontend && npx vitest run && npm run build
+python3 scripts/validate_docs_governance.py
+python3 scripts/validate_frontend_controls.py
+for f in config/contracts/*.json; do python3 -m json.tool "$f" > /dev/null; done
+git diff --check
+```
+
+### WP3-A 工作台级调度策略 + run 级自动重试 + 调度心跳（后端）
+
+- 范围：`schedule_policy` 读写 API（校验/审计/resolved 预览）；scheduler 60s tick
+  per-workspace 触发与兼容规则；pipeline run 重试链字段（attempt/retry_of_run_id/
+  next_retry_at）与 backoff 自动重试（partial 不触发、error_code 可重试分类、
+  superseded 让位、耗尽通知 `ingestion.pipeline_retry_exhausted`）；
+  `scheduler_heartbeats` 表与 `GET /api/pipeline/scheduler/status`；
+  新 env `SCHEDULER_MISSED_WINDOW_SECONDS`。
+- 事实源/契约：`docs/backend/pipeline-jobs-design.md` §3.1/§6.1-§6.2/§8；
+  `config/contracts/workspace_model.json` `schedule_policy`；
+  `config/contracts/notifications.json` `planned_event_types`。
+- 文件域：`backend/app/workers/scheduler.py`、`backend/app/workers/worker.py`、
+  `backend/app/api/routes/pipeline.py`、`backend/app/api/routes/workspaces.py`、
+  `backend/app/models/`（run 字段 + 心跳表）、`backend/alembic/versions/`、
+  `backend/app/core/config.py`、`backend/tests/`（新增调度策略/重试链/心跳测试）。
+- 验收：pipeline-jobs-design §12「分层调度与 run 级重试」断言 1-10 全部有对应
+  pytest；兼容回归（无策略工作台行为与现状字节一致）必须有专门用例。
+
+### WP3-B 生成 provider 分层配置 + 连通性自检（后端）
+
+- 范围：`GENERATION_*` env 族与 `MINIMAX_*` 逐字段兼容回退；启动 fail-fast 两条
+  规则落 `deploy_checks.py`（同步契约状态位）；`generation_policy` 读写 API
+  （resolved 状态、secret-like 422、审计）；`POST /api/generation/ping` 分类报错；
+  `daily_generation_budget` 与 `fallback_behavior=fail` 语义。
+- 事实源/契约：`docs/backend/generation-provider-design.md`；
+  `config/contracts/workspace_model.json` `generation_policy`；
+  `config/contracts/deployment_modes.json` `planned_startup_failfast_rules`/`related_env`。
+- 文件域：`backend/app/llm/`（provider client 参数化）、`backend/app/core/config.py`、
+  `backend/app/core/deploy_checks.py`、`backend/app/api/routes/`（generation-policy/
+  ping）、`backend/tests/`。
+- 验收：generation-provider-design §7 断言 1-8 全绿；仅配 `MINIMAX_*` 时现有生成/
+  降级测试不改仍绿；任何 API 响应/审计 detail grep 不到 key。
+
+### WP3-C 模板驱动生成 generation_template（后端）
+
+- 范围：`report_formats.generation_template(+_source)` 列与迁移；JSON/XML 安全解析
+  到规范形；投影/增量判定算法；`validate-template` 干跑 API；增量字段生成写
+  `generated_news.template_extras_json`；rendition/MD/HTML 按模板投影；
+  `template_fallback` 降级与 `regenerate` 补齐；weekly 同机制。
+- 事实源/契约：`docs/backend/reports-editorial-design.md` §8.1、
+  `docs/backend/report-renditions-design.md` §10；
+  `config/contracts/report_renditions.json` `generation_template`。
+- 文件域：`backend/app/models/`、`backend/alembic/versions/`、
+  `backend/app/reports/renditions.py`、`backend/app/reports/rendition_html.py`、
+  `backend/app/api/routes/reports.py`、生成链路模块、`backend/tests/`。
+- 验收：report-renditions-design §10.7 断言 1-10 全绿；
+  `scripts/validate_company_sql.py` 基准通过且模板任意配置下公司 SQL 逐字节不变
+  （负向断言必须有用例）。依赖：预算/降级语义依赖 WP3-B 的 `generation_policy`
+  （可先按无预算实现，接口留位）。
+
+### WP3-D 布局模板与间距系统 + Dashboard 重排（前端）
+
+- 范围：`base.css` `:root` spacing tokens 与统一页面容器；四布局模板落地与逐页
+  收敛；`/dashboard` 按主列+固定侧栏重排（含源健康折叠态）；清理业务卡片
+  `position: fixed/absolute` 与重复布局定义。
+- 事实源：`docs/product/frontend-product-design.md` §9、
+  `docs/product/page-specs/frontend-page-specs.md` §1.1/§3/§4.1。
+- 文件域：`frontend/src/styles/base.css`、`frontend/src/pages/DashboardPage.vue`
+  及各业务页容器层、`frontend/src/pages/*.spec.ts`。
+- 验收：产品设计 §9.5 断言全绿；DashboardPage 组件测试覆盖分区归属与源健康
+  折叠/展开；`npm run build` 通过。调度心跳卡（侧栏第 6 位）归 WP3-H，本 WP 不做。
+
+### WP3-E 统一弹窗系统迁移（前端）
+
+- 范围：居中 Modal 基座组件化（尺寸档位/遮罩/Esc/焦点圈定/脏表单确认/移动端全屏）；
+  迁移 4 处弹层（建台向导、发现工作台、新增信息源、导入预览）；单源配置与格式管理
+  正式化为上下文面板；`scripts/validate_frontend_controls.py` 按 `modal_rule`
+  扩展扫描。
+- 事实源/契约：`docs/product/frontend-product-design.md` §10、
+  `docs/product/page-specs/frontend-page-specs.md` §3.1；
+  `config/contracts/frontend_control_governance.json` `modal_rule`。
+- 文件域：`frontend/src/components/`（Modal 基座）、`frontend/src/layouts/AppShell.vue`、
+  `frontend/src/components/WorkspaceDiscovery.vue`、`frontend/src/pages/SourcesPage.vue`、
+  `frontend/src/styles/base.css`、`scripts/validate_frontend_controls.py`、组件测试。
+- 验收：产品设计 §10.4 断言全绿；`python3 scripts/validate_frontend_controls.py`
+  含 modal_rule 扫描通过（config-panel 只剩白名单 2 处）。
+
+### WP3-F 账号资料自助编辑（前后端）
+
+- 范围：`PATCH /api/auth/me`（本地账号三字段、外部身份 400、游客 403、
+  must_change_password 白名单不变、审计 `auth.profile.update`）；`/account`
+  「资料」卡（本地可编辑、外部只读说明、保存后刷新胶囊）。
+- 事实源/契约：`docs/backend/identity-access-design.md` §4.4、产品设计 §11、
+  page-specs §25；`config/contracts/auth_modes.json` `profile_self_service`。
+- 文件域：`backend/app/api/routes/auth.py`、`backend/app/schemas/auth.py`、
+  `backend/tests/test_auth.py`（或新增）、`frontend/src/pages/AccountPage.vue`
+  及 spec、`frontend/src/stores/session.ts`。
+- 验收：identity-access-design §4.4 验收清单全绿（前后端各有测试）。
+
+### WP3-G 发现搜索 + 工作台加入码（前后端）
+
+- 范围：`discover?q=` 过滤；`workspace_join_codes` 表/迁移；join-code 三端点 +
+  `join-by-code`（幂等不降级、统一失效 400、限流 429、四类审计动作）；
+  发现工作台 Modal 的搜索框与凭码加入区（依赖 WP3-E 的 Modal 迁移，可先在现有
+  抽屉内落功能）；`/workspace-settings`「可见性与加入码」卡（含 visibility 切换
+  影响确认）。
+- 事实源/契约：`docs/backend/workspace-configuration-design.md` §14、产品设计 §12、
+  page-specs §19.5；`config/contracts/workspace_model.json`
+  `join_code`/`discovery_and_subscription`、`config/contracts/auth_modes.json`
+  `identity_audit_actions`。
+- 文件域：`backend/app/api/routes/workspaces.py`、`backend/app/models/`、
+  `backend/alembic/versions/`、`backend/tests/`、
+  `frontend/src/components/WorkspaceDiscovery.vue`、
+  `frontend/src/pages/WorkspaceSettingsPage.vue` 及 spec。
+- 验收：workspace-configuration-design §14.4 验收清单全绿（含防枚举与限流用例）。
+
+### WP3-H 工作台配置中心「自动化」「生成模型」卡 + 调度心跳卡（前端）
+
+- 范围：`/workspace-settings` 自动化卡（读写 schedule-policy、生效值来源标注、
+  下次运行预览、总闸关闭只读态）与生成模型卡（读写 generation-policy、key 只显
+  已配置/未配置、测试连通按钮）；`/dashboard` 侧栏第 6 位调度心跳卡与
+  `/ingestion-runs` 调度卡升级（读 scheduler/status，心跳 stale 渲染离线态）。
+- 事实源：pipeline-jobs-design §8.4-§8.5、generation-provider-design §5、
+  page-specs §4.1/§7.3/§19.5。依赖：WP3-A、WP3-B 的 API 先行。
+- 文件域：`frontend/src/pages/WorkspaceSettingsPage.vue`、
+  `frontend/src/pages/DashboardPage.vue`、`frontend/src/pages/IngestionRunsPage.vue`、
+  `frontend/src/api/`、对应 spec。
+- 验收：page-specs §19.5.4/§4.4 括注的实施后测试看护全绿；失败/离线态不得渲染
+  成功绿色（假成功回归）。
+
+### 并行与依赖关系
+
+```text
+WP3-A ──┐
+        ├─→ WP3-H（依赖 A/B 的 API）
+WP3-B ──┤
+        └─→ WP3-C（预算/降级语义依赖 B，可留位先行）
+WP3-D、WP3-E、WP3-F 完全独立可并行
+WP3-G 的 Modal 落位依赖 WP3-E（功能可先行）
+```
+
+契约共享文件（`workspace_model.json` 被 A/B/G 同时修改状态位）合并时以
+capability-map §4.3 行的迁移为准，避免互相覆盖。

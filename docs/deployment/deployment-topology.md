@@ -77,6 +77,16 @@
 | `rss-only` | `INGESTION_SOURCE_TYPES=rss,paper_rss` | 平台只抓 RSS 类信息源；run 内按允许清单过滤启用源，不在清单的源计入 run 摘要 `skipped_type_disabled`（非成功也非失败）；清单值必须是 `source_fields.json` 12 类 source_type 的子集，拼错启动拒绝 |
 | `mirror` | `CAPABILITY_INGESTION=false` + `CAPABILITY_SYNC_CONSUMER=true` + `SYNC_PULL_ENABLED=true` + `SYNC_REMOTE_BASE_URL/SYNC_REMOTE_TOKEN`（必填）+ `INGESTION_SCHEDULER_ENABLED=false` | 本地不采集，只从我们的外部部署拉取成果；是 standalone/cloud 形态叠加 consumer override 的合法组合（启动自检与 `check_prod_deploy.py` 均校验），完整样例 `deploy/env.mirror.example`。install.sh 未提供远端地址/token 时写 `REPLACE_WITH_*` 占位并提示补填后重跑，不带占位值启动 |
 
+### 1.2 部署事实：自动调度依赖 redis + worker + scheduler 三进程
+
+任何形态要让"每日自动流水线/定时同步拉取"真实生效，都必须运行 redis、worker、
+scheduler 三个进程；API 进程自身不投递也不执行定时任务。Docker Compose 部署
+（`deploy/docker-compose.*.yml`）自带这三个服务，`install.sh` 起来即全量；
+standalone 宿主机**裸跑**（不经 compose）必须手动起齐三进程，启动命令见
+`docs/deployment/development-quickstart.md` §2.1。只跑 `uvicorn` 时手动触发可用、
+自动调度静默失效；调度是否在跑必须可在界面自证（scheduler 心跳与下次运行，
+设计见 `docs/backend/pipeline-jobs-design.md` §8.5-§8.6）。
+
 ## 2. WP4：DEPLOY_MODE 与能力开关
 
 ### 2.1 配置模型（`backend/app/core/config.py`）

@@ -47,7 +47,8 @@
 | 后端功能模块设计 | `docs/backend/backend-module-design.md` | 后端领域模块、数据归属、API/事件/任务、权限与缺口 |
 | 数据主链模块设计 | `docs/backend/data-ingestion-flow-storage-design.md` | 数据源、抓取、raw/news、去重、覆盖率和追溯 |
 | 推荐评分模块设计 | `docs/backend/recommendation-scoring-design.md` | 准入、分数、推荐 run、多样性和反馈反哺 |
-| 流水线任务模块设计 | `docs/backend/pipeline-jobs-design.md` | 日更编排、worker、scheduler、重试和失败恢复 |
+| 流水线任务模块设计 | `docs/backend/pipeline-jobs-design.md` | 日更编排、worker、scheduler、工作台调度策略、重试和失败恢复 |
+| 生成 provider 模块设计 | `docs/backend/generation-provider-design.md` | LLM provider 实例配置、工作台生成策略、连通性自检 |
 | 报告编审模块设计 | `docs/backend/reports-editorial-design.md` | 采信、编辑覆盖、发布、锁定和报告版本 |
 | 工作台配置模块设计 | `docs/backend/workspace-configuration-design.md` | 工作台、sections、成员、label/feedback policy 和 domain pack |
 | 身份权限模块设计 | `docs/backend/identity-access-design.md` | 用户、登录、SSO、角色、邀请、工作台 membership |

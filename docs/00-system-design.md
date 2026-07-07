@@ -17,7 +17,8 @@
 - 后端领域模块、数据归属、API/任务/事件：`docs/backend/backend-module-design.md`
 - 数据抓取、流转、raw/news、去重、覆盖率：`docs/backend/data-ingestion-flow-storage-design.md`
 - 推荐准入、评分、推荐 run、反馈反哺：`docs/backend/recommendation-scoring-design.md`
-- 流水线编排、后台任务、scheduler、重试：`docs/backend/pipeline-jobs-design.md`
+- 流水线编排、后台任务、scheduler、工作台调度策略、重试：`docs/backend/pipeline-jobs-design.md`
+- 生成模型 provider 配置、工作台生成策略、连通性自检：`docs/backend/generation-provider-design.md`
 - 日报/周报采信、编辑、发布、锁定：`docs/backend/reports-editorial-design.md`
 - 工作台配置、sections、策略、成员：`docs/backend/workspace-configuration-design.md`
 - 身份、用户、权限、SSO、membership：`docs/backend/identity-access-design.md`
@@ -267,6 +268,16 @@ data_sources 共享源池
 - 标准公司 SQL 只导出已发布日报中 `daily_report_items.adoption_status = 2` 的条目。
 - 任意内部需求必须能追溯回触发它的外部原始信号。
 
+模板驱动生成（目标态，设计已定稿）：自定义报告格式可携带 JSON/XML 声明式生成模板
+（`report_formats.generation_template`），但模板不改变主链路——基稿（五段
+`content_json` + category + `insight_json`）仍只生成一次；模板字段能映射到基稿
+超集的一律投影，仅当模板含基稿没有的字段时才追加生成，增量产出只写
+`generated_news.template_extras_json`，永不进入 `content_json`、`category`、去重、
+推荐和公司 SQL。内置 `company_sql_v1` 锁死、`tech_insight_v1` 不受模板影响。
+事实源：`docs/backend/reports-editorial-design.md` §8.1 与
+`docs/backend/report-renditions-design.md` §10；契约：
+`config/contracts/report_renditions.json` `generation_template`。
+
 ## 6. 核心对象
 
 核心表族：
@@ -335,10 +346,21 @@ workspace_source_links  某工作台启用了哪些共享源以及如何配置
 - 每个工作台有自己的配置中心（前端 `/workspace-settings`，admin/owner 可见）：
   基本信息、导航分区启停、标签策略、报告策略（`report_policy.auto_publish_daily`
   自动发布）、成员管理和报告格式都在工作台内配置，不依赖全局管理员；viewer
-  反馈策略仍在 `/users` 策略视图编辑。
+  反馈策略仍在 `/users` 策略视图编辑。设计已定稿待实现的配置卡：可见性与加入码
+  （§6 加入码条目）、自动化（`schedule_policy`，§11 调度分层）、生成模型
+  （`generation_policy`，key 只在实例 env、界面永不回显）。
 - 用户组（`user_groups`）是运营分组，不是第三层权限：只用于按组批量把成员加入
   工作台（`POST /api/workspaces/{code}/members/bulk`）和任务协作视图的组织单位，
   权限仍由全局角色与 workspace membership 决定。
+- 加入码与公开形态矩阵（目标态，设计已定稿）：公开的上限是「`internal_public`
+  工作台 + `AUTH_GUEST_ENABLED` 游客只读」，系统不提供匿名互联网公开写入；
+  「不公开、只能团队看」= `private` 工作台，团队自助进入靠工作台加入码
+  （admin/owner 生成，8 位码、只授 viewer/member、可轮换/停用/限期限次、防枚举
+  统一失效 400 + 限流），与面向未注册个人的全局邀请码（`user_invites`）互补；
+  发现搜索（`discover?q=`）只覆盖 `internal_public`，private 工作台不泄露存在性。
+  事实源：`docs/backend/workspace-configuration-design.md` §14 与
+  `docs/product/frontend-product-design.md` §12；契约：
+  `config/contracts/workspace_model.json` `join_code`/`discovery_and_subscription`。
 
 最小追溯链路：
 
@@ -567,6 +589,16 @@ scheduler
 postgres
 redis
 ```
+
+自动调度分层（目标态，设计已定稿）：定时任务配置分两层——实例 env 基线
+（`INGESTION_SCHEDULER_*` 总闸与默认值，部署时定一次）+ 工作台
+`workspaces.config_json.schedule_policy`（触发时刻/day_offset/run 级重试/周报节拍，
+运营期在工作台配置中心改，改完下一个 tick 生效）；scheduler 每 60s tick 读 DB
+per-workspace 触发，工作台策略不能越过实例总闸和 `DEPLOY_MODE` 能力开关。
+自动调度真实生效必须运行 redis + worker + scheduler 三进程（compose 自带，裸跑需
+手动起齐），且调度状态必须可在界面自证（心跳/下次运行/最近 run）。事实源：
+`docs/backend/pipeline-jobs-design.md` §6/§8；契约：
+`config/contracts/workspace_model.json` `schedule_policy`。
 
 数据库不放 GitHub。单机部署时 PostgreSQL 数据在服务器磁盘或 Docker volume，例如：
 

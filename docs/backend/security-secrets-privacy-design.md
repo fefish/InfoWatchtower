@@ -24,7 +24,7 @@ Security / Secrets / Privacy 负责横切约束：
 | 数据库密码 | `POSTGRES_PASSWORD` | env / secret manager |
 | OIDC client secret | `OIDC_CLIENT_SECRET` | env / secret manager |
 | Sync service token | `SYNC_SERVICE_TOKENS`、`SYNC_REMOTE_TOKEN` | env / secret manager |
-| LLM API key | `MINIMAX_API_KEY` | env / secret manager |
+| LLM API key | `GENERATION_API_KEY` / `GENERATION_API_KEY_REF`（`env:VAR`/`file:/path`）；旧名 `MINIMAX_API_KEY` 兼容期保留 | env / secret manager（唯一存放处；工作台 `generation_policy` 永不含 key，任何 API 只回显"已配置/未配置"，见 `docs/backend/generation-provider-design.md`） |
 | Paper API key | `SEMANTIC_SCHOLAR_API_KEY` | env / secret manager |
 | WX bridge token | `WX_BRIDGE_TOKEN` | env / secret manager |
 

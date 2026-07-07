@@ -149,6 +149,14 @@
   "startup_warnings": [
     "AUTH_MODE=intranet_header without AUTH_TRUSTED_PROXY_CIDRS: identity headers are trusted from any peer; the trusted gateway must be the only ingress (logged as a warning, not fail-fast, to keep existing gateway-only deployments bootable)"
   ],
+  "planned_startup_failfast_rules": {
+    "status": "design_final_pending_implementation (2026-07-07); move entries into startup_failfast_rules when backend/app/core/deploy_checks.py implements them (the list above stays 1:1 with implemented checks)",
+    "rules": [
+      "GENERATION_ENABLED=true and resolved api key empty (GENERATION_API_KEY empty and GENERATION_API_KEY_REF missing/unresolvable, after legacy MINIMAX_* fallback)",
+      "GENERATION_PROVIDER=openai_compatible and GENERATION_BASE_URL empty",
+      "GENERATION_PROVIDER not in [openai_compatible, minimax]"
+    ]
+  },
   "related_env": [
     "INSTANCE_ID",
     "INGESTION_SOURCE_TYPES",
@@ -182,7 +190,19 @@
     "AUTH_DEPARTMENT_WORKSPACE_MAP",
     "AUTH_GUEST_ENABLED",
     "WX_BRIDGE_URL",
-    "WX_BRIDGE_TOKEN"
+    "WX_BRIDGE_TOKEN",
+    "GENERATION_ENABLED",
+    "GENERATION_PROVIDER",
+    "GENERATION_BASE_URL",
+    "GENERATION_API_KEY",
+    "GENERATION_API_KEY_REF",
+    "GENERATION_MODEL",
+    "GENERATION_MAX_TOKENS",
+    "GENERATION_TEMPERATURE",
+    "GENERATION_TIMEOUT_SECONDS",
+    "GENERATION_RETRY_TIMES",
+    "GENERATION_RETRY_BACKOFF_SECONDS",
+    "SCHEDULER_MISSED_WINDOW_SECONDS"
   ],
   "invariants": [
     "sync direction is one-way extranet -> intranet; intranet feedback never flows back",

@@ -253,6 +253,47 @@ daily_report_items
   `summary_text`、`key_highlights`、`top_groups` 和
   `summary_generated_by=rule_weekly_summary_v1`。后续 LLM 周报摘要模型必须复用同一字段结构。
 
+### 8.1 模板驱动生成（generation_template，设计已定稿待实现 2026-07-07）
+
+用户目标："新建周报/日报格式，可以 XML 或 JSON 格式，让模型按照这种板式生成，
+拿到源、去重以后，AI 根据这个板式生成最终的日报，然后展示。"
+
+固定数据流链（模板不改变链路，只挂在生成与投影两个位点）：
+
+```text
+源 → raw_items → news_items → 去重 → 推荐
+→ AI 生成基稿（五段 content_json + category + insight_json，一次）
+→ AI 按启用格式的模板追加生成增量字段（仅当模板含基稿没有的字段）
+→ 日报采信（adoption_status，一次）
+→ 多版成稿投影展示（每个启用格式一个 rendition）
+```
+
+核心决策——"模板影响生成还是只影响投影"的判定规则：
+
+1. 内置 `company_sql_v1` / `tech_insight_v1` 保持现状：一份基稿 + 纯投影，
+   `generation_template` 恒为 null，locked 语义不变。
+2. 自定义模板格式**投影优先**：模板字段能映射到基稿字段超集
+   （title/summary/key_points/category/五段/insight_json 各字段/
+   source_link/published_at/score）的，一律从基稿投影，不再调模型。
+3. 仅当模板含基稿没有的字段时才**追加生成**：增量字段写
+   `generated_news.template_extras_json[format_code]`，永不写
+   `content_json`、`insight_json`、`category`，永不进公司 SQL。
+4. 降级行为：provider 不可用/超时/预算尽时，rendition 照常投影，缺失增量
+   字段按模板 `map_from` 兜底或置空并标记 `template_fallback`；
+   `regenerate` 可补齐。模板机制任何失败都不得阻塞
+   `company_sql_v1` 链路和日报采信。
+
+周报格式同理：同一模板机制作用于 `report_type=weekly` 的格式；周报增量字段
+同样按 `weekly_report_items.generated_news_id` 读写 `template_extras_json`。
+
+不变式重申：**公司 SQL 契约（company_sql_v1）锁死不受模板机制影响**——
+导出范围、4 表顺序、字段映射、category 十分类、五段 `content_json` 和
+`scripts/validate_company_sql.py` 校验一字不动。
+
+模板载体（JSON 首选/XML 兼容）、字段 schema、上传校验、示例预览、安全边界和
+验收标准的实现级细节见 `docs/backend/report-renditions-design.md` §10，契约见
+`config/contracts/report_renditions.json` `generation_template`。
+
 ## 9. 权限
 
 | 操作 | 最低工作台角色 |
@@ -303,6 +344,7 @@ PATCH /api/weekly-report-items/{id}
 | 周报正文生成不足 | 周报摘要段规则投影 v1 已完成；后续补 LLM 摘要模型和整篇周报长文生成 |
 | 发布通知继续深化 | 已按 `feedback_policy.notify_on_publish` 写 activity event 并通知同工作台成员；后续与归档、邮件和更多对象关注者联动 |
 | 报告锁定和导出关系不清 | locked 报告可导出不可编辑 |
+| 模板驱动生成（设计已定稿待实现） | §8.1 + `report-renditions-design.md` §10：自定义格式可带 JSON/XML 模板，投影优先、增量字段追加生成、company_sql_v1 零影响 |
 
 ## 12. 验收设计
 

@@ -137,6 +137,13 @@
             "ingestion.failed_source_retry_blocked"
         ]
     },
+  "planned_event_types": {
+    "status": "design_final_pending_implementation (2026-07-07); move into implemented_event_types_v1.ingestion_operations, notification_generation_rules_v1 and preference_filtering_v1 when pipeline run-level auto-retry ships (docs/backend/pipeline-jobs-design.md section 6.2)",
+    "ingestion_operations": [
+      "ingestion.pipeline_retry_exhausted"
+    ],
+    "rule": "Emitted once per daily pipeline retry chain when run-level auto-retry attempts are exhausted (the final allowed attempt still ends failed). Recipients, priority and channel mirror ingestion.failed_source_retry_blocked: active super_admin users plus workspace owner/admin members, priority important, in_app, anchor /ingestion-runs?run_id=<last failed run>. Metadata: run id chain, workspace_code, day_key, attempt, error_code."
+  },
   "notification_generation_rules_v1": [
     {
       "event_types": [

@@ -1,6 +1,35 @@
 {
-  "version": 1,
+  "version": 2,
   "purpose": "Prevent decorative frontend controls from entering the product without a real route, API, contract or test-backed behavior.",
+  "modal_rule": {
+    "status": "design_final_pending_implementation (2026-07); fact source docs/product/frontend-product-design.md section 10; scanner enforcement in scripts/validate_frontend_controls.py is an implementation follow-up",
+    "allowed_overlay_forms": [
+      "centered_modal: .modal-backdrop (fixed inset-0 grid place-items:center) + dialog container with role=\"dialog\" aria-modal=\"true\" aria-labelledby; formalizes the existing report-modal-backdrop/report-detail-modal base",
+      "context_panel: right-side config-panel, only when all three conditions hold - edits the currently selected list item, the list must stay visible for comparison, and the action is repeatable configuration editing (not creation, not an irreversible decision)"
+    ],
+    "size_tiers_px": {
+      "sm": 480,
+      "md": 720,
+      "lg": 1120
+    },
+    "behavior": [
+      "Esc close, backdrop-click close and an explicit close button must all work; dirty forms require a sm confirm before discarding input.",
+      "Focus moves into the dialog on open, is trapped inside, and returns to the trigger on close; body scroll is locked.",
+      "Viewports <=640px render every tier fullscreen with a title bar close button.",
+      "At most one sm confirm dialog may stack on a business modal; no business modal opens another business modal."
+    ],
+    "context_panel_whitelist": [
+      "frontend/src/pages/SourcesPage.vue single-source config panel",
+      "frontend/src/pages/DailyReportsPage.vue report format panel"
+    ],
+    "migration_targets": [
+      "AppShell workspace-create wizard -> centered modal md",
+      "WorkspaceDiscovery drawer -> centered modal md (adds discover?q= search and join-by-code block)",
+      "SourcesPage create-source panel -> centered modal md",
+      "SourcesPage import-preview panel -> centered modal sm"
+    ],
+    "scanner_rule_once_enforced": "config-panel class may only appear in context_panel_whitelist files; every element with class modal-backdrop must contain role=\"dialog\" and aria-modal=\"true\" in the same component."
+  },
   "button_action_rule": {
     "scanned_paths": [
       "frontend/src/layouts",
