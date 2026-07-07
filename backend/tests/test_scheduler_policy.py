@@ -613,3 +613,71 @@ def test_interval_jobs_dispatch_on_freshly_booted_machine(tmp_path, monkeypatch)
 
     functions = [call[0] for call in queue.calls]
     assert run_sync_pull_job in functions
+
+
+# ---------------------------------------------------------------------------
+# WP4-A：feedback_reaggregate 每日 job（recommendation-scoring-design §8）
+# 02:00 Asia/Shanghai 触发、心跳判重不重复投递、超 missed window 不补跑、
+# intranet（capability_ingestion=false）不投递。
+# ---------------------------------------------------------------------------
+
+
+def test_feedback_reaggregate_dispatches_once_at_daily_trigger(tmp_path):
+    from app.recommendations.reaggregate import run_feedback_reaggregate_daily_job
+
+    session_factory = make_session_factory(tmp_path, "feedback_reaggregate.sqlite")
+    settings = make_settings()
+    queue = FakeQueue()
+    state = SchedulerState()
+
+    # 触发点之前：只初始化节拍，不投递。
+    scheduler_tick(queue, settings, state, now=shanghai(2026, 7, 7, 1, 59), session_factory=session_factory)
+    assert all(call[0] is not run_feedback_reaggregate_daily_job for call in queue.calls)
+
+    # 跨过 02:00：投递恰 1 次并记心跳。
+    scheduler_tick(queue, settings, state, now=shanghai(2026, 7, 7, 2, 5), session_factory=session_factory)
+    reaggregate_calls = [call for call in queue.calls if call[0] is run_feedback_reaggregate_daily_job]
+    assert len(reaggregate_calls) == 1
+
+    # 同触发点 tick 重放：节拍已推进到明天，不产生第 2 次投递。
+    scheduler_tick(queue, settings, state, now=shanghai(2026, 7, 7, 2, 6), session_factory=session_factory)
+    reaggregate_calls = [call for call in queue.calls if call[0] is run_feedback_reaggregate_daily_job]
+    assert len(reaggregate_calls) == 1
+
+    # 第二个 scheduler 实例同样跨过触发点：心跳表按触发点判重（跨实例幂等）。
+    second_state = SchedulerState()
+    scheduler_tick(queue, settings, second_state, now=shanghai(2026, 7, 7, 1, 58), session_factory=session_factory)
+    scheduler_tick(queue, settings, second_state, now=shanghai(2026, 7, 7, 2, 10), session_factory=session_factory)
+    reaggregate_calls = [call for call in queue.calls if call[0] is run_feedback_reaggregate_daily_job]
+    assert len(reaggregate_calls) == 1
+
+    with session_factory() as session:
+        heartbeat = session.scalar(
+            select(SchedulerHeartbeat).where(SchedulerHeartbeat.job_kind == "feedback_reaggregate"),
+        )
+        assert heartbeat is not None
+        assert heartbeat.last_enqueued_at is not None
+
+
+def test_feedback_reaggregate_respects_missed_window_and_intranet(tmp_path):
+    from app.recommendations.reaggregate import run_feedback_reaggregate_daily_job
+
+    session_factory = make_session_factory(tmp_path, "feedback_reaggregate_missed.sqlite")
+    # 重启不补跑：10:00 冷启动（已过今天 02:00）只把节拍指向明天，不投递。
+    queue = FakeQueue()
+    state = SchedulerState()
+    scheduler_tick(queue, make_settings(), state, now=shanghai(2026, 7, 7, 10, 0), session_factory=session_factory)
+    assert all(call[0] is not run_feedback_reaggregate_daily_job for call in queue.calls)
+    assert state.next_feedback_reaggregate_at == shanghai(2026, 7, 8, 2, 0)
+
+    # intranet pull-only（capability_ingestion=false）：不投递。
+    intranet_queue = FakeQueue()
+    intranet_settings = make_settings(deploy_mode="intranet", capability_ingestion=False)
+    scheduler_tick(
+        intranet_queue,
+        intranet_settings,
+        SchedulerState(),
+        now=shanghai(2026, 7, 7, 2, 5),
+        session_factory=session_factory,
+    )
+    assert all(call[0] is not run_feedback_reaggregate_daily_job for call in intranet_queue.calls)
