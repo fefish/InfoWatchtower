@@ -32,6 +32,10 @@ const sourcesApi = vi.hoisted(() => ({
   fetchSources: vi.fn()
 }));
 
+const schedulerApi = vi.hoisted(() => ({
+  fetchSchedulerStatus: vi.fn()
+}));
+
 vi.mock("../api/health", () => ({
   fetchHealth: healthApi.fetchHealth
 }));
@@ -51,6 +55,10 @@ vi.mock("../api/reports", () => ({
 
 vi.mock("../api/sources", () => ({
   fetchSources: sourcesApi.fetchSources
+}));
+
+vi.mock("../api/scheduler", () => ({
+  fetchSchedulerStatus: schedulerApi.fetchSchedulerStatus
 }));
 
 function health(): HealthResponse {
@@ -229,6 +237,42 @@ function dailyReport(overrides: Partial<DailyReportRecord> = {}): DailyReportRec
   };
 }
 
+function schedulerStatus(overrides: Record<string, unknown> = {}) {
+  return {
+    instance_enabled: true,
+    deploy_mode: "standalone",
+    capability_ingestion: true,
+    timezone: "Asia/Shanghai",
+    heartbeat_at: "2026-07-05T01:59:30+00:00",
+    heartbeat_stale: false,
+    workspaces: [
+      {
+        workspace_code: "planning_intel",
+        effective_enabled: true,
+        effective_daily_time: "12:00",
+        effective_day_offset: -1,
+        policy_source: "workspace",
+        next_run_at: "2026-07-05T12:00:00+08:00",
+        weekly_enabled: false,
+        last_runs: [
+          {
+            run_id: "run-9",
+            day_key: "2026-07-04",
+            status: "succeeded",
+            trigger_type: "scheduler",
+            attempt: 1,
+            error_code: "",
+            skip_reason: "",
+            finished_at: "2026-07-04T12:03:00+08:00"
+          }
+        ],
+        pending_retry: null
+      }
+    ],
+    ...overrides
+  };
+}
+
 function weeklyReport(overrides: Partial<WeeklyReportRecord> = {}): WeeklyReportRecord {
   return {
     id: "weekly-1",
@@ -322,6 +366,7 @@ describe("DashboardPage", () => {
       })
     ]);
     ingestionApi.fetchIngestionCoverage.mockResolvedValue(coverage());
+    schedulerApi.fetchSchedulerStatus.mockResolvedValue(schedulerStatus());
   });
 
   afterEach(() => {
@@ -341,8 +386,9 @@ describe("DashboardPage", () => {
     const text = wrapper.text();
     expect(text).toContain("2026 年 7 月 5 日");
     expect(text).toContain("系统运行正常");
-    expect(text).toContain("12启用源");
-    expect(text).toContain("8抓取成功");
+    // 漏斗改竖排紧凑（§9.4）：阶段名 + 数值一行一级
+    expect(text).toContain("启用源12");
+    expect(text).toContain("抓取成功8");
     expect(text).toContain("今日日报 · 草稿待编审");
     expect(text).toContain("黄仁勋的物理 AI ChatGPT 时刻");
     expect(text).toContain("P0");
@@ -353,6 +399,141 @@ describe("DashboardPage", () => {
     expect(text).toContain("失败源");
     expect(text).toContain("TimeoutError");
     expect(text).toContain("1 个源待补入口");
+    // 有失败源：源健康展开，不渲染折叠单行
+    expect(wrapper.find(".fail-list").exists()).toBe(true);
+    expect(text).not.toContain("源健康正常");
+  });
+
+  it("renders the §9.4 dashboard template: header row, main column and fixed sidebar order", async () => {
+    const wrapper = mountPage();
+    await flushPromises();
+
+    // dashboard 模板：根元素声明 layout-dashboard，页头结论行为全宽单行卡
+    expect(wrapper.find(".briefing.layout-dashboard").exists()).toBe(true);
+    const hero = wrapper.find(".briefing-hero");
+    expect(hero.exists()).toBe(true);
+    expect(hero.text()).toContain("2026 年 7 月 5 日");
+    expect(hero.text()).toContain("系统运行正常");
+    expect(hero.text()).toContain("今日日报 · 草稿待编审");
+
+    // 主列只放「今天要处理的内容」：头条候选 + 最新日报卡
+    const mainSections = wrapper
+      .findAll(".layout-main > article")
+      .map((node) => node.attributes("aria-label"));
+    expect(mainSections).toEqual(["今日头条候选", "最新日报"]);
+
+    // 固定侧栏顺序固定：漏斗 → 快捷入口 → 周报 → 采信趋势 → 源健康 → 调度心跳
+    const sideSections = wrapper
+      .findAll(".layout-side > article")
+      .map((node) => node.attributes("aria-label"));
+    expect(sideSections).toEqual([
+      "流水线漏斗",
+      "快捷入口",
+      "最新周报",
+      "近七日采信趋势",
+      "源健康",
+      "调度心跳"
+    ]);
+
+    // 漏斗为侧栏竖排列表，不再渲染全宽 hero 漏斗
+    expect(wrapper.find(".layout-side .funnel-vlist").exists()).toBe(true);
+    expect(wrapper.find(".funnel-strip").exists()).toBe(false);
+  });
+
+  // ---------- 调度心跳卡（pipeline-jobs-design §8.5，page-specs §4.4 看护） ----------
+
+  it("renders the scheduler heartbeat card online with next run and last run", async () => {
+    const wrapper = mountPage();
+    await flushPromises();
+
+    expect(schedulerApi.fetchSchedulerStatus).toHaveBeenCalled();
+    const card = wrapper.find(".briefing-heartbeat");
+    expect(card.exists()).toBe(true);
+    expect(card.text()).toContain("在线");
+    expect(card.find(".report-status").attributes("data-tone")).toBe("ok");
+    expect(card.text()).toContain("2026-07-05 12:00");
+    expect(card.text()).toContain("2026-07-04 成功");
+  });
+
+  it("renders the heartbeat card offline (never green) when the heartbeat is stale", async () => {
+    schedulerApi.fetchSchedulerStatus.mockResolvedValue(
+      schedulerStatus({ heartbeat_stale: true })
+    );
+    const wrapper = mountPage();
+    await flushPromises();
+
+    const card = wrapper.find(".briefing-heartbeat");
+    expect(card.exists()).toBe(true);
+    expect(card.text()).toContain("离线");
+    // 心跳过期不得渲染在线绿色（假成功回归）
+    expect(card.find(".report-status").attributes("data-tone")).not.toBe("ok");
+    expect(card.text()).not.toContain("在线");
+  });
+
+  it("renders offline when the heartbeat table is empty (scheduler never deployed)", async () => {
+    schedulerApi.fetchSchedulerStatus.mockResolvedValue(
+      schedulerStatus({ heartbeat_at: null, heartbeat_stale: true })
+    );
+    const wrapper = mountPage();
+    await flushPromises();
+
+    const card = wrapper.find(".briefing-heartbeat");
+    expect(card.text()).toContain("离线");
+    expect(card.find(".report-status").attributes("data-tone")).not.toBe("ok");
+  });
+
+  it("hides the whole heartbeat card when the status API is unavailable", async () => {
+    schedulerApi.fetchSchedulerStatus.mockRejectedValue(new Error("backend down"));
+    const wrapper = mountPage();
+    await flushPromises();
+
+    expect(wrapper.find(".briefing-heartbeat").exists()).toBe(false);
+    expect(wrapper.text()).not.toContain("调度心跳");
+  });
+
+  it("surfaces the pending retry state for the current workspace", async () => {
+    schedulerApi.fetchSchedulerStatus.mockResolvedValue(
+      schedulerStatus({
+        workspaces: [
+          {
+            ...schedulerStatus().workspaces[0],
+            last_runs: [
+              {
+                ...schedulerStatus().workspaces[0].last_runs[0],
+                status: "failed",
+                attempt: 1,
+                error_code: "provider_timeout"
+              }
+            ],
+            pending_retry: {
+              run_id: "run-9",
+              attempt: 1,
+              next_attempt: 2,
+              next_retry_at: "2026-07-05T12:15:00+08:00",
+              error_code: "provider_timeout"
+            }
+          }
+        ]
+      })
+    );
+    const wrapper = mountPage();
+    await flushPromises();
+
+    const card = wrapper.find(".briefing-heartbeat");
+    expect(card.text()).toContain("2026-07-04 失败");
+    expect(card.text()).toContain("失败重试排队：第 2 次 · 2026-07-05 12:15");
+  });
+
+  it("collapses source health to a single line when there are no failures and no entry backlog", async () => {
+    sourcesApi.fetchSources.mockResolvedValue([source()]);
+
+    const wrapper = mountPage();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("源健康正常");
+    expect(wrapper.find(".source-health-collapsed").exists()).toBe(true);
+    expect(wrapper.find(".fail-list").exists()).toBe(false);
+    expect(wrapper.find(".entry-alert").exists()).toBe(false);
   });
 
   it("shows empty states and hides ingestion actions when ingestion is disabled", async () => {

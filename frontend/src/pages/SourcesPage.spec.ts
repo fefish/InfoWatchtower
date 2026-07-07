@@ -131,10 +131,16 @@ function mountPage(
         RouterLink: {
           props: ["to"],
           template: '<a :href="typeof to === \'string\' ? to : \'#\'"><slot /></a>'
-        }
+        },
+        // AppModal 通过 Teleport 挂到 body；stub 后就地渲染，wrapper.find 可直查。
+        teleport: true
       }
     }
   });
+}
+
+function pressEscape() {
+  document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
 }
 
 function buttonByText(wrapper: ReturnType<typeof mount>, text: string) {
@@ -294,7 +300,7 @@ describe("SourcesPage", () => {
     await buttonByText(wrapper, "导入 Tech 源").trigger("click");
     await flushPromises();
 
-    const panel = wrapper.find('[aria-label="数据源导入预览"]');
+    const panel = wrapper.find(".modal.modal-sm");
     const groups = panel.findAll(".preview-group");
     expect(groups).toHaveLength(3);
     // 分组按 source_type 排序：internal / rss / wechat，各组给出样本小计。
@@ -333,24 +339,24 @@ describe("SourcesPage", () => {
 
     await buttonByText(wrapper, "新增源").trigger("click");
     await flushPromises();
-    const panel = wrapper.find('[aria-label="新增信息源"]');
-    expect(panel.text()).toContain("论文 API");
+    // 注意：teleport stub 下每次重渲染会替换 Modal 子树，元素查询需从 wrapper 重新发起。
+    expect(wrapper.find(".modal.modal-md").text()).toContain("论文 API");
 
-    await panel.find('input[placeholder="例如 机器之心 RSS"]').setValue("Semantic Scholar AI API");
-    await panel.find("select").setValue("paper_api");
+    await wrapper.find('.modal input[placeholder="例如 机器之心 RSS"]').setValue("Semantic Scholar AI API");
+    await wrapper.find(".modal select").setValue("paper_api");
     expect(
-      panel
+      wrapper
         .find(
-          'input[placeholder="https://api.semanticscholar.org/graph/v1/paper/search/bulk?query=artificial%20intelligence"]'
+          '.modal input[placeholder="https://api.semanticscholar.org/graph/v1/paper/search/bulk?query=artificial%20intelligence"]'
         )
         .exists()
     ).toBe(true);
-    await panel
+    await wrapper
       .find(
-        'input[placeholder="https://api.semanticscholar.org/graph/v1/paper/search/bulk?query=artificial%20intelligence"]'
+        '.modal input[placeholder="https://api.semanticscholar.org/graph/v1/paper/search/bulk?query=artificial%20intelligence"]'
       )
       .setValue("https://api.semanticscholar.org/graph/v1/paper/search/bulk?query=artificial%20intelligence");
-    await panel.find('input[type="number"]').setValue("30");
+    await wrapper.find('.modal input[type="number"]').setValue("30");
 
     await buttonByText(wrapper, "创建并启用").trigger("click");
     await flushPromises();
@@ -390,6 +396,98 @@ describe("SourcesPage", () => {
     // 无 membership 的 403 拒绝：源列表加载失败要给出错误提示，而不是留一片空白。
     expect(wrapper.find(".form-error").text()).toContain("permission denied: workspace membership required");
     expect(wrapper.findAll(".source-row")).toHaveLength(0);
+  });
+
+  it("renders the create-source form as a centered md modal instead of a corner panel", async () => {
+    const wrapper = mountPage();
+    await flushPromises();
+
+    await buttonByText(wrapper, "新增源").trigger("click");
+    await flushPromises();
+
+    // §10.3 迁移清单第 3 项：新增信息源迁居中 Modal（md 档），不再使用 config-panel 浮层。
+    const dialog = wrapper.find(".modal-backdrop .modal.modal-md");
+    expect(dialog.exists()).toBe(true);
+    expect(dialog.attributes("role")).toBe("dialog");
+    expect(dialog.attributes("aria-modal")).toBe("true");
+    expect(dialog.text()).toContain("新增信息源");
+    expect(wrapper.find(".config-panel[aria-label='新增信息源']").exists()).toBe(false);
+  });
+
+  it("closes the clean create modal on Escape but confirms before discarding dirty input", async () => {
+    const wrapper = mountPage();
+    await flushPromises();
+
+    // 干净表单：Esc 直接关闭。
+    await buttonByText(wrapper, "新增源").trigger("click");
+    await flushPromises();
+    pressEscape();
+    await flushPromises();
+    expect(wrapper.find(".modal").exists()).toBe(false);
+
+    // 脏表单：Esc 先叠 sm 确认层，「继续编辑」保留输入，「放弃修改」才关闭（§10.1）。
+    await buttonByText(wrapper, "新增源").trigger("click");
+    await flushPromises();
+    await wrapper.find('input[placeholder="例如 机器之心 RSS"]').setValue("机器之心 RSS");
+    pressEscape();
+    await flushPromises();
+    const confirm = wrapper.find(".modal-confirm");
+    expect(confirm.exists()).toBe(true);
+    expect(confirm.text()).toContain("放弃未保存的修改？");
+
+    const keepEditing = confirm.findAll("button").find((button) => button.text().includes("继续编辑"));
+    await keepEditing!.trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".modal-confirm").exists()).toBe(false);
+    expect(
+      (wrapper.find('input[placeholder="例如 机器之心 RSS"]').element as HTMLInputElement).value
+    ).toBe("机器之心 RSS");
+
+    pressEscape();
+    await flushPromises();
+    const discard = wrapper.find(".modal-confirm").findAll("button").find((button) => button.text().includes("放弃修改"));
+    await discard!.trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".modal").exists()).toBe(false);
+  });
+
+  it("renders the import preview as a centered sm confirm modal that closes on Escape", async () => {
+    const wrapper = mountPage();
+    await flushPromises();
+
+    await buttonByText(wrapper, "导入数据").trigger("click");
+    await flushPromises();
+
+    // §10.3 迁移清单第 4 项：导入预览是决策确认类，迁居中 Modal（sm 档）。
+    const dialog = wrapper.find(".modal-backdrop .modal.modal-sm");
+    expect(dialog.exists()).toBe(true);
+    expect(dialog.attributes("role")).toBe("dialog");
+    expect(dialog.attributes("aria-modal")).toBe("true");
+    expect(dialog.text()).toContain("旧种子源");
+
+    // 预览是只读确认（非脏表单）：Esc 直接关闭，不触发导入。
+    pressEscape();
+    await flushPromises();
+    expect(wrapper.find(".modal").exists()).toBe(false);
+    expect(api.importLegacySources).not.toHaveBeenCalled();
+  });
+
+  it("keeps the single-source config as a context panel per the §10.2 rules", async () => {
+    const wrapper = mountPage({ sources: [sourceRecord()] });
+    await flushPromises();
+
+    await buttonByText(wrapper, "配置").trigger("click");
+    await flushPromises();
+
+    // 保留理由（§10.2 三条判定）：编辑列表当前选中项 + 需对照背后列表 + 可反复保存的配置编辑；
+    // context-panel 类名是正式化标记，扫描器据此只放行白名单内的 config-panel。
+    const panel = wrapper.find('aside[aria-label="数据源配置"]');
+    expect(panel.exists()).toBe(true);
+    expect(panel.classes()).toContain("config-panel");
+    expect(panel.classes()).toContain("context-panel");
+    // 上下文面板不是 Modal：背后列表保持可见、可对照。
+    expect(panel.attributes("role")).toBeUndefined();
+    expect(wrapper.find(".source-row").exists()).toBe(true);
   });
 
   it("renders an idle empty state without requesting sources when the user has no workspace", async () => {

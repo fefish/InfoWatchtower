@@ -164,10 +164,16 @@ function mountShell(
       plugins: [pinia],
       stubs: {
         RouterLink: routerLinkStub,
-        RouterView: { template: "<main />" }
+        RouterView: { template: "<main />" },
+        // AppModal 通过 Teleport 挂到 body；stub 后就地渲染，wrapper.find 可直查。
+        teleport: true
       }
     }
   });
+}
+
+function pressEscape() {
+  document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
 }
 
 describe("AppShell", () => {
@@ -537,6 +543,75 @@ describe("AppShell 建台向导", () => {
     await wizardButton(wrapper, "下一步").trigger("click");
     await flushPromises();
   }
+
+  it("renders the wizard as a centered md modal instead of the corner config panel", async () => {
+    const wrapper = mountShell();
+    await flushPromises();
+    await openWizard(wrapper);
+
+    // §10.3 迁移清单第 1 项：建台向导迁居中 Modal（md 档），右上 config-panel 浮层不再出现。
+    expect(wrapper.find(".config-panel").exists()).toBe(false);
+    const dialog = wrapper.find(".modal-backdrop .modal.modal-md");
+    expect(dialog.exists()).toBe(true);
+    expect(dialog.attributes("role")).toBe("dialog");
+    expect(dialog.attributes("aria-modal")).toBe("true");
+    expect(dialog.text()).toContain("新建工作台");
+    expect(dialog.find(".workspace-wizard").exists()).toBe(true);
+  });
+
+  it("closes on Escape when clean but stacks a dirty-form confirm once the wizard has input", async () => {
+    const wrapper = mountShell();
+    await flushPromises();
+    await openWizard(wrapper);
+
+    // 干净表单：Esc 直接关闭，不弹确认。
+    pressEscape();
+    await flushPromises();
+    expect(wrapper.find(".modal").exists()).toBe(false);
+
+    // 脏表单：Esc 先叠 sm 确认层，「继续编辑」保留输入，「放弃修改」才真正关闭（§10.1）。
+    await openWizard(wrapper);
+    await wrapper.find('input[placeholder="例如 hardware_intel"]').setValue("hardware_intel");
+    pressEscape();
+    await flushPromises();
+    expect(wrapper.find(".workspace-wizard").exists()).toBe(true);
+    const confirm = wrapper.find(".modal-confirm");
+    expect(confirm.exists()).toBe(true);
+    expect(confirm.text()).toContain("放弃未保存的修改？");
+
+    const keepEditing = confirm.findAll("button").find((button) => button.text().includes("继续编辑"));
+    await keepEditing!.trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".modal-confirm").exists()).toBe(false);
+    expect(
+      (wrapper.find('input[placeholder="例如 hardware_intel"]').element as HTMLInputElement).value
+    ).toBe("hardware_intel");
+
+    pressEscape();
+    await flushPromises();
+    const discard = wrapper.find(".modal-confirm").findAll("button").find((button) => button.text().includes("放弃修改"));
+    await discard!.trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".workspace-wizard").exists()).toBe(false);
+    expect(wrapper.find(".modal").exists()).toBe(false);
+  });
+
+  it("closes without confirmation from the finished page even after wizard input", async () => {
+    const wrapper = mountShell();
+    await flushPromises();
+    await openWizard(wrapper);
+    await fillBasicsAndGoToStep2(wrapper);
+    await wizardButton(wrapper, "下一步").trigger("click");
+    await flushPromises();
+    await wizardButton(wrapper, "创建工作台").trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".workspace-wizard-done").exists()).toBe(true);
+
+    // 完成页不再是脏表单：Esc 直接关闭。
+    pressEscape();
+    await flushPromises();
+    expect(wrapper.find(".modal").exists()).toBe(false);
+  });
 
   it("walks through the three wizard steps and rejects invalid workspace codes", async () => {
     const wrapper = mountShell();

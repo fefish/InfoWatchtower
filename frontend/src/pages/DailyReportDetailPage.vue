@@ -99,7 +99,7 @@ onMounted(loadReport);
 </script>
 
 <template>
-  <section class="module-page">
+  <section class="layout-detail">
     <header class="module-hero">
       <div>
         <p class="eyebrow">{{ editMode ? "Daily Report Edit" : "Daily Report Detail" }}</p>

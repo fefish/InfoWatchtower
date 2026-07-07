@@ -120,7 +120,11 @@ function mountPage(options: { userId?: string; role?: "super_admin" | "viewer"; 
 
   return mount(TopicTasksPage, {
     global: {
-      plugins: [pinia]
+      plugins: [pinia],
+      stubs: {
+        // AppModal 通过 Teleport 挂到 body；stub 后就地渲染，wrapper.find 可直查。
+        teleport: true
+      }
     }
   });
 }
@@ -328,14 +332,21 @@ describe("TopicTasksPage", () => {
     await flushPromises();
 
     expect(operationsApi.fetchTopicTask).toHaveBeenCalledWith("task-1");
-    const dialog = wrapper.find('[role="dialog"][aria-labelledby="task-detail-title"]');
+    // §10.3 迁移清单第 8 项：任务详情归入 AppModal lg 档（旧 report-modal-backdrop 私有基座收编）。
+    const dialog = wrapper.find('.modal-backdrop .modal.modal-lg[role="dialog"]');
     expect(dialog.exists()).toBe(true);
+    expect(dialog.attributes("aria-modal")).toBe("true");
     expect(dialog.text()).toContain("补齐 Agent 记忆专题跟踪");
     expect(dialog.text()).toContain("等待业务方确认");
     expect(dialog.text()).toContain("评估 Agent 记忆能力建设");
     expect(dialog.text()).toContain("Agent 记忆能力升级");
     expect(dialog.find('a[href="/daily-reports?daily_report_item_id=daily-item-1"]').exists()).toBe(true);
     expect(dialog.find('a[href="/requirements?requirement_id=req-1"]').exists()).toBe(true);
+
+    // 只读详情非脏表单：Esc 直接关闭（AppModal 基座行为，§10.1）。
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    await flushPromises();
+    expect(wrapper.find(".modal").exists()).toBe(false);
   });
 
   it("shows historical feedback source links in task requirement traces", async () => {

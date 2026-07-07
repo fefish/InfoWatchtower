@@ -35,7 +35,7 @@ onMounted(loadLogs);
 </script>
 
 <template>
-  <section class="module-page">
+  <section class="layout-list">
     <header class="module-hero">
       <div>
         <p class="eyebrow">Governance</p>

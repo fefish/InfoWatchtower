@@ -421,7 +421,11 @@ describe("DailyReportsPage feedback policy", () => {
     expect(reportsApi.fetchDailyReports).toHaveBeenCalledWith("planning_intel");
     expect(reportsApi.fetchDailyReportItemComments).toHaveBeenCalledWith("item-1");
     expect(wrapper.find(".daily-item.story.active").exists()).toBe(true);
-    expect(document.body.querySelector(".report-modal-backdrop")?.textContent).toContain("测试新闻标题");
+    // 日报条目详情已正式化为 AppModal lg 档（产品设计 §10.3 迁移样例）
+    const detailModal = document.body.querySelector(".modal-backdrop .modal.modal-lg");
+    expect(detailModal?.getAttribute("role")).toBe("dialog");
+    expect(detailModal?.getAttribute("aria-modal")).toBe("true");
+    expect(detailModal?.textContent).toContain("测试新闻标题");
     const anchoredComment = document.body.querySelector(".comment-row.anchored") as HTMLElement;
     expect(anchoredComment?.textContent).toContain("这条评论需要定位");
     expect(anchoredComment?.getAttribute("aria-current")).toBe("true");
@@ -515,7 +519,7 @@ describe("DailyReportsPage feedback policy", () => {
     await flushPromises();
 
     expect(wrapper.find(".daily-report-card h3").text()).toBe("第二份规划部日报");
-    expect(wrapper.find(".report-modal-backdrop").exists()).toBe(false);
+    expect(document.body.querySelector(".modal-backdrop")).toBeNull();
   });
 
   it("selects and highlights a report rendition from a search anchor", async () => {
@@ -544,6 +548,29 @@ describe("DailyReportsPage feedback policy", () => {
     expect(anchoredRendition.exists()).toBe(true);
     expect(anchoredRendition.attributes("aria-current")).toBe("true");
     expect(anchoredRendition.text()).toContain("测试新闻标题");
+  });
+
+  it("keeps the report format manager as a context panel per the §10.2 rules", async () => {
+    const wrapper = mountPage({ workspaceRole: "member" });
+    await flushPromises();
+
+    const formatButton = wrapper
+      .findAll(".rendition-actions button")
+      .find((button) => button.text().includes("格式"));
+    expect(formatButton).toBeTruthy();
+    await formatButton!.trigger("click");
+    await flushPromises();
+
+    // 保留理由（frontend-product-design §10.2 三条判定）：编辑当前报告的格式列表项 +
+    // 需对照背后成稿视图 + 可反复保存的配置编辑；context-panel 类名是正式化标记，
+    // scripts/validate_frontend_controls.py 的 modal_rule 扫描据此只放行白名单内的 config-panel。
+    const panel = wrapper.find('aside[aria-label="成稿格式管理"]');
+    expect(panel.exists()).toBe(true);
+    expect(panel.classes()).toContain("config-panel");
+    expect(panel.classes()).toContain("context-panel");
+    // 上下文面板不是 Modal：无 dialog 语义，背后报告视图保持可见、可对照。
+    expect(panel.attributes("role")).toBeUndefined();
+    expect(wrapper.find(".daily-report-card").exists()).toBe(true);
   });
 
   it("hides editorial controls for workspace viewers while keeping reading intact", async () => {

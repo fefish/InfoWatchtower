@@ -157,7 +157,7 @@ onMounted(loadArchive);
 </script>
 
 <template>
-  <section class="module-page quality-page">
+  <section class="layout-list quality-page">
     <header class="module-hero">
       <div>
         <p class="eyebrow">Quality Archive</p>
