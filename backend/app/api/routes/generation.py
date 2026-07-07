@@ -1,19 +1,25 @@
-"""生成 provider 工作台策略与连通性自检 API（WP3-B）。
+"""生成 provider 工作台策略与连通性自检 API（WP3-B，WP4-B R2 修订）。
 
-事实源：docs/backend/generation-provider-design.md §3.2/§4；契约：
-config/contracts/workspace_model.json `generation_policy`。
+事实源：docs/backend/generation-provider-design.md §3.2/§4/§9；契约：
+config/contracts/workspace_model.json `generation_policy`、
+config/contracts/llm_providers.json。
 
 - GET   /api/workspaces/{code}/generation-policy   workspace viewer+ 读
-  （响应附只读 resolved 状态，「生成模型」卡不打 ping 也能展示）
+  （响应附只读 resolved 状态；workspace admin+ 附 credential_options 凭据清单，
+  viewer 只见 resolved）
 - PATCH /api/workspaces/{code}/generation-policy   workspace admin+ 或 super_admin 写
-  （取值域校验 422；secret-like 字段 422；审计 workspace.generation_policy.update）
+  （取值域校验 422；secret-like 字段 422；credential_id 必须指向存在且启用的
+  凭据否则 422；审计 workspace.generation_policy.update）
 - POST  /api/generation/ping                        super_admin 或 editor_admin
-  （最小探针、分类报错、审计 generation.ping；detail 无 key）
+  （最小探针、分类报错、审计 generation.ping；detail 无 key；R2 支持
+  credential_id——两者都给时 credential_id 优先，供「保存后立即试连」）
 """
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Body, Depends, HTTPException, status
 from sqlalchemy import select
@@ -29,12 +35,15 @@ from app.llm.provider import (
     GENERATION_POLICY_DEFAULTS,
     ResolvedGenerationConfig,
     ping_generation_provider,
+    resolve_credential_for_config,
     resolve_generation_config,
     workspace_generation_policy,
 )
 from app.models.identity import User
+from app.models.llm import LlmProviderCredential
 from app.models.workspace import Workspace
 from app.schemas.generation import (
+    CredentialOptionRead,
     GenerationPingCreate,
     GenerationPingRead,
     GenerationPolicyRead,
@@ -66,7 +75,37 @@ def _resolved_to_read(config: ResolvedGenerationConfig) -> GenerationResolvedRea
         enabled=config.enabled,
         key_configured=config.key_configured,
         key_source=config.key_source,
+        credential_id=config.credential_id,
+        credential_label=config.credential_label,
     )
+
+
+def _is_workspace_admin(session: Session, user: User, workspace_code: str) -> bool:
+    try:
+        assert_workspace_member(session, user, workspace_code, min_role="admin")
+    except HTTPException:
+        return False
+    return True
+
+
+def _credential_options(session: Session) -> list[CredentialOptionRead]:
+    """凭据下拉清单（workspace admin+ 才返回；viewer 只见 resolved）。
+    永只含 masked 视图；「跟随实例 env」= null 选项由前端恒置首位。"""
+    rows = session.scalars(
+        select(LlmProviderCredential)
+        .where(LlmProviderCredential.enabled.is_(True))
+        .order_by(LlmProviderCredential.created_at),
+    ).all()
+    return [
+        CredentialOptionRead(
+            id=row.global_id,
+            label=row.label,
+            provider=row.provider,
+            base_url_host=urlparse(row.base_url).hostname or "",
+            key_masked=row.key_masked,
+        )
+        for row in rows
+    ]
 
 
 def _policy_read(workspace: Workspace) -> GenerationPolicyRead:
@@ -80,7 +119,7 @@ def _validation_error(field: str, message: str) -> HTTPException:
     )
 
 
-def _validate_policy_patch(payload: dict[str, Any]) -> dict[str, Any]:
+def _validate_policy_patch(payload: dict[str, Any], session: Session) -> dict[str, Any]:
     """取值域校验（generation-provider-design §3.2）；返回只含合法字段的增量。"""
     if not isinstance(payload, dict):
         raise _validation_error("__root__", "payload must be a JSON object")
@@ -88,7 +127,8 @@ def _validate_policy_patch(payload: dict[str, Any]) -> dict[str, Any]:
         raise _validation_error(
             "__root__",
             "secret-like keys are not allowed in generation_policy "
-            "(keys/base urls live in instance env only)",
+            "(keys live in instance env or the encrypted credential store; "
+            "reference them via credential_id)",
         )
     unknown = sorted(set(payload) - POLICY_FIELDS)
     if unknown:
@@ -98,6 +138,29 @@ def _validate_policy_patch(payload: dict[str, Any]) -> dict[str, Any]:
         )
 
     updates: dict[str, Any] = {}
+    if "credential_id" in payload:
+        # credential_id 是白名单指针字段（不是密钥）：PATCH 时校验存在且启用，
+        # 之后被禁用/删除按 credential_missing 降级、不报错阻塞（§3.2/§9.4）。
+        credential_id = payload["credential_id"]
+        if credential_id is not None:
+            if not isinstance(credential_id, str) or not credential_id.strip():
+                raise _validation_error(
+                    "credential_id",
+                    "credential_id must be null or a credential id string",
+                )
+            credential_id = credential_id.strip()
+            row = session.scalar(
+                select(LlmProviderCredential).where(
+                    LlmProviderCredential.global_id == credential_id,
+                    LlmProviderCredential.enabled.is_(True),
+                ),
+            )
+            if row is None:
+                raise _validation_error(
+                    "credential_id",
+                    "credential_id must reference an existing enabled credential",
+                )
+        updates["credential_id"] = credential_id
     if "model" in payload:
         model = payload["model"]
         if model is not None:
@@ -168,11 +231,17 @@ def get_workspace_generation_policy(
 ) -> WorkspaceGenerationPolicyRead:
     assert_workspace_member(session, current_user, workspace_code, min_role="viewer")
     workspace = _get_enabled_workspace(session, workspace_code)
-    config = resolve_generation_config(settings, workspace=workspace)
+    config = resolve_generation_config(settings, workspace=workspace, session=session)
+    credential_options = (
+        _credential_options(session)
+        if _is_workspace_admin(session, current_user, workspace_code)
+        else None
+    )
     return WorkspaceGenerationPolicyRead(
         workspace_code=workspace.code,
         policy=_policy_read(workspace),
         resolved=_resolved_to_read(config),
+        credential_options=credential_options,
     )
 
 
@@ -189,7 +258,7 @@ def update_workspace_generation_policy(
 ) -> WorkspaceGenerationPolicyRead:
     assert_workspace_member(session, current_user, workspace_code, min_role="admin")
     workspace = _get_enabled_workspace(session, workspace_code)
-    updates = _validate_policy_patch(payload)
+    updates = _validate_policy_patch(payload, session)
 
     config_json = dict(workspace.config_json or {})
     before = workspace_generation_policy(workspace)
@@ -210,11 +279,17 @@ def update_workspace_generation_policy(
     )
     session.commit()
     session.refresh(workspace)
-    config = resolve_generation_config(settings, workspace=workspace)
+    config = resolve_generation_config(settings, workspace=workspace, session=session)
+    credential_options = (
+        _credential_options(session)
+        if _is_workspace_admin(session, current_user, workspace_code)
+        else None
+    )
     return WorkspaceGenerationPolicyRead(
         workspace_code=workspace.code,
         policy=_policy_read(workspace),
         resolved=_resolved_to_read(config),
+        credential_options=credential_options,
     )
 
 
@@ -234,23 +309,42 @@ def generation_ping(
     workspace = None
     if payload.workspace_code:
         workspace = _get_enabled_workspace(session, payload.workspace_code)
-    config = resolve_generation_config(settings, workspace=workspace)
+    if payload.credential_id:
+        # R2：按凭据测试（保存后立即试连）——该凭据的 provider/base_url/key +
+        # 实例默认模型参数；与 workspace_code 同给时 credential_id 优先（§4）。
+        base_config = resolve_generation_config(settings)
+        resolution = resolve_credential_for_config(session, settings, payload.credential_id)
+        config = replace(
+            base_config,
+            provider=resolution.provider or base_config.provider,
+            base_url=resolution.base_url or base_config.base_url,
+            api_key=resolution.api_key,
+            key_source=resolution.key_source,
+            credential_id=payload.credential_id,
+            credential_label=resolution.credential_label,
+        )
+    else:
+        config = resolve_generation_config(settings, workspace=workspace, session=session)
     result = ping_generation_provider(config)
-    # 审计 detail 只含 provider/model/base_url_host/status/latency_ms——无 key、
-    # 无 error_message（设计 §4；密钥红线见 security-secrets-privacy-design）。
+    # 审计 detail 只含 provider/model/base_url_host/status/latency_ms（按凭据
+    # 测试时追加 credential_id 指针）——无 key、无 error_message（设计 §4/§9.5；
+    # 密钥红线见 security-secrets-privacy-design）。
+    audit_detail: dict[str, Any] = {
+        "provider": result.provider,
+        "model": result.model,
+        "base_url_host": result.base_url_host,
+        "status": result.status,
+        "latency_ms": result.latency_ms,
+    }
+    if payload.credential_id:
+        audit_detail["credential_id"] = payload.credential_id
     write_audit(
         session,
         current_user,
         action="generation.ping",
         object_type="generation_provider",
         object_id=config.provider,
-        detail={
-            "provider": result.provider,
-            "model": result.model,
-            "base_url_host": result.base_url_host,
-            "status": result.status,
-            "latency_ms": result.latency_ms,
-        },
+        detail=audit_detail,
     )
     session.commit()
     return GenerationPingRead(
