@@ -593,3 +593,23 @@ def test_scheduler_status_intranet_reports_capability_off(monkeypatch, tmp_path)
     # intranet：capability_ingestion=false，工作台全部不生效（现有能力开关回归）。
     assert payload["capability_ingestion"] is False
     assert all(item["effective_enabled"] is False for item in payload["workspaces"])
+
+
+def test_interval_jobs_dispatch_on_freshly_booted_machine(tmp_path, monkeypatch):
+    """回归：time.monotonic() 零点是开机时刻。刚启动的机器（CI 虚拟机/重启后的生产主机）
+    monotonic 值小于任务间隔，旧版 0.0 哨兵会让 sync pull 等 interval 任务空等一个完整
+    间隔；None 哨兵语义下"从未投递过"必须首个 tick 立即投递。"""
+    monkeypatch.setattr("app.workers.scheduler.time.monotonic", lambda: 5.0)
+    session_factory = make_session_factory(tmp_path, "fresh_boot.sqlite")
+    settings = make_settings(
+        deploy_mode="intranet",
+        capability_ingestion=False,
+        capability_sync_consumer=True,
+        sync_pull_effective=True,
+        sync_remote_base_url="https://extranet.example.com",
+    )
+    queue = FakeQueue()
+    scheduler_tick(queue, settings, SchedulerState(), now=shanghai(2026, 7, 7, 10, 0), session_factory=session_factory)
+
+    functions = [call[0] for call in queue.calls]
+    assert run_sync_pull_job in functions

@@ -52,9 +52,12 @@ class SchedulerState:
 
     next_daily_run_at: datetime | None = None
     last_ingestion_at: float = 0.0
-    last_ingestion_auto_retry_at: float = 0.0
-    last_sync_pull_at: float = 0.0
-    last_sync_auto_retry_at: float = 0.0
+    # None = 本进程从未投递过该 interval 任务 → 首个 tick 立即投递。
+    # 不能用 0.0 哨兵：time.monotonic() 零点是开机时刻，刚启动的机器（CI 虚拟机、
+    # 重启后的生产主机）monotonic 值小于间隔，0.0 哨兵会让任务空等一个完整间隔。
+    last_ingestion_auto_retry_at: float | None = None
+    last_sync_pull_at: float | None = None
+    last_sync_auto_retry_at: float | None = None
     dispatched: list[str] = field(default_factory=list)
 
 
@@ -507,10 +510,10 @@ def _dispatch_interval_jobs(
     sync_auto_retry_enabled: bool,
 ) -> list[str]:
     dispatched: list[str] = []
-    if ingestion_auto_retry_enabled and monotonic_now - state.last_ingestion_auto_retry_at >= max(
+    if ingestion_auto_retry_enabled and (state.last_ingestion_auto_retry_at is None or monotonic_now - state.last_ingestion_auto_retry_at >= max(
         60,
         settings.ingestion_failed_source_retry_base_seconds,
-    ):
+    )):
         job = queue.enqueue(
             run_failed_source_auto_retry_job,
             job_timeout=DEFAULT_JOB_TIMEOUT,
@@ -521,10 +524,10 @@ def _dispatch_interval_jobs(
         state.last_ingestion_auto_retry_at = monotonic_now
         _record_interval_heartbeat(session, settings, "ingestion_auto_retry", wall_now, job)
         dispatched.append("ingestion_auto_retry")
-    if sync_pull_enabled and monotonic_now - state.last_sync_pull_at >= max(
+    if sync_pull_enabled and (state.last_sync_pull_at is None or monotonic_now - state.last_sync_pull_at >= max(
         60,
         settings.sync_pull_interval_seconds,
-    ):
+    )):
         job = queue.enqueue(
             run_sync_pull_job,
             job_timeout=DEFAULT_JOB_TIMEOUT,
@@ -535,10 +538,10 @@ def _dispatch_interval_jobs(
         state.last_sync_pull_at = monotonic_now
         _record_interval_heartbeat(session, settings, "sync_pull", wall_now, job)
         dispatched.append("sync_pull")
-    if sync_auto_retry_enabled and monotonic_now - state.last_sync_auto_retry_at >= max(
+    if sync_auto_retry_enabled and (state.last_sync_auto_retry_at is None or monotonic_now - state.last_sync_auto_retry_at >= max(
         60,
         settings.sync_failed_inbox_retry_base_seconds,
-    ):
+    )):
         job = queue.enqueue(
             run_failed_sync_inbox_auto_retry_job,
             job_timeout=60 * 30,
