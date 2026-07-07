@@ -47,7 +47,7 @@
     {"name": "source_secondary_tags", "type": "string[]", "required": false, "notes": "Optional second-level source tags under source_tags."},
     {"name": "topic_flags", "type": "object", "required": false, "notes": "Model/inference/agent/application/telco/cloud/hardware/core-competency flags."},
     {"name": "fetch_config", "type": "json", "required": false, "notes": "Wiseflow read_info config, RSS URL, page listing rules, selectors, crawler adapter name, CSV path/schema, API params."},
-    {"name": "paper_config", "type": "json", "required": false, "notes": "arxiv categories, DOI/API settings, venue filters, citation providers."},
+    {"name": "paper_config", "type": "json", "required": false, "notes": "paper_api provider settings such as provider=arxiv/openalex/semantic_scholar, arxiv categories, OpenAlex search/filter params, Semantic Scholar query/publicationDateOrYear params, DOI/API settings, venue filters and citation providers. Secrets such as SEMANTIC_SCHOLAR_API_KEY must stay in environment config or secret manager, not this JSON."},
     {"name": "metadata", "type": "json", "required": false, "legacy_rss": "folo_metadata plus origin", "legacy_page": "full page source object"},
     {"name": "created_at", "type": "datetime", "required": true},
     {"name": "updated_at", "type": "datetime", "required": true}
@@ -58,8 +58,8 @@
     "create_fields": [
       "workspace_code (link target, required)",
       "name (required)",
-      "source_type (rss/paper_rss/page_manual/page_monitor only)",
-      "url (required, must start with http:// or https://)",
+      "source_type (rss/paper_rss/paper_api/page_manual/page_monitor only)",
+      "url (required, must start with http:// or https://; paper_api may use https://export.arxiv.org/api/query?search_query=cat:cs.AI style arXiv query URL, https://api.openalex.org/works?search=artificial%20intelligence style OpenAlex works URL, or https://api.semanticscholar.org/graph/v1/paper/search/bulk?query=artificial%20intelligence style Semantic Scholar bulk search URL)",
       "domain_code (default ai)",
       "backfill_days (default 7)",
       "source_weight (default 1.0)",
@@ -83,6 +83,41 @@
       "Setting url on a metadata_only/needs_entry governance record clears both flags and sets metadata.fetch_entry_status=manual_entry_added, so Tech Insight Loop 待补入口 sources become fetchable.",
       "Definition updates never touch workspace_source_links, raw_items or downstream artifacts.",
       "Secrets must not be written into url, fetch_config or metadata; credential_ref remains the only credential pointer."
+    ]
+  },
+  "seed_import_preview_api": {
+    "endpoint": "GET /api/sources/import-preview?catalog=legacy|tech",
+    "auth": "super_admin",
+    "side_effect": "read_only",
+    "response_fields": [
+      "catalog",
+      "total",
+      "would_create",
+      "would_update",
+      "samples[] {name, source_type, url}"
+    ],
+    "rules": [
+      "Preview identity must match the real import identity. Legacy seeds use source_type + url, or source_type + name when url is null; Tech Insight Loop seeds use url or tech_insight_loop_source_id.",
+      "The frontend must open this preview before POST import endpoints and only mutate after explicit user confirmation.",
+      "total=0 is warning state, created=0 with updated>0 is informational state, and should not be rendered as a green success."
+    ]
+  },
+  "source_detail_api": {
+    "endpoint": "GET /api/sources/{source_id}?workspace_code={workspace_code}",
+    "auth": "workspace viewer when workspace_code is provided; super_admin without workspace_code",
+    "response_fields": [
+      "source (DataSourceRead safe projection)",
+      "raw_count",
+      "news_count",
+      "recent_raw_items[] {id, source_title, source_url, raw_content_excerpt, fetched_at, published_at}",
+      "recent_runs[] {run_id, run_key, run_type, status, completed_at, fetched, created, updated, error}",
+      "error_logs[]",
+      "raw_trend[] {day_key, raw_count}"
+    ],
+    "redaction_rules": [
+      "Do not expose credential_ref, fetch_config, paper_config or raw_payload_json.",
+      "recent_raw_items only include a short raw_content_excerpt for inspection.",
+      "error_logs are derived from ingestion_runs.summary_json.sources and must not include secret-like headers, cookies or tokens."
     ]
   },
   "workspace_source_link_fields": [

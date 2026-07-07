@@ -7,7 +7,7 @@ from hashlib import sha1
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.adapters import AdapterRegistry, RawItemInput, create_default_registry
+from app.adapters import AdapterRegistry, RawItemInput, SourceFetchContext, create_default_registry
 from app.models.common import utc_now
 from app.models.content import DataSource, RawItem
 
@@ -66,9 +66,13 @@ async def fetch_source_to_raw_items(
 async def fetch_source_raw_inputs(
     data_source: DataSource,
     registry: AdapterRegistry | None = None,
+    context: SourceFetchContext | None = None,
 ) -> list[RawItemInput]:
     registry = registry or create_default_registry()
     adapter = registry.get(data_source.source_type)
+    fetch_with_context = getattr(adapter, "fetch_with_context", None)
+    if context is not None and callable(fetch_with_context):
+        return await fetch_with_context(data_source, context)
     return await adapter.fetch(data_source)
 
 

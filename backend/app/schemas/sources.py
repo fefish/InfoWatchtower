@@ -38,6 +38,42 @@ class DataSourceRead(BaseModel):
     workspace_clustering_config: dict[str, Any] = Field(default_factory=dict)
 
 
+class DataSourceRecentRawRead(BaseModel):
+    id: str
+    source_title: str
+    source_url: str | None
+    raw_content_excerpt: str
+    fetched_at: datetime
+    published_at: datetime | None
+
+
+class DataSourceRunSummaryRead(BaseModel):
+    run_id: str
+    run_key: str
+    run_type: str
+    status: str
+    completed_at: datetime | None
+    fetched: int
+    created: int
+    updated: int
+    error: str
+
+
+class DataSourceTrendPointRead(BaseModel):
+    day_key: str
+    raw_count: int
+
+
+class DataSourceDetailRead(BaseModel):
+    source: DataSourceRead
+    raw_count: int
+    news_count: int
+    recent_raw_items: list[DataSourceRecentRawRead] = Field(default_factory=list)
+    recent_runs: list[DataSourceRunSummaryRead] = Field(default_factory=list)
+    error_logs: list[DataSourceRunSummaryRead] = Field(default_factory=list)
+    raw_trend: list[DataSourceTrendPointRead] = Field(default_factory=list)
+
+
 class DataSourceWorkspaceConfigUpdate(BaseModel):
     workspace_code: str
     enabled: bool
@@ -45,7 +81,7 @@ class DataSourceWorkspaceConfigUpdate(BaseModel):
     daily_limit: int | None = Field(default=None, ge=0)
 
 
-CUSTOM_SOURCE_TYPES = ["rss", "paper_rss", "page_manual", "page_monitor"]
+CUSTOM_SOURCE_TYPES = ["rss", "paper_rss", "paper_api", "page_manual", "page_monitor"]
 
 
 class DataSourceCreate(BaseModel):
@@ -84,6 +120,20 @@ class TechInsightLoopImportRead(BaseModel):
     total: int
     fetchable: int
     metadata_only: int
+
+
+class SourceImportPreviewSampleRead(BaseModel):
+    name: str
+    source_type: str
+    url: str | None
+
+
+class SourceImportPreviewRead(BaseModel):
+    catalog: str
+    total: int
+    would_create: int
+    would_update: int
+    samples: list[SourceImportPreviewSampleRead] = Field(default_factory=list)
 
 
 class SourceFetchRead(BaseModel):

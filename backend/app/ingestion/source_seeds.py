@@ -29,6 +29,43 @@ class TechInsightLoopImportResult:
     metadata_only: int
 
 
+@dataclass(frozen=True)
+class SourceImportPreviewSample:
+    name: str
+    source_type: str
+    url: str | None
+
+
+@dataclass(frozen=True)
+class SourceImportPreviewResult:
+    catalog: str
+    total: int
+    would_create: int
+    would_update: int
+    samples: list[SourceImportPreviewSample]
+
+
+def preview_legacy_sources(session: Session, seed_root: Path) -> SourceImportPreviewResult:
+    sources = [
+        *_load_wiseflow_sources(seed_root / "wiseflow_sources.json"),
+        *_load_rss_sources(seed_root / "rss_sources.json"),
+        *_load_page_sources(seed_root / "page_sources.json"),
+        *_load_source_registry_csv_sources(seed_root / "source_catalog"),
+    ]
+    return _preview_sources(session, catalog="legacy", sources=sources, tech_identity=False)
+
+
+def preview_tech_insight_loop_sources(session: Session, csv_path: Path) -> SourceImportPreviewResult:
+    sources: list[DataSource] = []
+    with csv_path.open(encoding="utf-8-sig", newline="") as csv_file:
+        reader = csv.DictReader(csv_file)
+        for row in reader:
+            source = _tech_insight_loop_row_to_source(row, csv_path.name)
+            if source is not None:
+                sources.append(source)
+    return _preview_sources(session, catalog="tech", sources=sources, tech_identity=True)
+
+
 def import_legacy_sources(session: Session, seed_root: Path) -> SeedImportResult:
     workspaces = _enabled_workspaces(session)
     sources = [
@@ -127,6 +164,53 @@ def import_tech_insight_loop_sources(session: Session, csv_path: Path) -> TechIn
         fetchable=fetchable,
         metadata_only=metadata_only,
     )
+
+
+def _preview_sources(
+    session: Session,
+    *,
+    catalog: str,
+    sources: list[DataSource],
+    tech_identity: bool,
+) -> SourceImportPreviewResult:
+    would_create = 0
+    would_update = 0
+    seen_keys: set[tuple[str, ...]] = set()
+    for source in sources:
+        key = _preview_identity_key(source, tech_identity=tech_identity)
+        if key in seen_keys:
+            would_update += 1
+            continue
+        seen_keys.add(key)
+        statement = _tech_source_identity_statement(source) if tech_identity else _source_identity_statement(source)
+        if session.scalar(statement) is None:
+            would_create += 1
+        else:
+            would_update += 1
+
+    samples = [
+        SourceImportPreviewSample(name=source.name, source_type=source.source_type, url=source.url)
+        for source in sources[:10]
+    ]
+    return SourceImportPreviewResult(
+        catalog=catalog,
+        total=len(sources),
+        would_create=would_create,
+        would_update=would_update,
+        samples=samples,
+    )
+
+
+def _preview_identity_key(source: DataSource, *, tech_identity: bool) -> tuple[str, ...]:
+    if source.url:
+        if tech_identity:
+            return ("url", source.url)
+        return ("source_type_url", source.source_type, source.url)
+    if tech_identity:
+        tech_source_id = str((source.metadata_json or {}).get("tech_insight_loop_source_id") or "")
+        if tech_source_id:
+            return ("tech_id", tech_source_id)
+    return ("source_type_name_null_url", source.source_type, source.name)
 
 
 def _load_json(path: Path) -> list[dict[str, Any]]:

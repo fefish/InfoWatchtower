@@ -12,8 +12,8 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.adapters import AdapterRegistry, RawItemInput, create_default_registry
-from app.adapters.base import BROWSER_FETCH_HEADERS
+from app.adapters import AdapterRegistry, RawItemInput, SourceFetchContext, create_default_registry
+from app.adapters.base import AdapterNotImplementedError, BROWSER_FETCH_HEADERS
 from app.adapters.page import _extract_links, _fetch_article
 from app.ingestion.fetch import fetch_source_raw_inputs, upsert_raw_inputs
 from app.models.common import utc_now
@@ -37,10 +37,12 @@ SUPPORTED_BACKFILL_MODES = {"rss_window", "paper_api", "archive_page", "sitemap"
 class WorkspaceIngestionRequest:
     workspace_code: str
     source_types: list[str]
+    source_ids: list[str] | None = None
     limit: int | None = None
     concurrency: int = DEFAULT_INGESTION_CONCURRENCY
     source_timeout_seconds: float = DEFAULT_SOURCE_TIMEOUT_SECONDS
     max_items_per_source: int | None = None
+    retry_of_run_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -49,6 +51,7 @@ class HistoricalBackfillRequest:
     target_day_start: str
     target_day_end: str
     source_types: list[str]
+    source_ids: list[str] | None = None
     limit: int | None = None
     concurrency: int = DEFAULT_INGESTION_CONCURRENCY
     source_timeout_seconds: float = DEFAULT_SOURCE_TIMEOUT_SECONDS
@@ -57,6 +60,7 @@ class HistoricalBackfillRequest:
     retry_policy: str = "manual_run_no_retry"
     include_undated: bool = False
     manual_items: list[dict[str, Any]] | None = None
+    retry_of_run_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -64,6 +68,7 @@ class SourceFetchOutcome:
     source: DataSource
     raw_inputs: list[RawItemInput]
     error: str = ""
+    status: str = "completed"
 
 
 class WorkspaceNotFoundError(ValueError):
@@ -91,10 +96,12 @@ async def run_workspace_ingestion(
 
     started_at = started_at or utc_now()
     source_types = _normalize_source_types(request.source_types)
+    source_ids = _normalize_source_ids(request.source_ids)
     sources = _workspace_sources(
         session=session,
         workspace=workspace,
         source_types=source_types,
+        source_ids=source_ids,
         limit=request.limit,
     )
     registry = registry or create_default_registry()
@@ -109,19 +116,41 @@ async def run_workspace_ingestion(
         params_json={
             "workspace_code": workspace.code,
             "source_types": source_types,
+            "source_ids": source_ids,
             "limit": request.limit,
             "concurrency": _normalize_concurrency(request.concurrency),
             "source_timeout_seconds": _normalize_timeout(request.source_timeout_seconds),
             "max_items_per_source": request.max_items_per_source,
+            "retry_of_run_id": request.retry_of_run_id,
         },
     )
     session.add(run)
     session.flush()
 
+    if not sources:
+        run.source_total = 0
+        run.source_succeeded = 0
+        run.source_failed = 0
+        run.items_fetched = 0
+        run.raw_created = 0
+        run.raw_updated = 0
+        run.status = "no_sources"
+        run.completed_at = utc_now()
+        run.summary_json = {
+            "sources": [],
+            "source_types": source_types,
+            "source_ids": source_ids,
+            "retry_of_run_id": request.retry_of_run_id,
+            "hint": "当前工作台无启用源，或 source_types/limit 筛选后没有可抓取数据源。",
+        }
+        session.flush()
+        return run
+
     source_summaries = []
     totals = {
         "source_succeeded": 0,
         "source_failed": 0,
+        "source_skipped_unimplemented": 0,
         "items_fetched": 0,
         "raw_created": 0,
         "raw_updated": 0,
@@ -135,6 +164,23 @@ async def run_workspace_ingestion(
     for outcome in outcomes:
         source = outcome.source
         source.last_fetch_at = started_at
+        if outcome.status == "skipped_unimplemented":
+            source.last_error = outcome.error
+            totals["source_skipped_unimplemented"] += 1
+            source_summaries.append(
+                {
+                    "data_source_id": source.id,
+                    "name": source.name,
+                    "source_type": source.source_type,
+                    "status": "skipped_unimplemented",
+                    "error": outcome.error,
+                    "fetched": 0,
+                    "created": 0,
+                    "updated": 0,
+                },
+            )
+            continue
+
         if outcome.error:
             source.last_error = outcome.error
             totals["source_failed"] += 1
@@ -179,11 +225,19 @@ async def run_workspace_ingestion(
     run.items_fetched = totals["items_fetched"]
     run.raw_created = totals["raw_created"]
     run.raw_updated = totals["raw_updated"]
-    run.status = _run_status(run.source_total, run.source_succeeded, run.source_failed)
+    run.status = _run_status(
+        run.source_total,
+        run.source_succeeded,
+        run.source_failed,
+        totals["source_skipped_unimplemented"],
+    )
     run.completed_at = utc_now()
     run.summary_json = {
         "sources": source_summaries,
         "source_types": source_types,
+        "source_ids": source_ids,
+        "retry_of_run_id": request.retry_of_run_id,
+        "source_skipped_unimplemented": totals["source_skipped_unimplemented"],
     }
     session.flush()
     return run
@@ -213,16 +267,20 @@ async def run_historical_backfill(
 
     started_at = started_at or utc_now()
     source_types = _normalize_source_types(request.source_types)
+    source_ids = _normalize_source_ids(request.source_ids)
     concurrency = _normalize_concurrency(request.concurrency)
     source_timeout_seconds = _normalize_timeout(request.source_timeout_seconds)
     sources = _workspace_sources(
         session=session,
         workspace=workspace,
         source_types=source_types,
+        source_ids=source_ids,
         limit=request.limit,
     )
     registry = registry or create_default_registry()
     backfill_mode = _normalize_backfill_mode(request.backfill_mode)
+    if backfill_mode == "manual_import":
+        _validate_manual_import_items(request.manual_items or [], sources)
 
     run = IngestionRun(
         run_key=_backfill_run_key(
@@ -241,6 +299,7 @@ async def run_historical_backfill(
             "target_day_start": request.target_day_start,
             "target_day_end": request.target_day_end,
             "source_types": source_types,
+            "source_ids": source_ids,
             "limit": request.limit,
             "concurrency": concurrency,
             "source_timeout_seconds": source_timeout_seconds,
@@ -249,15 +308,42 @@ async def run_historical_backfill(
             "retry_policy": request.retry_policy,
             "include_undated": request.include_undated,
             "manual_items": len(request.manual_items or []),
+            "retry_of_run_id": request.retry_of_run_id,
         },
     )
     session.add(run)
     session.flush()
 
+    if not sources:
+        run.source_total = 0
+        run.source_succeeded = 0
+        run.source_failed = 0
+        run.items_fetched = 0
+        run.raw_created = 0
+        run.raw_updated = 0
+        run.status = "no_sources"
+        run.completed_at = utc_now()
+        run.summary_json = {
+            "sources": [],
+            "source_types": source_types,
+            "source_ids": source_ids,
+            "target_day_start": request.target_day_start,
+            "target_day_end": request.target_day_end,
+            "backfill_mode": backfill_mode,
+            "source_scope": request.source_scope,
+            "retry_policy": request.retry_policy,
+            "include_undated": request.include_undated,
+            "retry_of_run_id": request.retry_of_run_id,
+            "hint": "当前工作台无启用源，或 source_types/limit 筛选后没有可补采数据源。",
+        }
+        session.flush()
+        return run
+
     source_summaries = []
     totals = {
         "source_succeeded": 0,
         "source_failed": 0,
+        "source_skipped_unimplemented": 0,
         "items_fetched": 0,
         "items_in_target_range": 0,
         "items_out_of_target_range": 0,
@@ -271,11 +357,33 @@ async def run_historical_backfill(
         concurrency=concurrency,
         source_timeout_seconds=source_timeout_seconds,
         backfill_mode=backfill_mode,
+        target_day_start=target_day_start,
+        target_day_end=target_day_end,
         manual_items=request.manual_items or [],
     )
     for outcome in outcomes:
         source = outcome.source
         source.last_fetch_at = started_at
+        if outcome.status == "skipped_unimplemented":
+            source.last_error = outcome.error
+            totals["source_skipped_unimplemented"] += 1
+            source_summaries.append(
+                {
+                    "data_source_id": source.id,
+                    "name": source.name,
+                    "source_type": source.source_type,
+                    "status": "skipped_unimplemented",
+                    "error": outcome.error,
+                    "fetched": 0,
+                    "in_target_range": 0,
+                    "out_of_target_range": 0,
+                    "missing_published_at": 0,
+                    "created": 0,
+                    "updated": 0,
+                },
+            )
+            continue
+
         if outcome.error:
             source.last_error = outcome.error
             totals["source_failed"] += 1
@@ -331,17 +439,25 @@ async def run_historical_backfill(
     run.items_fetched = totals["items_fetched"]
     run.raw_created = totals["raw_created"]
     run.raw_updated = totals["raw_updated"]
-    run.status = _run_status(run.source_total, run.source_succeeded, run.source_failed)
+    run.status = _run_status(
+        run.source_total,
+        run.source_succeeded,
+        run.source_failed,
+        totals["source_skipped_unimplemented"],
+    )
     run.completed_at = utc_now()
     run.summary_json = {
         "sources": source_summaries,
         "source_types": source_types,
+        "source_ids": source_ids,
         "target_day_start": request.target_day_start,
         "target_day_end": request.target_day_end,
         "backfill_mode": backfill_mode,
         "source_scope": request.source_scope,
         "retry_policy": request.retry_policy,
         "include_undated": request.include_undated,
+        "retry_of_run_id": request.retry_of_run_id,
+        "source_skipped_unimplemented": totals["source_skipped_unimplemented"],
         "items_in_target_range": totals["items_in_target_range"],
         "items_out_of_target_range": totals["items_out_of_target_range"],
         "items_missing_published_at": totals["items_missing_published_at"],
@@ -356,6 +472,7 @@ async def _fetch_sources_concurrently(
     registry: AdapterRegistry,
     concurrency: int,
     source_timeout_seconds: float,
+    context: SourceFetchContext | None = None,
 ) -> list[SourceFetchOutcome]:
     semaphore = asyncio.Semaphore(concurrency)
 
@@ -363,11 +480,11 @@ async def _fetch_sources_concurrently(
         async with semaphore:
             try:
                 raw_inputs = await asyncio.wait_for(
-                    fetch_source_raw_inputs(source, registry),
+                    fetch_source_raw_inputs(source, registry, context=context),
                     timeout=source_timeout_seconds,
                 )
             except Exception as exc:
-                return SourceFetchOutcome(source=source, raw_inputs=[], error=_fetch_error(exc))
+                return _fetch_error_outcome(source, exc)
             return SourceFetchOutcome(source=source, raw_inputs=raw_inputs)
 
     if not sources:
@@ -382,6 +499,8 @@ async def _fetch_backfill_sources(
     concurrency: int,
     source_timeout_seconds: float,
     backfill_mode: str,
+    target_day_start: date,
+    target_day_end: date,
     manual_items: list[dict[str, Any]],
 ) -> list[SourceFetchOutcome]:
     if backfill_mode == "manual_import":
@@ -403,6 +522,11 @@ async def _fetch_backfill_sources(
         registry=registry,
         concurrency=concurrency,
         source_timeout_seconds=source_timeout_seconds,
+        context=SourceFetchContext(
+            mode=backfill_mode,
+            target_day_start=target_day_start,
+            target_day_end=target_day_end,
+        ),
     )
 
 
@@ -511,12 +635,10 @@ def _manual_import_outcomes(
 ) -> list[SourceFetchOutcome]:
     source_by_id = {source.id: source for source in sources}
     grouped: dict[str, list[RawItemInput]] = {source.id: [] for source in sources}
-    errors: dict[str, str] = {}
     for raw in manual_items:
-        source_id = str(raw.get("data_source_id") or "").strip()
+        source_id = _manual_item_source_id(raw)
         source = source_by_id.get(source_id)
         if source is None:
-            errors[source_id or "unknown"] = "manual_import item missing enabled data_source_id"
             continue
         source_url = str(raw.get("source_url") or raw.get("url") or "").strip() or None
         source_title = str(raw.get("source_title") or raw.get("title") or source_url or "手工补采条目")
@@ -540,15 +662,57 @@ def _manual_import_outcomes(
         SourceFetchOutcome(source=source, raw_inputs=grouped.get(source.id, []))
         for source in sources
     ]
-    if errors and not outcomes:
-        return []
     return outcomes
+
+
+def _validate_manual_import_items(
+    manual_items: list[dict[str, Any]],
+    sources: list[DataSource],
+) -> None:
+    if not manual_items:
+        raise InvalidBackfillRangeError("manual_import requires at least one manual item")
+    source_ids = {source.id for source in sources}
+    invalid_ids: list[str] = []
+    missing_id_count = 0
+    empty_payload_count = 0
+    for raw in manual_items:
+        source_id = _manual_item_source_id(raw)
+        if not source_id:
+            missing_id_count += 1
+            continue
+        if source_id not in source_ids and source_id not in invalid_ids:
+            invalid_ids.append(source_id)
+        if not _manual_item_has_content(raw):
+            empty_payload_count += 1
+    if missing_id_count:
+        raise InvalidBackfillRangeError("manual_import items must include data_source_id")
+    if invalid_ids:
+        raise InvalidBackfillRangeError(
+            "manual_import data_source_id must belong to enabled sources selected by this run: "
+            + ", ".join(invalid_ids[:5]),
+        )
+    if empty_payload_count:
+        raise InvalidBackfillRangeError(
+            "manual_import items must include at least one of title, source_url, or raw_content",
+        )
+
+
+def _manual_item_source_id(raw: dict[str, Any]) -> str:
+    return str(raw.get("data_source_id") or raw.get("source_id") or "").strip()
+
+
+def _manual_item_has_content(raw: dict[str, Any]) -> bool:
+    for key in ("source_title", "title", "source_url", "url", "raw_content", "content", "summary"):
+        if str(raw.get(key) or "").strip():
+            return True
+    return False
 
 
 def _workspace_sources(
     session: Session,
     workspace: Workspace,
     source_types: list[str],
+    source_ids: list[str] | None,
     limit: int | None,
 ) -> list[DataSource]:
     statement = (
@@ -561,6 +725,8 @@ def _workspace_sources(
         )
         .order_by(DataSource.source_type, DataSource.name)
     )
+    if source_ids:
+        statement = statement.where(DataSource.id.in_(source_ids))
     if source_types:
         statement = statement.where(DataSource.source_type.in_(source_types))
     if limit is not None:
@@ -575,6 +741,15 @@ def _normalize_source_types(source_types: list[str]) -> list[str]:
         if value and value not in normalized:
             normalized.append(value)
     return normalized or list(DEFAULT_INGESTION_SOURCE_TYPES)
+
+
+def _normalize_source_ids(source_ids: list[str] | None) -> list[str]:
+    normalized: list[str] = []
+    for source_id in source_ids or []:
+        value = str(source_id).strip()
+        if value and value not in normalized:
+            normalized.append(value)
+    return normalized
 
 
 def _normalize_backfill_mode(value: str) -> str:
@@ -716,11 +891,29 @@ def _backfill_run_key(
     return f"{workspace_code}:backfill:{target_day_start}:{target_day_end}:{compact_time}"
 
 
-def _run_status(source_total: int, source_succeeded: int, source_failed: int) -> str:
+def _fetch_error_outcome(source: DataSource, exc: Exception) -> SourceFetchOutcome:
+    if isinstance(exc, AdapterNotImplementedError):
+        return SourceFetchOutcome(
+            source=source,
+            raw_inputs=[],
+            error=_fetch_error(exc),
+            status="skipped_unimplemented",
+        )
+    return SourceFetchOutcome(source=source, raw_inputs=[], error=_fetch_error(exc), status="failed")
+
+
+def _run_status(
+    source_total: int,
+    source_succeeded: int,
+    source_failed: int,
+    source_skipped_unimplemented: int = 0,
+) -> str:
     if source_total == 0:
-        return "completed"
-    if source_failed == 0:
-        return "completed"
+        return "no_sources"
     if source_succeeded > 0:
-        return "partial"
-    return "failed"
+        return "partial" if source_failed > 0 or source_skipped_unimplemented > 0 else "completed"
+    if source_failed > 0:
+        return "failed"
+    if source_skipped_unimplemented > 0:
+        return "skipped_unimplemented"
+    return "completed"

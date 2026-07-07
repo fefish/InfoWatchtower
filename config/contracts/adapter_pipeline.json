@@ -16,8 +16,11 @@
     "company_sql_export"
   ],
   "ingestion_run_rule": "A workspace ingestion run selects enabled workspace_source_links, executes the registered adapters, persists raw_items idempotently, and records run-level source success/failure plus raw created/updated counts. Schedulers and workers must call this same service layer instead of bypassing adapters.",
+  "ingestion_empty_run_rule": "limit must be null or >= 1. limit=0 is rejected by API validation. If source type filters or workspace links select zero enabled sources, the run is persisted with status no_sources, zero counters and a summary_json.hint instead of completed.",
   "adapter_rule": "Each source type may have its own input structure, but every adapter must persist the full raw payload and emit canonical raw_items. Normalization enriches and maps fields; it must not discard the original payload.",
-  "adapter_network_rule": "HTTP adapters that fetch RSS, paper RSS, archive pages or sitemaps must not inherit host proxy environment variables by default; local, intranet and container-internal sources must be fetched directly unless a source-specific proxy is explicitly configured.",
+  "adapter_network_rule": "HTTP adapters that fetch RSS, paper RSS, paper API, archive pages or sitemaps must not inherit host proxy environment variables by default; local, intranet and container-internal sources must be fetched directly unless a source-specific proxy is explicitly configured.",
+  "stub_adapter_rule": "Registered placeholder adapters must not silently return zero items as a successful fetch. If a source_type is present but not implemented, the adapter must raise AdapterNotImplementedError, the source summary status must be skipped_unimplemented, and the run must record source_skipped_unimplemented without counting that source as succeeded or failed.",
+  "push_based_adapter_rule": "manual and internal are implemented push-based adapters, not stubs: their entries arrive via manual-import or internal push APIs, so fetch() legitimately returns an empty list and the run records the source as succeeded with zero new items. internal upgrades to a generic JSON API puller when fetch_config.api_url is set. The stub_adapter_rule applies only to source types without an implementation.",
   "raw_item_identity_rule": "raw_items are idempotent by data_source_id + entry_key. entry_key must fit raw_items.entry_key length 255. If an upstream feed id or redirect URL is longer, the ingestion layer must deterministically shorten it with a stable hash suffix while preserving the original value inside raw_payload_json.",
   "source_type_to_adapter": {
     "wiseflow": "WiseflowReadInfoAdapter",
@@ -26,7 +29,7 @@
     "page_monitor": "PageListingAdapter",
     "page_manual": "ManualPageAdapter",
     "crawler": "CustomCrawlerAdapter",
-    "paper_api": "PaperApiAdapter",
+    "paper_api": "PaperApiAdapter (arXiv v1 + OpenAlex works v1 + Semantic Scholar bulk search v1)",
     "paper_page": "PaperPageAdapter",
     "manual": "ManualNewsAdapter",
     "internal": "InternalSourceAdapter"
@@ -98,12 +101,28 @@
       "winner": "active = true, duplicate_of = null",
       "loser": "active = false, duplicate_of = winner.id or winner.candidate_key",
       "all_items": "raw_items remain preserved; dedupe never deletes raw records"
+    },
+    "candidate_pool_lineage_v1": {
+      "endpoint": "GET /api/dedupe-groups",
+      "rule": "Each dedupe group read model must expose a safe lineage.nodes chain for the winner: data_source -> raw_item -> news_item -> dedupe_group -> optional recommendation_item -> optional generated_news -> optional daily_report_item.",
+      "node_fields": [
+        "object_type",
+        "object_id",
+        "label",
+        "status",
+        "review_note",
+        "target_path",
+        "occurred_at",
+        "metadata"
+      ],
+      "raw_safety_rule": "The candidate pool lineage may expose raw payload keys, source URL, entry key, timestamps and content length, but must not expose the full raw_payload_json or credentials/fetch_config.",
+      "frontend_rule": "/news must render the lineage as a reviewable trace chain, show review_note as the business meaning of each node, and support news_item_id, raw_item_id and dedupe_group_id query anchors."
     }
   },
   "recommendation_stage": {
     "runs_after": "dedupe_grouping",
     "runs_before": "generate_structured_news",
-    "current_api": "POST /api/pipeline/daily-runs for full pipeline; POST /api/recommendation/runs for recommendation-only reruns",
+    "current_api": "POST /api/pipeline/daily-runs for full pipeline; POST /api/recommendation/runs for recommendation-only reruns; GET /api/recommendation/scorer-policy for read-only scorer policy summary; POST /api/recommendation/scorer-preview for read-only single-candidate scorer preview; POST /api/daily-reports/bulk-adopt-from-candidates and POST /api/daily-reports/bulk-reject-from-candidates for observation-pool review write-through",
     "candidate_rule": "Only active dedupe winners from the requested workspace and target day_key can enter a recommendation run. Losers remain traceable but are not recommended directly.",
     "day_key_rule": "Daily recommendation filters candidates by (news_items.published_at or created_at) in Asia/Shanghai. Freshness scoring for backfill uses the target day end instead of the wall-clock current day.",
     "planning_intel_priority_rule": "The default planning_intel scorer is technical-intelligence-first and uses a content admission layer before daily selection. It boosts AI software, AI infrastructure, model engineering, inference/training, RAG, multi-agent, agent memory, hardware vendor technology, competitor technical roadmaps, AI chips, GPU clusters, data center architecture and telecom system signals. Source-level tags are only weak priors: a vendor or hardware source is not enough by itself; the item must contain concrete technical, architecture, AI, chip, data-center or telecom evidence. It demotes finance, funding, earnings, procurement/bidding, consumer gadgets, event promotion, marketing launch events, generic partnership, pure marketing, legal/meta discussion, clickbait, social/education off-scope items, aerospace/rocket off-scope items and off-scope academic/biomedical papers unless editors explicitly override.",
@@ -143,13 +162,73 @@
         "metadata.board_relevance_json",
         "metadata.source_score_breakdown_json",
         "metadata.expert_routes"
-      ]
+      ],
+      "policy_summary_api": {
+        "endpoint": "GET /api/recommendation/scorer-policy?workspace_code=...",
+        "auth": "workspace viewer or stronger",
+        "returns": [
+          "config_version",
+          "thresholds",
+          "daily_levels",
+          "weekly_levels",
+          "top weights",
+          "top topic weights",
+          "source tier/channel summaries",
+          "noise rule count",
+          "direct reject noise types"
+        ],
+        "rule": "This endpoint returns an operational summary only. It must not return the full keyword corpus and must not imply online editing or recompute support. Single-candidate preview is provided by POST /api/recommendation/scorer-preview."
+      },
+      "preview_api": {
+        "endpoint": "POST /api/recommendation/scorer-preview",
+        "auth": "workspace admin or stronger",
+        "input": [
+          "workspace_code",
+          "source_title",
+          "summary",
+          "source_type",
+          "source_name",
+          "source_url",
+          "source_tier",
+          "source_channel_type",
+          "source_score",
+          "source_tags",
+          "source_secondary_tags",
+          "board_relevance_json",
+          "freshness_score"
+        ],
+        "returns": [
+          "admission_level",
+          "admission_score",
+          "admission_pool",
+          "eligible_for_daily",
+          "noise_types",
+          "reject_reasons",
+          "positive_reasons",
+          "expert_routes",
+          "scorer_breakdown",
+          "persistence"
+        ],
+        "persistence_rule": "The preview must not create recommendation_runs, recommendation_items, generated_news, daily_report_items, editorial_actions or raw/news records.",
+        "rule": "Preview reuses the same content admission scorer path as recommendation runs for a temporary candidate. It is for operational validation only and is not a config editor or batch recompute API."
+      }
     },
     "selection_caps": {
       "source_daily_limit": "hard per-source selected item cap",
       "paper_rss_daily_ratio": "paper_rss selected items are capped at about 10% of the requested limit",
       "pool_daily_ratio": "one admission pool should not exceed about 40% of the requested limit",
       "selected_levels": "select P0/P1 first, then clean P2 with daily-worthy technical signal; noisy P2, P2 paper_rss, P3 and R are not selected by default"
+    },
+    "observation_review_v1": {
+      "frontend": "/recommendations observation-pool review panel",
+      "source_rule": "The panel must derive reviewable items from the selected recommendation run: selected=false and admission_level in P2/P3.",
+      "write_api": [
+        "POST /api/daily-reports/bulk-adopt-from-candidates",
+        "POST /api/daily-reports/bulk-reject-from-candidates"
+      ],
+      "write_rule": "Observation review must write through the existing daily report candidate adoption/rejection APIs using dedupe_group_ids. It must not bypass recommendation_item/generated_news lineage or create daily items directly from arbitrary news_items.",
+      "readback_rule": "GET /api/recommendation/runs/{id} must expose the latest linked daily_report trace for each recommendation_item so the frontend can show adoption_status and day_key after review.",
+      "known_limit": "This is a review v1. Strategy editing, batch recompute impact analysis, observation-pool sorting policy, reviewer notes and production sampling remain separate enhancements."
     },
     "default_limit": 15,
     "default_source_daily_limit": 2,
@@ -170,7 +249,7 @@
       "daily_reports and daily_report_items when create_daily_draft is true"
     ],
     "lineage_rule": "generated_news.content_json.source must preserve news_item_id, raw_item_id and data_source_id so adopted daily report items can be traced back to raw_items.raw_payload_json.",
-    "adoption_rule": "Recommendation creates draft daily_report_items with adoption_status = 2 for selected items. Editors may later change adoption_status on daily_report_items; news_items and raw_items are never overwritten.",
+    "adoption_rule": "Recommendation creates draft daily_report_items with adoption_status = 2 for selected items. Editors may later change adoption_status on daily_report_items; news_items and raw_items are never overwritten. Candidate-pool bulk adoption must create or update daily_report_items from existing recommendation_items/generated_news only; candidates without a recommendation chain are skipped instead of bypassing recommendation. Candidate-pool bulk reject also requires an existing recommendation_item, writes or updates a daily_report_item with adoption_status = 0, and may create a generated_news placeholder with generation_status = rejected_candidate so rejected candidates remain traceable but cannot enter standard Company SQL export.",
     "workspace_scope_rule": "Daily reports are unique by workspace_code + domain_code + day_key so multiple workspaces can generate same-day reports independently."
   },
   "weekly_report_stage": {
@@ -204,7 +283,13 @@
     "current_job": "app.pipeline.daily.run_daily_pipeline_job",
     "current_api": "POST /api/pipeline/daily-runs",
     "scheduler_default_mode": "daily_pipeline",
-    "default_source_types": ["rss", "paper_rss", "page_manual", "page_monitor", "wiseflow"],
+    "default_source_types": [
+      "rss",
+      "paper_rss",
+      "page_manual",
+      "page_monitor",
+      "wiseflow"
+    ],
     "legacy_ingestion_only_mode": "ingestion_only",
     "enabled_by": "INGESTION_SCHEDULER_ENABLED=true",
     "uses_scope_settings": [
@@ -242,15 +327,27 @@
       "sitemap",
       "manual_import"
     ],
-    "mode_caveat": "paper_api depends on a registered source adapter. rss_window is not a full archive guarantee. archive_page and sitemap are lightweight URL discovery modes, not a universal crawler.",
+    "mode_caveat": "paper_api currently supports arXiv submittedDate date-window queries, OpenAlex works publication_date date-window queries, and Semantic Scholar publicationDateOrYear date-window queries through PaperApiAdapter. Semantic Scholar can use optional SEMANTIC_SCHOLAR_API_KEY for higher rate limits. OpenReview/Hugging Face Papers providers remain future adapters. rss_window is not a full archive guarantee. archive_page and sitemap are lightweight URL discovery modes, not a universal crawler.",
     "mode_priority": [
       "rss_window: low-cost current-window recovery for target dates still visible in feeds; not a complete historical guarantee",
-      "paper_api: arXiv/OpenAlex/Semantic Scholar/OpenReview/Hugging Face Papers date queries",
+      "paper_api: arXiv v1 submittedDate, OpenAlex works v1 publication_date, and Semantic Scholar bulk search v1 publicationDateOrYear date-window queries; OpenReview/Hugging Face Papers remain future providers",
       "archive_page: vendor blogs, standard organizations, cloud/hardware archives and paginated lists",
       "sitemap: discover dated article URLs from official sitemaps",
       "retry_failed: low-concurrency long-timeout retry for failed sources",
       "manual_import: CSV/SQL/manual raw import with full raw_payload_json lineage"
     ],
+    "manual_import_contract": {
+      "preview_endpoint": "POST /api/ingestion/manual-import-preview",
+      "accepted_input": "manual_items supplied by API or produced by the /ingestion-runs manual import preview. Each accepted row must include data_source_id or source_id that belongs to an enabled source selected by the run, and at least one of source_title/title, source_url/url, or raw_content/content/summary.",
+      "supported_preview_formats": [
+        "csv",
+        "sql_insert_values"
+      ],
+      "lineage_rule": "Persist imported rows as raw_items first. raw_payload_json.backfill_mode must be manual_import and raw_payload_json.payload must keep the original row payload.",
+      "current_ui": "The frontend supports selecting one enabled source, uploading or pasting CSV/SQL text, previewing accepted/rejected rows, downloading the row-level error report, and only then submitting accepted rows to POST /api/ingestion/backfill-runs.",
+      "empty_success_rule": "Empty manual_items, rows without source id, rows outside the selected enabled source set, rows without content, and previews with zero accepted rows must be rejected before creating a success-looking run.",
+      "error_report_rule": "Preview returns row-level errors and error_report_csv; frontend must expose the report instead of collapsing invalid rows into a generic failure."
+    },
     "success_metrics": [
       "target-date raw_items created or updated",
       "target-date news_items normalized",
@@ -258,6 +355,42 @@
       "recommendation candidates and selected daily report items added"
     ],
     "rule": "Backfill output must enter raw_items first and then reuse the same normalization, dedupe, recommendation and SQL export pipeline. It must not insert generated_news or SQL rows directly."
+  },
+  "failed_source_retry_stage": {
+    "status": "manual_retry_and_auto_backoff_v1",
+    "endpoint": "POST /api/ingestion/runs/{run_id}/retry-failed-sources",
+    "selection_rule": "Extract only summary_json.sources entries whose status is failed. Do not retry completed sources and do not create a new run when the original run has no failed source.",
+    "scope_rule": "Retryable sources must still be enabled both in data_sources and in the original run workspace_source_links. Disabled or unlinked sources return a conflict instead of producing a zero-source success run.",
+    "execution_rule": "Retry reuses the same run service as normal ingestion/backfill with source_ids restricted to the failed source ids, default concurrency=2 and source_timeout_seconds=60. workspace_fetch preserves max_items_per_source; historical_backfill preserves target_day_start, target_day_end, backfill_mode and include_undated.",
+    "lineage_rule": "The retry run must record params_json.retry_of_run_id and params_json.source_ids so later coverage/debugging can trace it back to the failed source run.",
+    "auto_retry": {
+      "enabled_env": "INGESTION_FAILED_SOURCE_AUTO_RETRY_ENABLED",
+      "base_delay_env": "INGESTION_FAILED_SOURCE_RETRY_BASE_SECONDS, default 900.",
+      "max_delay_env": "INGESTION_FAILED_SOURCE_RETRY_MAX_SECONDS, default 3600.",
+      "max_attempts_env": "INGESTION_FAILED_SOURCE_RETRY_MAX_ATTEMPTS, default 3.",
+      "limit_env": "INGESTION_FAILED_SOURCE_RETRY_LIMIT, default 10.",
+      "summary_endpoint": "GET /api/ingestion/failed-source-retry-summary?workspace_code=...",
+      "job": "run_failed_source_auto_retry_job",
+      "selection_rule": "Select base ingestion/backfill runs with failed sources, no retry_of_run_id, non-manual_import mode, attempt_count < max attempts, and last attempt + exponential backoff <= now. If the latest retry run has source_failed=0, the base run is considered resolved.",
+      "scheduler_rule": "When capability_ingestion and INGESTION_FAILED_SOURCE_AUTO_RETRY_ENABLED are true, scheduler enqueues due failed-source retries through the same ingestion run services."
+    },
+    "known_limit": "manual_import runs cannot be reconstructed from summary_json and must be retried by re-uploading manual import data. Alert delivery remains separate operations work."
+  },
+  "coverage_trend_stage": {
+    "status": "trend_v1",
+    "endpoint": "GET /api/ingestion/coverage/trends?workspace_code=...&days=14",
+    "auth": "workspace viewer or stronger",
+    "source_of_truth": "ingestion_runs plus summary_json.sources; no derived table is required for v1",
+    "time_bucket_rule": "Bucket runs by completed_at, started_at or created_at in Asia/Shanghai date keys.",
+    "returns": [
+      "daily run_count",
+      "latest_run_id/latest_run_key/latest_run_status",
+      "source_total/source_succeeded/source_failed/source_skipped_unimplemented",
+      "items_fetched/raw_created/raw_updated",
+      "success_rate",
+      "top_failed_sources with last error and last failed run"
+    ],
+    "frontend_rule": "/ingestion-runs must render coverage trends as a diagnostic panel, not as a success banner. Zero raw_created and non-zero failures remain visible."
   },
   "soft_clustering_stage": {
     "status": "phase_2",

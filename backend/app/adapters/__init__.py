@@ -1,15 +1,12 @@
-from app.adapters.base import AdapterRegistry, RawItemInput, SourceAdapter
+from app.adapters.base import AdapterRegistry, RawItemInput, SourceAdapter, SourceFetchContext
+from app.adapters.crawler import CustomCrawlerAdapter
+from app.adapters.csv_file import CsvFileAdapter
 from app.adapters.page import ManualPageAdapter, PageListingAdapter
+from app.adapters.paper import PaperApiAdapter
+from app.adapters.paper_page import PaperPageAdapter
+from app.adapters.push_based import InternalSourceAdapter, ManualNewsAdapter
 from app.adapters.rss import PaperRssFeedAdapter, RssFeedAdapter
-from app.adapters.stubs import (
-    CsvFileAdapter,
-    CustomCrawlerAdapter,
-    InternalSourceAdapter,
-    ManualNewsAdapter,
-    PaperApiAdapter,
-    PaperPageAdapter,
-    WiseflowReadInfoAdapter,
-)
+from app.adapters.wiseflow import WiseflowReadInfoAdapter
 
 
 def create_default_registry() -> AdapterRegistry:
@@ -45,6 +42,7 @@ __all__ = [
     "RawItemInput",
     "RssFeedAdapter",
     "SourceAdapter",
+    "SourceFetchContext",
     "WiseflowReadInfoAdapter",
     "create_default_registry",
 ]
