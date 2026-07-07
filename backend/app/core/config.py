@@ -1,7 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -25,6 +25,24 @@ DEFAULT_CONTENT_SCORER_CONFIG_PATH = (
 )
 
 DEPLOY_MODES = ("standalone", "cloud", "intranet", "extranet")
+# 与 config/contracts/source_fields.json 的 source_types 保持一致（11 类），
+# 外加规划中的第 12 类 wechat（wx 桥接 adapter，见 docs/backend/backend-capability-test-matrix.md）。
+# INGESTION_SOURCE_TYPES 允许清单（部署预设 rss-only 等）只接受该集合的子集，
+# 非法值由启动自检 fail-fast 拒绝。
+KNOWN_INGESTION_SOURCE_TYPES = (
+    "wiseflow",
+    "rss",
+    "page_monitor",
+    "page_manual",
+    "crawler",
+    "csv",
+    "paper_rss",
+    "paper_api",
+    "paper_page",
+    "manual",
+    "internal",
+    "wechat",
+)
 # 与 config/contracts/deployment_modes.json 的 modes.*.capabilities 保持一致
 MODE_CAPABILITIES: dict[str, dict[str, bool]] = {
     "standalone": {
@@ -128,6 +146,11 @@ class Settings(BaseSettings):
 
     auth_mode: str = Field(default="public_password", alias="AUTH_MODE")
     auth_session_secret: str = Field(default="", alias="AUTH_SESSION_SECRET")
+    # 多版本轮换：逗号分隔，第一个用于签名、全部可验签；配置后覆盖单值
+    # AUTH_SESSION_SECRET（见 _sync_session_secret_rotation）。换密钥时把新
+    # secret 放到第一位、旧 secret 保留在列表尾部即可平滑轮换不掉线，
+    # 旧 secret 移出列表后旧 cookie 立即失效。
+    auth_session_secrets: str = Field(default="", alias="AUTH_SESSION_SECRETS")
     auth_session_cookie: str = Field(default="infowatchtower_session", alias="AUTH_SESSION_COOKIE")
     auth_session_cookie_secure: bool | None = Field(default=None, alias="AUTH_SESSION_COOKIE_SECURE")
     auth_session_ttl_seconds: int = Field(default=60 * 60 * 12, alias="AUTH_SESSION_TTL_SECONDS")
@@ -186,7 +209,12 @@ class Settings(BaseSettings):
         default=60 * 60 * 24,
         alias="INGESTION_SCHEDULER_INTERVAL_SECONDS",
     )
-    ingestion_scheduler_daily_time: str = Field(default="", alias="INGESTION_SCHEDULER_DAILY_TIME")
+    # 默认每天 12:00（配合 DAILY_PIPELINE_DAY_OFFSET_DAYS=-1「中午汇总昨天」的
+    # 用户口径）；置空回退 INGESTION_SCHEDULER_INTERVAL_SECONDS 间隔模式。
+    ingestion_scheduler_daily_time: str = Field(
+        default="12:00",
+        alias="INGESTION_SCHEDULER_DAILY_TIME",
+    )
     ingestion_scheduler_timezone: str = Field(
         default="Asia/Shanghai",
         alias="INGESTION_SCHEDULER_TIMEZONE",
@@ -200,6 +228,10 @@ class Settings(BaseSettings):
         alias="INGESTION_SCHEDULER_SOURCE_TYPES",
     )
     ingestion_scheduler_limit: int | None = Field(default=None, alias="INGESTION_SCHEDULER_LIMIT")
+    # 部署级采集类型允许清单（预设 rss-only 用）：逗号分隔，空 = 全部允许。
+    # 与 INGESTION_SCHEDULER_SOURCE_TYPES 不同：后者只决定 scheduler 请求哪些类型，
+    # 本清单在 run 内部过滤启用源，不在清单的源计入 run 摘要 skipped_type_disabled。
+    ingestion_source_types: str = Field(default="", alias="INGESTION_SOURCE_TYPES")
     ingestion_concurrency: int = Field(default=8, alias="INGESTION_CONCURRENCY")
     ingestion_source_timeout_seconds: float = Field(
         default=25.0,
@@ -256,6 +288,25 @@ class Settings(BaseSettings):
         default=8.0,
         alias="MINIMAX_RETRY_BACKOFF_SECONDS",
     )
+
+    @model_validator(mode="after")
+    def _sync_session_secret_rotation(self) -> "Settings":
+        # AUTH_SESSION_SECRETS 配置时，列表第一个即当前签名 secret；回写
+        # auth_session_secret，让签发（create_session_token）与启动自检等所有
+        # 单值读取点自动拿到签名值（自检口径：两个变量任一非空即可）。
+        secrets = [item.strip() for item in self.auth_session_secrets.split(",") if item.strip()]
+        if secrets:
+            self.auth_session_secret = secrets[0]
+        return self
+
+    @property
+    def auth_session_secret_list(self) -> list[str]:
+        # 可验签 secret 全集（轮换语义）：AUTH_SESSION_SECRETS 优先，
+        # 未配置时回退单值 AUTH_SESSION_SECRET。
+        items = [item.strip() for item in self.auth_session_secrets.split(",") if item.strip()]
+        if items:
+            return items
+        return [self.auth_session_secret] if self.auth_session_secret else []
 
     def _mode_capability(self, name: str) -> bool:
         return MODE_CAPABILITIES.get(self.deploy_mode, MODE_CAPABILITIES["standalone"])[name]
@@ -330,6 +381,16 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [item.strip() for item in self.cors_origins.split(",") if item.strip()]
+
+    @property
+    def ingestion_source_type_allowlist(self) -> list[str]:
+        # 空清单 = 不限制（full 预设）；非空时抓取 run 只抓清单内类型的源。
+        normalized: list[str] = []
+        for item in self.ingestion_source_types.split(","):
+            value = item.strip()
+            if value and value not in normalized:
+                normalized.append(value)
+        return normalized
 
     @property
     def ingestion_source_type_list(self) -> list[str]:

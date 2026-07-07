@@ -8,7 +8,12 @@ from __future__ import annotations
 
 import logging
 
-from app.core.config import DEPLOY_MODES, MODE_ALLOWED_AUTH_MODES, Settings
+from app.core.config import (
+    DEPLOY_MODES,
+    KNOWN_INGESTION_SOURCE_TYPES,
+    MODE_ALLOWED_AUTH_MODES,
+    Settings,
+)
 from app.core.security import trusted_proxy_networks
 
 logger = logging.getLogger(__name__)
@@ -30,11 +35,14 @@ def validate_deploy_settings(settings: Settings) -> None:
         )
     # 所有 auth_mode（local/public_password/oidc/intranet_header）都会签发签名 session cookie，
     # 缺 secret 不能拖到运行期每请求 500，必须启动时失败。
-    if not settings.auth_session_secret:
+    # 口径：AUTH_SESSION_SECRET / AUTH_SESSION_SECRETS（轮换列表）任一非空即可
+    # （auth_session_secret_list 已聚合两者）。
+    if not settings.auth_session_secret_list:
         raise RuntimeError(
             f"AUTH_SESSION_SECRET is required for AUTH_MODE={settings.auth_mode} "
             "(session cookies are signed in every auth mode). "
-            "Set a long random value in the environment file.",
+            "Set a long random value in the environment file, or configure the "
+            "AUTH_SESSION_SECRETS rotation list (first entry signs, all entries verify).",
         )
     if settings.auth_trusted_proxy_cidrs.strip():
         try:
@@ -82,4 +90,18 @@ def validate_deploy_settings(settings: Settings) -> None:
             "sync consumer with SYNC_PULL_ENABLED=true requires both "
             "SYNC_REMOTE_BASE_URL and SYNC_REMOTE_TOKEN "
             "(or set SYNC_PULL_ENABLED=false explicitly).",
+        )
+    # 部署预设 rss-only：INGESTION_SOURCE_TYPES 允许清单只接受已知类型子集
+    # （config/contracts/source_fields.json 的 11 类 + 规划中的 wechat），
+    # 拼写错误的清单等于静默漏采，必须启动时失败。
+    unknown_source_types = [
+        source_type
+        for source_type in settings.ingestion_source_type_allowlist
+        if source_type not in KNOWN_INGESTION_SOURCE_TYPES
+    ]
+    if unknown_source_types:
+        raise RuntimeError(
+            "INGESTION_SOURCE_TYPES contains unknown source types: "
+            f"{', '.join(unknown_source_types)}; "
+            f"allowed values: {', '.join(KNOWN_INGESTION_SOURCE_TYPES)}.",
         )

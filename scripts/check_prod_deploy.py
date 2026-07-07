@@ -31,6 +31,27 @@ MODE_COMPOSE_FILES = {
 }
 # TLS 收口（C-6）由可选 caddy profile 承载的形态。
 TLS_PROFILE_MODES = {"cloud", "extranet"}
+# INGESTION_SOURCE_TYPES 允许清单的合法取值：
+# config/contracts/source_fields.json 的 11 类 + 规划中的第 12 类 wechat。
+# 与 backend/app/core/config.py 的 KNOWN_INGESTION_SOURCE_TYPES 保持一致。
+KNOWN_INGESTION_SOURCE_TYPES = (
+    "wiseflow",
+    "rss",
+    "page_monitor",
+    "page_manual",
+    "crawler",
+    "csv",
+    "paper_rss",
+    "paper_api",
+    "paper_page",
+    "manual",
+    "internal",
+    "wechat",
+)
+
+
+def env_truthy(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def parse_env(path: Path) -> dict[str, str]:
@@ -137,6 +158,48 @@ def check_prod_deploy(root: Path, env_file: Path) -> list[str]:
                 errors.append(f"intranet requires {key} for sync pull")
     if deploy_mode in {"cloud", "extranet"} and env.get("AUTH_CSRF_ENABLED", "").lower() == "false":
         errors.append(f"{deploy_mode} must not disable CSRF (AUTH_CSRF_ENABLED=false)")
+
+    # 部署预设 rss-only：INGESTION_SOURCE_TYPES 允许清单必须是已知类型子集
+    # （对齐启动自检；拼错的类型等于静默漏采）。
+    source_type_allowlist = [
+        item.strip()
+        for item in env.get("INGESTION_SOURCE_TYPES", "").split(",")
+        if item.strip()
+    ]
+    unknown_source_types = [
+        item for item in source_type_allowlist if item not in KNOWN_INGESTION_SOURCE_TYPES
+    ]
+    if unknown_source_types:
+        errors.append(
+            "INGESTION_SOURCE_TYPES contains unknown source types: "
+            + ", ".join(unknown_source_types)
+            + " (allowed: "
+            + ", ".join(KNOWN_INGESTION_SOURCE_TYPES)
+            + ")"
+        )
+
+    # 部署预设 mirror（standalone/cloud + 不采集 + sync consumer 拉取外部成果）组合自洽：
+    # 消费端拉取必须有远端配置；intranet 硬约束（禁止 CAPABILITY_INGESTION=true）保持不动。
+    sync_consumer_on = env_truthy(env.get("CAPABILITY_SYNC_CONSUMER", ""))
+    sync_pull_on = env_truthy(env.get("SYNC_PULL_ENABLED", ""))
+    if sync_consumer_on and sync_pull_on:
+        for key in ("SYNC_REMOTE_BASE_URL", "SYNC_REMOTE_TOKEN"):
+            if not env.get(key):
+                errors.append(
+                    f"sync consumer with SYNC_PULL_ENABLED=true requires {key} (mirror preset)"
+                )
+    if (
+        deploy_mode in {"standalone", "cloud"}
+        and env.get("CAPABILITY_INGESTION", "").strip().lower() == "false"
+        and sync_consumer_on
+        and not sync_pull_on
+    ):
+        errors.append(
+            "mirror preset (CAPABILITY_INGESTION=false + CAPABILITY_SYNC_CONSUMER=true) "
+            "requires SYNC_PULL_ENABLED=true to actually pull remote results"
+        )
+    if deploy_mode == "intranet" and env.get("CAPABILITY_INGESTION", "").strip().lower() == "true":
+        errors.append("intranet forbids CAPABILITY_INGESTION=true (startup fail-fast)")
     return errors
 
 

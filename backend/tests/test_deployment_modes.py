@@ -1,5 +1,7 @@
 """WP4 部署形态与能力开关（契约：config/contracts/deployment_modes.json）。"""
 
+import importlib.util
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -7,11 +9,14 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
+from app.adapters.base import AdapterRegistry, RawItemInput
 from app.auth.service import ensure_auth_seed
 from app.core.config import get_settings
 from app.core.database import Base, get_engine
 from app.core.deploy_checks import validate_deploy_settings
+from app.ingestion.runs import WorkspaceIngestionRequest, run_workspace_ingestion
 from app.main import create_app
+from app.models.workspace import Workspace, WorkspaceSourceLink
 from app.models.common import utc_now
 from app.models.content import DataSource, GeneratedNews, NewsItem, RawItem
 from app.models.feedback import (
@@ -31,6 +36,7 @@ DEPLOY_ENV_KEYS = (
     "DEPLOY_MODE",
     "INSTANCE_ID",
     "AUTH_SESSION_SECRET",
+    "AUTH_SESSION_SECRETS",
     "CAPABILITY_INGESTION",
     "CAPABILITY_SYNC_PUBLISHER",
     "CAPABILITY_SYNC_CONSUMER",
@@ -39,6 +45,7 @@ DEPLOY_ENV_KEYS = (
     "SYNC_REMOTE_TOKEN",
     "SYNC_PULL_ENABLED",
     "SYNC_PULL_INTERVAL_SECONDS",
+    "INGESTION_SOURCE_TYPES",
     "EMBED_FRAME_ANCESTORS",
     "AUTH_CSRF_ENABLED",
     "AUTH_TRUSTED_PROXY_CIDRS",
@@ -314,6 +321,21 @@ def test_failfast_requires_session_secret_for_every_auth_mode(
     )
     with pytest.raises(RuntimeError, match="AUTH_SESSION_SECRET is required"):
         validate_deploy_settings(settings)
+
+
+def test_failfast_accepts_rotation_list_without_single_secret(monkeypatch):
+    # 自检口径：AUTH_SESSION_SECRET / AUTH_SESSION_SECRETS 任一非空即可启动
+    settings = make_settings(
+        monkeypatch,
+        AUTH_SESSION_SECRET="",
+        AUTH_SESSION_SECRETS="new-secret,old-secret",
+    )
+
+    validate_deploy_settings(settings)
+
+    # 列表第一个是签名 secret，回写单值读取点
+    assert settings.auth_session_secret == "new-secret"
+    assert settings.auth_session_secret_list == ["new-secret", "old-secret"]
 
 
 def test_failfast_rejects_invalid_trusted_proxy_cidr(monkeypatch):
@@ -924,6 +946,268 @@ def test_standalone_worker_jobs_pass_capability_gate(monkeypatch):
     # standalone 能力门放行，落到既有的缺库报错，而不是被 skipped 挡下
     with pytest.raises(RuntimeError, match="DATABASE_URL"):
         run_workspace_ingestion_job("planning_intel")
+
+
+# --- 部署预设（任务 B：rss-only / full / mirror 三种启动形式） ---
+
+
+def mirror_env(**extra):
+    """mirror 预设：standalone/cloud 形态 + 不采集 + sync consumer 拉取外部部署成果。"""
+    env = {
+        "DEPLOY_MODE": "cloud",
+        "CAPABILITY_INGESTION": "false",
+        "CAPABILITY_SYNC_CONSUMER": "true",
+        "SYNC_PULL_ENABLED": "true",
+        "SYNC_REMOTE_BASE_URL": "https://extranet.example.com",
+        "SYNC_REMOTE_TOKEN": "pull-token",
+    }
+    env.update(extra)
+    return env
+
+
+def test_ingestion_source_type_allowlist_defaults_open_and_parses(monkeypatch):
+    # full 预设：不写允许清单 = 空 = 全部允许
+    assert make_settings(monkeypatch).ingestion_source_type_allowlist == []
+    settings = make_settings(monkeypatch, INGESTION_SOURCE_TYPES=" rss, paper_rss ,,rss ")
+    assert settings.ingestion_source_type_allowlist == ["rss", "paper_rss"]
+
+
+def test_failfast_rejects_unknown_ingestion_source_types(monkeypatch):
+    settings = make_settings(monkeypatch, INGESTION_SOURCE_TYPES="rss,no_such_type")
+    with pytest.raises(RuntimeError, match="INGESTION_SOURCE_TYPES.*no_such_type"):
+        validate_deploy_settings(settings)
+
+
+def test_failfast_accepts_known_ingestion_source_types_including_wechat(monkeypatch):
+    settings = make_settings(monkeypatch, INGESTION_SOURCE_TYPES="rss,paper_rss,wechat")
+    validate_deploy_settings(settings)
+
+
+@pytest.mark.parametrize("deploy_mode", ["standalone", "cloud"])
+def test_mirror_preset_combination_passes_failfast(monkeypatch, deploy_mode):
+    settings = make_settings(monkeypatch, **mirror_env(DEPLOY_MODE=deploy_mode))
+    validate_deploy_settings(settings)
+    assert settings.capability_ingestion is False
+    assert settings.capability_sync_consumer is True
+    assert settings.sync_pull_effective is True
+    # mirror 只影响能力开关，不影响 embedding 等其它派生位
+    assert settings.capability_search is True
+
+
+def test_mirror_preset_without_remote_config_fails_failfast(monkeypatch):
+    settings = make_settings(
+        monkeypatch,
+        **mirror_env(SYNC_REMOTE_BASE_URL="", SYNC_REMOTE_TOKEN=""),
+    )
+    with pytest.raises(RuntimeError, match="SYNC_REMOTE_BASE_URL"):
+        validate_deploy_settings(settings)
+
+
+class _AllowlistedRssAdapter:
+    source_type = "rss"
+
+    async def fetch(self, data_source) -> list[RawItemInput]:
+        return [
+            RawItemInput(
+                entry_key="rss:allow:1",
+                source_title="Allowlisted item",
+                source_url="https://example.com/allow",
+                raw_content="Body",
+                published_at=datetime(2026, 7, 6, 8, tzinfo=UTC),
+                raw_payload_json={"entry": 1},
+            ),
+        ]
+
+
+class _ForbiddenCrawlerAdapter:
+    source_type = "crawler"
+
+    async def fetch(self, data_source) -> list[RawItemInput]:
+        raise AssertionError("type-disabled source must not be fetched")
+
+
+def _seed_two_type_workspace(session):
+    workspace = Workspace(
+        code="planning_intel",
+        name="规划部情报工作台",
+        description="",
+        default_domain_code="ai",
+    )
+    rss_source = DataSource(
+        workspace_code="shared",
+        domain_code="ai",
+        source_type="rss",
+        name="RSS Source",
+        url="https://example.com/rss.xml",
+    )
+    crawler_source = DataSource(
+        workspace_code="shared",
+        domain_code="ai",
+        source_type="crawler",
+        name="Crawler Source",
+        url="https://example.com/site",
+    )
+    session.add_all(
+        [
+            WorkspaceSourceLink(
+                workspace=workspace,
+                data_source=rss_source,
+                domain_code="ai",
+                enabled=True,
+            ),
+            WorkspaceSourceLink(
+                workspace=workspace,
+                data_source=crawler_source,
+                domain_code="ai",
+                enabled=True,
+            ),
+        ],
+    )
+    session.commit()
+    return rss_source, crawler_source
+
+
+@pytest.mark.asyncio
+async def test_rss_only_allowlist_filters_run_and_reports_skipped_type_disabled(monkeypatch):
+    make_settings(monkeypatch, INGESTION_SOURCE_TYPES="rss")
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    rss_source, crawler_source = _seed_two_type_workspace(session)
+
+    registry = AdapterRegistry()
+    registry.register(_AllowlistedRssAdapter())
+    registry.register(_ForbiddenCrawlerAdapter())
+
+    run = await run_workspace_ingestion(
+        session,
+        WorkspaceIngestionRequest(
+            workspace_code="planning_intel",
+            source_types=["rss", "crawler"],
+        ),
+        registry,
+    )
+    session.commit()
+
+    # 呈现语义参照 skipped_unimplemented：计入 source_total、独立摘要计数、状态降级为 partial
+    assert run.status == "partial"
+    assert run.source_total == 2
+    assert run.source_succeeded == 1
+    assert run.source_failed == 0
+    assert run.items_fetched == 1
+    assert run.summary_json["source_skipped_type_disabled"] == 1
+    entries = {entry["data_source_id"]: entry for entry in run.summary_json["sources"]}
+    assert entries[rss_source.id]["status"] == "completed"
+    disabled_entry = entries[crawler_source.id]
+    assert disabled_entry["status"] == "skipped_type_disabled"
+    assert "INGESTION_SOURCE_TYPES" in disabled_entry["error"]
+    assert disabled_entry["fetched"] == 0
+
+
+@pytest.mark.asyncio
+async def test_all_sources_type_disabled_marks_run_skipped_type_disabled(monkeypatch):
+    make_settings(monkeypatch, INGESTION_SOURCE_TYPES="paper_rss")
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    _seed_two_type_workspace(session)
+
+    run = await run_workspace_ingestion(
+        session,
+        WorkspaceIngestionRequest(
+            workspace_code="planning_intel",
+            source_types=["rss", "crawler"],
+        ),
+        AdapterRegistry(),
+    )
+    session.commit()
+
+    assert run.status == "skipped_type_disabled"
+    assert run.source_total == 2
+    assert run.source_succeeded == 0
+    assert run.summary_json["source_skipped_type_disabled"] == 2
+
+
+@pytest.mark.asyncio
+async def test_full_preset_empty_allowlist_does_not_filter_run(monkeypatch):
+    make_settings(monkeypatch, INGESTION_SOURCE_TYPES="")
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    rss_source, _ = _seed_two_type_workspace(session)
+
+    registry = AdapterRegistry()
+    registry.register(_AllowlistedRssAdapter())
+
+    run = await run_workspace_ingestion(
+        session,
+        WorkspaceIngestionRequest(workspace_code="planning_intel", source_types=["rss"]),
+        registry,
+    )
+    session.commit()
+
+    assert run.status == "completed"
+    assert run.source_total == 1
+    assert run.summary_json["source_skipped_type_disabled"] == 0
+    assert run.summary_json["sources"][0]["data_source_id"] == rss_source.id
+
+
+# --- scripts/check_prod_deploy.py 用三份 env 样例实跑 ---
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def load_prod_deploy_checker():
+    spec = importlib.util.spec_from_file_location(
+        "check_prod_deploy",
+        REPO_ROOT / "scripts" / "check_prod_deploy.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_checker_passes_full_and_mirror_env_examples():
+    checker = load_prod_deploy_checker()
+    for env_name in ("env.production.example", "env.mirror.example"):
+        errors = checker.check_prod_deploy(REPO_ROOT, REPO_ROOT / "deploy" / env_name)
+        assert errors == [], env_name
+
+
+def test_checker_passes_rss_only_env_variant(tmp_path):
+    checker = load_prod_deploy_checker()
+    base = (REPO_ROOT / "deploy" / "env.production.example").read_text(encoding="utf-8")
+    env_file = tmp_path / "env.rss-only"
+    env_file.write_text(base + "\nINGESTION_SOURCE_TYPES=rss,paper_rss\n", encoding="utf-8")
+    assert checker.check_prod_deploy(REPO_ROOT, env_file) == []
+
+
+def test_checker_rejects_unknown_source_types_and_broken_mirror_combo(tmp_path):
+    checker = load_prod_deploy_checker()
+    base = (REPO_ROOT / "deploy" / "env.production.example").read_text(encoding="utf-8")
+
+    bad_types = tmp_path / "env.bad-types"
+    bad_types.write_text(base + "\nINGESTION_SOURCE_TYPES=rss,no_such_type\n", encoding="utf-8")
+    errors = checker.check_prod_deploy(REPO_ROOT, bad_types)
+    assert any("INGESTION_SOURCE_TYPES" in error for error in errors)
+
+    broken_mirror = tmp_path / "env.broken-mirror"
+    broken_mirror.write_text(
+        base
+        + "\nCAPABILITY_INGESTION=false\nCAPABILITY_SYNC_CONSUMER=true\nSYNC_PULL_ENABLED=true\n",
+        encoding="utf-8",
+    )
+    errors = checker.check_prod_deploy(REPO_ROOT, broken_mirror)
+    assert any("SYNC_REMOTE_BASE_URL" in error for error in errors)
+    assert any("SYNC_REMOTE_TOKEN" in error for error in errors)
+
+    pull_off_mirror = tmp_path / "env.pull-off-mirror"
+    pull_off_mirror.write_text(
+        base + "\nCAPABILITY_INGESTION=false\nCAPABILITY_SYNC_CONSUMER=true\n",
+        encoding="utf-8",
+    )
+    errors = checker.check_prod_deploy(REPO_ROOT, pull_off_mirror)
+    assert any("SYNC_PULL_ENABLED=true" in error for error in errors)
 
 
 # --- /readyz 按形态回报能力位 ---
