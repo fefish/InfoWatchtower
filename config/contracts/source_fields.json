@@ -24,33 +24,243 @@
     "manual",
     "internal"
   ],
+  "fetch_config_conventions": {
+    "description": "各 source_type 的 fetch_config 字段约定（2026-07 六类 adapter 真实现后固化）。密钥一律不写入 fetch_config 明文，用 *_env 指向环境变量，credential_ref 解析机制落地后迁移。",
+    "rss / paper_rss": {
+      "url": "feed 地址（也可放 data_sources.url）",
+      "max_items": "单次抓取上限"
+    },
+    "page_monitor": {
+      "page_url": "列表页地址",
+      "href_contains": "链接包含过滤",
+      "exclude_exact": "精确排除链接",
+      "max_links": "抓取链接上限"
+    },
+    "page_manual": {
+      "page_url": "手工指定的单页地址"
+    },
+    "paper_api": {
+      "provider": "arxiv | openalex | semantic_scholar",
+      "query/params": "provider 查询参数",
+      "max_items": "上限"
+    },
+    "crawler": {
+      "listing_url": "列表页地址（回落 page_url/url）",
+      "href_contains": "链接包含过滤",
+      "exclude_exact": "精确排除",
+      "link_pattern": "链接 include 正则",
+      "link_exclude_pattern": "链接 exclude 正则",
+      "max_items": "默认 10",
+      "fetch_article": "是否抓正文，默认 true"
+    },
+    "paper_page": {
+      "page_url": "论文列表页（回落 listing_url/url）",
+      "href_contains": "同 crawler",
+      "exclude_exact": "同 crawler",
+      "link_pattern": "同 crawler",
+      "link_exclude_pattern": "同 crawler",
+      "max_items": "默认 20",
+      "fetch_detail": "是否抓详情页 citation_* meta，默认 true；PDF 直链退化为 title+url+pdf_url"
+    },
+    "csv": {
+      "csv_text": "内联 CSV 内容（优先级最高）",
+      "csv_path": "本地文件路径",
+      "csv_url": "远程地址（回落 data_sources.url）",
+      "column_map": "{title,url,content,published_at,entry_key} 列名映射，默认与 manual-import 预览 CSV 约定一致",
+      "delimiter": "分隔符，默认 ,",
+      "encoding": "默认 utf-8",
+      "max_items": "默认 200"
+    },
+    "wiseflow": {
+      "read_info_url": "wiseflow 4.x POST /read_info 完整地址",
+      "base_url": "实例根地址（与 read_info_url 二选一）",
+      "read_info_url_env/base_url_env": "环境变量间接引用（legacy 种子兼容）",
+      "page_size": "分页大小，默认 50（page_size_env 可间接）",
+      "max_items": "封顶，默认 200",
+      "focus_ids": "focus 过滤列表",
+      "start_time": "增量起点；backfill 按目标日窗口自动传",
+      "lookback_days/lookback_seconds": "回看窗口（*_env 可间接）",
+      "auth_token/auth_token_env": "鉴权 token，推荐 *_env"
+    },
+    "manual": {
+      "note": "推入式，无 fetch_config；条目走 manual-import 路由"
+    },
+    "internal": {
+      "note": "默认推入式；配置 api_url 后为通用 JSON API 拉取器",
+      "api_url": "内部 JSON API 地址",
+      "params": "GET query 参数",
+      "items_path": "条目列表点号路径，缺省自动探测（根列表/items/data/results/records）",
+      "field_map": "{title,url,content,published_at,entry_key} 点号路径映射",
+      "max_items": "默认 200",
+      "auth_token/auth_token_env": "鉴权，推荐 *_env"
+    }
+  },
   "canonical_data_source_fields": [
-    {"name": "id", "type": "uuid", "required": true, "notes": "Internal primary key."},
-    {"name": "workspace_code", "type": "string", "required": false, "default": "shared", "notes": "Source definition owner/origin only. Workspace enablement must use workspace_source_links."},
-    {"name": "domain_code", "type": "string", "required": true, "default": "ai", "notes": "Default strategic intelligence board. Per-workspace domain can be overridden by workspace_source_links."},
-    {"name": "source_type", "type": "enum", "required": true, "notes": "wiseflow/rss/page_monitor/page_manual/crawler/csv/paper_rss/paper_api/paper_page/manual/internal."},
-    {"name": "name", "type": "string", "required": true, "legacy_rss": "name", "legacy_page": "name"},
-    {"name": "url", "type": "string", "required": false, "legacy_rss": "feed_url", "legacy_page": "page_url or articles[].url", "legacy_wiseflow": "SOURCE_READ_INFO_URL or derived from SOURCE_API_BASE"},
-    {"name": "enabled", "type": "boolean", "required": true, "legacy_rss": "enabled", "legacy_page": "true"},
-    {"name": "default_focus_id", "type": "integer", "required": true, "legacy_rss": "default_focus_id", "legacy_page": "default_focus_id"},
-    {"name": "backfill_days", "type": "integer", "required": true, "legacy_rss": "backfill_days", "legacy_page": "backfill_days"},
-    {"name": "fetch_interval_minutes", "type": "integer", "required": false, "default": 1440},
-    {"name": "trust_level", "type": "integer", "required": false, "default": 50},
-    {"name": "daily_source_limit", "type": "integer", "required": false, "default": 2},
-    {"name": "visibility_scope", "type": "enum", "required": true, "default": "public", "notes": "public/internal/restricted. Used by sync and export policy."},
-    {"name": "sync_policy", "type": "enum", "required": true, "default": "public_to_intranet", "notes": "none/public_to_intranet/two_way_config/manual_only."},
-    {"name": "credential_ref", "type": "string", "required": false, "notes": "Reference to environment-specific credentials. Secrets must not be stored in synced source config."},
-    {"name": "primary_category", "type": "string", "required": false, "legacy_rss": "folo_metadata.primary_category"},
-    {"name": "secondary_category", "type": "string", "required": false, "legacy_rss": "folo_metadata.secondary_category"},
-    {"name": "info_category", "type": "string", "required": false, "legacy_rss": "folo_metadata.info_category"},
-    {"name": "source_tags", "type": "string[]", "required": false, "notes": "Source-side strategic tags from config/taxonomy/source_tags.json. They are hints for source management and scoring, not generated_news.category."},
-    {"name": "source_secondary_tags", "type": "string[]", "required": false, "notes": "Optional second-level source tags under source_tags."},
-    {"name": "topic_flags", "type": "object", "required": false, "notes": "Model/inference/agent/application/telco/cloud/hardware/core-competency flags."},
-    {"name": "fetch_config", "type": "json", "required": false, "notes": "Wiseflow read_info config, RSS URL, page listing rules, selectors, crawler adapter name, CSV path/schema, API params."},
-    {"name": "paper_config", "type": "json", "required": false, "notes": "paper_api provider settings such as provider=arxiv/openalex/semantic_scholar, arxiv categories, OpenAlex search/filter params, Semantic Scholar query/publicationDateOrYear params, DOI/API settings, venue filters and citation providers. Secrets such as SEMANTIC_SCHOLAR_API_KEY must stay in environment config or secret manager, not this JSON."},
-    {"name": "metadata", "type": "json", "required": false, "legacy_rss": "folo_metadata plus origin", "legacy_page": "full page source object"},
-    {"name": "created_at", "type": "datetime", "required": true},
-    {"name": "updated_at", "type": "datetime", "required": true}
+    {
+      "name": "id",
+      "type": "uuid",
+      "required": true,
+      "notes": "Internal primary key."
+    },
+    {
+      "name": "workspace_code",
+      "type": "string",
+      "required": false,
+      "default": "shared",
+      "notes": "Source definition owner/origin only. Workspace enablement must use workspace_source_links."
+    },
+    {
+      "name": "domain_code",
+      "type": "string",
+      "required": true,
+      "default": "ai",
+      "notes": "Default strategic intelligence board. Per-workspace domain can be overridden by workspace_source_links."
+    },
+    {
+      "name": "source_type",
+      "type": "enum",
+      "required": true,
+      "notes": "wiseflow/rss/page_monitor/page_manual/crawler/csv/paper_rss/paper_api/paper_page/manual/internal."
+    },
+    {
+      "name": "name",
+      "type": "string",
+      "required": true,
+      "legacy_rss": "name",
+      "legacy_page": "name"
+    },
+    {
+      "name": "url",
+      "type": "string",
+      "required": false,
+      "legacy_rss": "feed_url",
+      "legacy_page": "page_url or articles[].url",
+      "legacy_wiseflow": "SOURCE_READ_INFO_URL or derived from SOURCE_API_BASE"
+    },
+    {
+      "name": "enabled",
+      "type": "boolean",
+      "required": true,
+      "legacy_rss": "enabled",
+      "legacy_page": "true"
+    },
+    {
+      "name": "default_focus_id",
+      "type": "integer",
+      "required": true,
+      "legacy_rss": "default_focus_id",
+      "legacy_page": "default_focus_id"
+    },
+    {
+      "name": "backfill_days",
+      "type": "integer",
+      "required": true,
+      "legacy_rss": "backfill_days",
+      "legacy_page": "backfill_days"
+    },
+    {
+      "name": "fetch_interval_minutes",
+      "type": "integer",
+      "required": false,
+      "default": 1440
+    },
+    {
+      "name": "trust_level",
+      "type": "integer",
+      "required": false,
+      "default": 50
+    },
+    {
+      "name": "daily_source_limit",
+      "type": "integer",
+      "required": false,
+      "default": 2
+    },
+    {
+      "name": "visibility_scope",
+      "type": "enum",
+      "required": true,
+      "default": "public",
+      "notes": "public/internal/restricted. Used by sync and export policy."
+    },
+    {
+      "name": "sync_policy",
+      "type": "enum",
+      "required": true,
+      "default": "public_to_intranet",
+      "notes": "none/public_to_intranet/two_way_config/manual_only."
+    },
+    {
+      "name": "credential_ref",
+      "type": "string",
+      "required": false,
+      "notes": "Reference to environment-specific credentials. Secrets must not be stored in synced source config."
+    },
+    {
+      "name": "primary_category",
+      "type": "string",
+      "required": false,
+      "legacy_rss": "folo_metadata.primary_category"
+    },
+    {
+      "name": "secondary_category",
+      "type": "string",
+      "required": false,
+      "legacy_rss": "folo_metadata.secondary_category"
+    },
+    {
+      "name": "info_category",
+      "type": "string",
+      "required": false,
+      "legacy_rss": "folo_metadata.info_category"
+    },
+    {
+      "name": "source_tags",
+      "type": "string[]",
+      "required": false,
+      "notes": "Source-side strategic tags from config/taxonomy/source_tags.json. They are hints for source management and scoring, not generated_news.category."
+    },
+    {
+      "name": "source_secondary_tags",
+      "type": "string[]",
+      "required": false,
+      "notes": "Optional second-level source tags under source_tags."
+    },
+    {
+      "name": "topic_flags",
+      "type": "object",
+      "required": false,
+      "notes": "Model/inference/agent/application/telco/cloud/hardware/core-competency flags."
+    },
+    {
+      "name": "fetch_config",
+      "type": "json",
+      "required": false,
+      "notes": "Wiseflow read_info config, RSS URL, page listing rules, selectors, crawler adapter name, CSV path/schema, API params."
+    },
+    {
+      "name": "paper_config",
+      "type": "json",
+      "required": false,
+      "notes": "paper_api provider settings such as provider=arxiv/openalex/semantic_scholar, arxiv categories, OpenAlex search/filter params, Semantic Scholar query/publicationDateOrYear params, DOI/API settings, venue filters and citation providers. Secrets such as SEMANTIC_SCHOLAR_API_KEY must stay in environment config or secret manager, not this JSON."
+    },
+    {
+      "name": "metadata",
+      "type": "json",
+      "required": false,
+      "legacy_rss": "folo_metadata plus origin",
+      "legacy_page": "full page source object"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "required": true
+    },
+    {
+      "name": "updated_at",
+      "type": "datetime",
+      "required": true
+    }
   ],
   "custom_source_api": {
     "notes": "Self-service source creation so every workspace can integrate its own sources without seed files. Created sources join the shared pool and are enabled per workspace through workspace_source_links.",
@@ -121,15 +331,62 @@
     ]
   },
   "workspace_source_link_fields": [
-    {"name": "id", "type": "uuid", "required": true, "notes": "Internal primary key."},
-    {"name": "workspace_id", "type": "uuid", "required": true, "notes": "Work scope that enables the shared source."},
-    {"name": "data_source_id", "type": "uuid", "required": true, "notes": "Reusable source definition."},
-    {"name": "domain_code", "type": "string", "required": true, "default": "ai", "notes": "Domain used when this workspace runs the source."},
-    {"name": "enabled", "type": "boolean", "required": true, "default": true},
-    {"name": "source_weight", "type": "float", "required": true, "default": 1.0, "notes": "Workspace-specific scoring multiplier."},
-    {"name": "daily_limit", "type": "integer", "required": false, "notes": "Optional per-workspace cap for this source."},
-    {"name": "clustering_config", "type": "json", "required": false, "notes": "Workspace-specific clustering and recommendation settings. It must not define label paths; labels come from the workspace label policy."},
-    {"name": "config_json", "type": "json", "required": false, "notes": "Workspace-specific overrides. Must not contain secrets."}
+    {
+      "name": "id",
+      "type": "uuid",
+      "required": true,
+      "notes": "Internal primary key."
+    },
+    {
+      "name": "workspace_id",
+      "type": "uuid",
+      "required": true,
+      "notes": "Work scope that enables the shared source."
+    },
+    {
+      "name": "data_source_id",
+      "type": "uuid",
+      "required": true,
+      "notes": "Reusable source definition."
+    },
+    {
+      "name": "domain_code",
+      "type": "string",
+      "required": true,
+      "default": "ai",
+      "notes": "Domain used when this workspace runs the source."
+    },
+    {
+      "name": "enabled",
+      "type": "boolean",
+      "required": true,
+      "default": true
+    },
+    {
+      "name": "source_weight",
+      "type": "float",
+      "required": true,
+      "default": 1.0,
+      "notes": "Workspace-specific scoring multiplier."
+    },
+    {
+      "name": "daily_limit",
+      "type": "integer",
+      "required": false,
+      "notes": "Optional per-workspace cap for this source."
+    },
+    {
+      "name": "clustering_config",
+      "type": "json",
+      "required": false,
+      "notes": "Workspace-specific clustering and recommendation settings. It must not define label paths; labels come from the workspace label policy."
+    },
+    {
+      "name": "config_json",
+      "type": "json",
+      "required": false,
+      "notes": "Workspace-specific overrides. Must not contain secrets."
+    }
   ],
   "legacy_wiseflow_mapping": {
     "domain_code": "ai",
