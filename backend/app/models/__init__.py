@@ -10,8 +10,18 @@ from app.models.content import (
     RecommendationItem,
     RecommendationRun,
 )
-from app.models.export import ExportJob, ExportJobItem
-from app.models.feedback import AuditLog, Comment, EditorialAction, Rating, Reaction
+from app.models.export import ExportImportReceipt, ExportJob, ExportJobItem
+from app.models.feedback import (
+    ActivityEvent,
+    AuditLog,
+    Comment,
+    EditorialAction,
+    Notification,
+    NotificationPreference,
+    ObjectWatcher,
+    Rating,
+    Reaction,
+)
 from app.models.identity import Permission, Role, User, role_permissions, user_roles
 from app.models.labels import ContentLabel, Label, LabelSet
 from app.models.legacy import (
@@ -29,11 +39,12 @@ from app.models.strategy import (
     StrategicImplication,
     TopicTask,
 )
-from app.models.sync import SyncConflict, SyncInbox, SyncOutbox, SyncRun
+from app.models.sync import SyncConflict, SyncCursor, SyncInbox, SyncOutbox, SyncRun
 from app.models.workspace import Workspace, WorkspaceMembership, WorkspaceSection, WorkspaceSourceLink
 
 __all__ = [
     "AuditLog",
+    "ActivityEvent",
     "Base",
     "Comment",
     "ContentLabel",
@@ -45,6 +56,7 @@ __all__ = [
     "EditorialAction",
     "ExportJob",
     "ExportJobItem",
+    "ExportImportReceipt",
     "GeneratedNews",
     "HistoricalFeedbackItem",
     "HistoricalJobRun",
@@ -55,6 +67,9 @@ __all__ = [
     "Label",
     "LabelSet",
     "NewsItem",
+    "Notification",
+    "NotificationPreference",
+    "ObjectWatcher",
     "Permission",
     "Rating",
     "RawItem",
@@ -66,6 +81,7 @@ __all__ = [
     "Role",
     "StrategicImplication",
     "SyncConflict",
+    "SyncCursor",
     "SyncInbox",
     "SyncOutbox",
     "SyncRun",

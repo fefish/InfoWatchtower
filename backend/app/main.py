@@ -7,6 +7,8 @@ from app.api.router import api_router
 from app.auth.service import try_ensure_auth_seed
 from app.core.config import get_settings
 from app.core.database import get_session_factory
+from app.core.deploy_checks import validate_deploy_settings
+from app.core.security import SecurityHeadersAndCsrfMiddleware
 
 
 @asynccontextmanager
@@ -18,6 +20,7 @@ async def lifespan(_app: FastAPI):
 
 
 def _validate_startup_settings(settings) -> None:
+    validate_deploy_settings(settings)
     if settings.app_env == "production" and not settings.database_url:
         raise RuntimeError(
             "DATABASE_URL is required when APP_ENV=production. "
@@ -49,6 +52,7 @@ def create_app() -> FastAPI:
             allow_methods=["*"],
             allow_headers=["*"],
         )
+    app.add_middleware(SecurityHeadersAndCsrfMiddleware, settings=settings)
 
     app.include_router(api_router)
     return app

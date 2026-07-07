@@ -1,0 +1,178 @@
+{
+  "schema_version": 1,
+  "description": "Deployment topology contract: four deploy modes, derived capability flags, legal auth combinations, and sync roles. Spec: docs/deployment/deployment-topology.md.",
+  "env_key": "DEPLOY_MODE",
+  "default_mode": "standalone",
+  "modes": {
+    "standalone": {
+      "purpose": "Local one-command Docker deployment for a person or small team.",
+      "capabilities": {
+        "ingestion": true,
+        "sync_publisher": false,
+        "sync_consumer": false,
+        "embedding": false,
+        "search": true
+      },
+      "allowed_auth_modes": ["local", "public_password"],
+      "csrf_default": false,
+      "notes": "sync_publisher may be overridden to true via CAPABILITY_SYNC_PUBLISHER for local linkage debugging."
+    },
+    "cloud": {
+      "purpose": "Official cloud deployment: admins ingest, non-admins are read-only consumers via viewer roles.",
+      "capabilities": {
+        "ingestion": true,
+        "sync_publisher": false,
+        "sync_consumer": false,
+        "embedding": false,
+        "search": true
+      },
+      "allowed_auth_modes": ["public_password", "oidc"],
+      "csrf_default": true,
+      "notes": "Invite-only provisioning, default global role viewer; TLS termination required (C-6)."
+    },
+    "intranet": {
+      "purpose": "Intranet deployment embedded in the company portal via same-site reverse-proxied iframe; pull-only.",
+      "capabilities": {
+        "ingestion": false,
+        "sync_publisher": false,
+        "sync_consumer": true,
+        "embedding": true,
+        "search": true
+      },
+      "allowed_auth_modes": ["intranet_header"],
+      "csrf_default": true,
+      "hard_constraints": [
+        "ingestion capability MUST NOT be overridable to true",
+        "comments/likes/ratings/adoption stay local and never flow back to extranet",
+        "backend must only be reachable through the trusted gateway"
+      ]
+    },
+    "extranet": {
+      "purpose": "Public internet deployment with industry-standard SSO that publishes collected and finished data to intranet consumers.",
+      "capabilities": {
+        "ingestion": true,
+        "sync_publisher": true,
+        "sync_consumer": false,
+        "embedding": false,
+        "search": true
+      },
+      "allowed_auth_modes": ["oidc", "public_password"],
+      "csrf_default": true,
+      "hard_constraints": [
+        "SYNC_SERVICE_TOKENS must be non-empty at startup",
+        "feed endpoints authenticate by service token only, never cookie session"
+      ]
+    }
+  },
+  "capability_flags": {
+    "ingestion": {
+      "override_env": "CAPABILITY_INGESTION",
+      "gates": {
+        "api": [
+          "POST /api/ingestion/runs",
+          "POST /api/ingestion/backfill-runs",
+          "POST /api/sources/{id}/fetch",
+          "POST /api/sources/import-legacy-seeds",
+          "POST /api/sources/import-tech-insight-loop",
+          "POST /api/pipeline/daily-runs"
+        ],
+        "scheduler": "ingestion/daily_pipeline jobs are not enqueued when false",
+        "frontend": "ingestion pages and import/fetch/create-source entries hidden when false"
+      }
+    },
+    "sync_publisher": {
+      "override_env": "CAPABILITY_SYNC_PUBLISHER",
+      "gates": {
+        "api": ["GET /api/sync/feed", "GET /api/sync/feed/manifest"]
+      }
+    },
+    "sync_consumer": {
+      "override_env": "CAPABILITY_SYNC_CONSUMER",
+      "gates": {
+        "api": ["POST /api/sync/pull-runs"],
+        "scheduler": "sync_pull job enqueued every SYNC_PULL_INTERVAL_SECONDS when SYNC_PULL_ENABLED"
+      }
+    },
+    "embedding": {
+      "override_env": null,
+      "informational_only": true,
+      "gates": {
+        "http_headers": "Content-Security-Policy: frame-ancestors from EMBED_FRAME_ANCESTORS (default 'self')"
+      },
+      "note": "embedding is an informational flag surfaced via GET /api/meta/runtime. frame-ancestors is always emitted from EMBED_FRAME_ANCESTORS regardless of mode, and CSRF defaults come from the independent per-mode csrf_default table; neither behavior is derived from this flag."
+    },
+    "search": {
+      "override_env": null,
+      "gates": {
+        "api": ["GET /api/search"],
+        "frontend": "topbar search is rendered when GET /api/meta/runtime returns capabilities.search=true"
+      }
+    }
+  },
+  "runtime_endpoint": {
+    "path": "GET /api/meta/runtime",
+    "auth": "none",
+    "response_fields": [
+      "deploy_mode",
+      "instance_id",
+      "capabilities",
+      "auth_mode",
+      "auth_membership_mapping",
+      "app_version"
+    ],
+    "auth_membership_mapping": "Sanitized read-only default workspace and department workspace mappings for /users policy display; must not expose secrets or provider tokens."
+  },
+  "startup_failfast_rules": [
+    "DEPLOY_MODE not in [standalone, cloud, intranet, extranet]",
+    "AUTH_MODE not in modes[DEPLOY_MODE].allowed_auth_modes (full per-mode whitelist; intranet therefore requires intranet_header, and public-facing cloud/extranet reject intranet_header header-forgery logins)",
+    "AUTH_SESSION_SECRET empty (all auth modes sign session cookies; validated at API, scheduler and worker startup)",
+    "AUTH_TRUSTED_PROXY_CIDRS non-empty but contains an invalid CIDR (fail-closed)",
+    "DEPLOY_MODE=intranet and CAPABILITY_INGESTION=true",
+    "DEPLOY_MODE=extranet and SYNC_SERVICE_TOKENS empty",
+    "AUTH_MODE=oidc and OIDC_CLIENT_ID empty",
+    "AUTH_MODE=oidc and neither OIDC_ISSUER nor explicit OIDC_AUTHORIZATION_ENDPOINT/OIDC_TOKEN_ENDPOINT is configured",
+    "sync_consumer enabled with SYNC_PULL_ENABLED=true but SYNC_REMOTE_BASE_URL or SYNC_REMOTE_TOKEN missing"
+  ],
+  "startup_warnings": [
+    "AUTH_MODE=intranet_header without AUTH_TRUSTED_PROXY_CIDRS: identity headers are trusted from any peer; the trusted gateway must be the only ingress (logged as a warning, not fail-fast, to keep existing gateway-only deployments bootable)"
+  ],
+  "related_env": [
+    "INSTANCE_ID",
+    "SYNC_SERVICE_TOKENS",
+    "SYNC_REMOTE_BASE_URL",
+    "SYNC_REMOTE_TOKEN",
+    "SYNC_PULL_ENABLED",
+    "SYNC_PULL_INTERVAL_SECONDS",
+    "EMBED_FRAME_ANCESTORS",
+    "AUTH_CSRF_ENABLED",
+    "AUTH_TRUSTED_PROXY_CIDRS",
+    "OIDC_PROVIDER",
+    "OIDC_ISSUER",
+    "OIDC_JWKS_URI",
+    "OIDC_CLIENT_ID",
+    "OIDC_CLIENT_SECRET",
+    "OIDC_SCOPES",
+    "OIDC_REDIRECT_URL",
+    "OIDC_AUTHORIZATION_ENDPOINT",
+    "OIDC_TOKEN_ENDPOINT",
+    "OIDC_USERINFO_ENDPOINT",
+    "OIDC_POST_LOGIN_REDIRECT_URL",
+    "OIDC_CLAIM_EXTERNAL_ID",
+    "OIDC_CLAIM_EMPLOYEE_NO",
+    "OIDC_CLAIM_USERNAME",
+    "OIDC_CLAIM_DISPLAY_NAME",
+    "OIDC_CLAIM_DEPARTMENT",
+    "OIDC_CLAIM_EMAIL",
+    "AUTH_DEFAULT_WORKSPACE_CODES",
+    "AUTH_DEPARTMENT_WORKSPACE_MAP",
+    "WX_BRIDGE_URL",
+    "WX_BRIDGE_TOKEN"
+  ],
+  "invariants": [
+    "sync direction is one-way extranet -> intranet; intranet feedback never flows back",
+    "feed endpoints are side-effect free and replayable",
+    "company SQL export contract is unchanged by sync",
+    "secrets/tokens/cookies/.env never enter feed or sync packages",
+    "iframe embedding only via same-site reverse proxy; SameSite=None is forbidden"
+  ]
+}
