@@ -28,6 +28,23 @@ import WeeklyReportsPage from "../pages/WeeklyReportsPage.vue";
 import { useRuntimeStore } from "../stores/runtime";
 import { useSessionStore } from "../stores/session";
 import { useSetupStore } from "../stores/setup";
+import { useWorkspaceStore } from "../stores/workspace";
+
+// viewer（游客）可访问的阅读路由前缀：日报/周报/历史报告/实体大事记 + 个人页。
+// 管理路由（数据源/抓取/候选池/推荐/导出/用户/审计/同步/运营等）对 viewer 整组
+// 重定向到 /daily-reports（与工作台分区 min_role 口径一致，搜索在顶栏不占路由）。
+const VIEWER_PATH_PREFIXES = [
+  "/daily-reports",
+  "/weekly-reports",
+  "/historical-reports",
+  "/entity-milestones",
+  "/account",
+  "/notifications"
+];
+
+function isViewerReadablePath(path: string) {
+  return VIEWER_PATH_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+}
 
 export const routes: RouteRecordRaw[] = [
     {
@@ -205,6 +222,18 @@ export function installRouterGuards(appRouter: Router) {
     }
     if (session.user?.status === "must_change_password" && to.path !== "/account") {
       return "/account";
+    }
+
+    // viewer（游客）阅读视角：当前工作台角色是 viewer（且非 super_admin /
+    // editor_admin）时默认落地 /daily-reports，访问管理路由一律重定向回日报。
+    const globalRoles = session.user?.roles ?? [];
+    const hasGlobalAdminRole = globalRoles.includes("super_admin") || globalRoles.includes("editor_admin");
+    if (!hasGlobalAdminRole && !isViewerReadablePath(to.path)) {
+      const workspace = useWorkspaceStore();
+      await workspace.ensureLoaded();
+      if (workspace.currentRole === "viewer") {
+        return "/daily-reports";
+      }
     }
     return true;
   });

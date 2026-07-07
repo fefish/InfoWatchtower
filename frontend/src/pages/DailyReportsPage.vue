@@ -38,6 +38,7 @@ import {
   createReportFormat,
   dailyRenditionExportUrl,
   deleteReportFormat,
+  fetchDailyRenditions,
   fetchReportFormats,
   regenerateDailyRendition,
   updateReportFormat,
@@ -193,6 +194,8 @@ const canRate = computed(() => !isViewerOnly.value || feedbackPolicy.value.viewe
 const canComment = computed(() => !isViewerOnly.value || feedbackPolicy.value.viewer_can_comment);
 const canCreateStrategyLoop = computed(() => roleRank[currentWorkspaceRole.value] >= 2);
 const canCreateEntityMilestone = computed(() => roleRank[currentWorkspaceRole.value] >= 1);
+// viewer（游客）纯阅读：生成/发布/重跑/采信/编辑/头条/格式管理等编审操作整组隐藏。
+const canManageReports = computed(() => roleRank[currentWorkspaceRole.value] >= 1);
 
 // ---- 成稿格式（renditions）----
 const formats = ref<ReportFormatRecord[]>([]);
@@ -292,7 +295,14 @@ async function loadRendition() {
   }
   renditionLoading.value = true;
   try {
-    rendition.value = await regenerateDailyRendition(report.id, activeFormatCode.value);
+    if (canManageReports.value) {
+      rendition.value = await regenerateDailyRendition(report.id, activeFormatCode.value);
+    } else {
+      // viewer 只读：读取发布时已投影的成稿快照，不触发 member 权限的重投影。
+      const renditions = await fetchDailyRenditions(report.id);
+      rendition.value =
+        renditions.find((candidate) => candidate.format_code === activeFormatCode.value) ?? null;
+    }
   } catch (exc) {
     error.value = exc instanceof Error ? exc.message : "生成成稿失败";
     rendition.value = null;
@@ -460,7 +470,7 @@ async function generateDraft() {
       create_daily_draft: true,
       run_ingestion: true
     });
-    message.value = `已生成 ${result.day_key ?? "当日"} 草稿：raw 扫描 ${result.raw_scanned}，候选 ${result.candidates_total}，采信 ${result.selected_total}，成稿 ${result.generated_total}`;
+    message.value = `已生成 ${result.day_key ?? "当日"} 草稿：raw 扫描 ${result.raw_scanned}，候选 ${result.candidates_total}，采信 ${result.selected_total}，成稿 ${result.generated_total}${result.auto_published ? "（已按工作台策略自动发布）" : ""}`;
     await loadReports();
     if (result.daily_report_id) {
       selectedReportId.value = result.daily_report_id;
@@ -1023,7 +1033,7 @@ onMounted(() => {
       <p>从推荐链路生成日报草稿，也支持把已校验公司 SQL 预览回填为可查看、可采信、可导出的日报。</p>
     </div>
     <div class="toolbar-actions">
-      <label class="date-control" title="日报日期">
+      <label v-if="canManageReports" class="date-control" title="日报日期">
         <span>日期</span>
         <input v-model="targetDayKey" type="date" />
       </label>
@@ -1031,7 +1041,13 @@ onMounted(() => {
         <RefreshCw :size="18" />
         <span>刷新</span>
       </button>
-      <button type="button" class="icon-button" :disabled="generating" @click="generateDraft">
+      <button
+        v-if="canManageReports"
+        type="button"
+        class="icon-button"
+        :disabled="generating"
+        @click="generateDraft"
+      >
         <Sparkles :size="18" />
         <span>{{ generating ? "生成中" : "生成日报草稿" }}</span>
       </button>
@@ -1066,7 +1082,7 @@ onMounted(() => {
         </div>
         <div class="toolbar-actions compact">
           <button
-            v-if="selectedReport.status !== 'published'"
+            v-if="canManageReports && selectedReport.status !== 'published'"
             type="button"
             class="icon-button secondary"
             :disabled="regeneratingReportId === selectedReport.id"
@@ -1076,7 +1092,7 @@ onMounted(() => {
             <span>{{ regeneratingReportId === selectedReport.id ? "重跑中" : "重跑生成稿" }}</span>
           </button>
           <button
-            v-if="selectedReport.status !== 'published'"
+            v-if="canManageReports && selectedReport.status !== 'published'"
             type="button"
             class="icon-button secondary"
             :disabled="publishingId === selectedReport.id"
@@ -1124,7 +1140,14 @@ onMounted(() => {
           >
             导出 HTML
           </a>
-          <button type="button" class="table-action" @click="showFormatPanel = true">格式</button>
+          <button
+            v-if="canManageReports"
+            type="button"
+            class="table-action"
+            @click="showFormatPanel = true"
+          >
+            格式
+          </button>
         </div>
       </div>
 
@@ -1159,7 +1182,7 @@ onMounted(() => {
                 <div class="rendition-item-head">
                   <h5>{{ index + 1 }}、{{ renditionSnapshots[itemId].title }}</h5>
                   <button
-                    v-if="activeFormat?.headline_enabled"
+                    v-if="canManageReports && activeFormat?.headline_enabled"
                     type="button"
                     class="headline-toggle"
                     :class="{ active: renditionSnapshots[itemId].is_headline }"
@@ -1203,6 +1226,9 @@ onMounted(() => {
             本报告暂无采信条目，先在内网版视图完成采信。
           </p>
         </template>
+        <p v-else class="empty-state">
+          该格式的成稿尚未生成：日报发布时会自动投影，请等待发布或联系编辑。
+        </p>
       </div>
 
       <div v-if="activeFormatCode === 'company_sql_v1'" class="daily-item-list">
@@ -1287,10 +1313,14 @@ onMounted(() => {
           </article>
 
           <aside class="modal-editor-panel">
-            <div class="editor-panel-section">
+            <div
+              v-if="canManageReports || canCreateStrategyLoop || canCreateEntityMilestone"
+              class="editor-panel-section"
+            >
               <p class="eyebrow">当前处理</p>
               <div class="editor-actions">
                 <button
+                  v-if="canManageReports"
                   type="button"
                   class="mini-action"
                   :class="{ active: detailItem.adoption_status === 2 }"
@@ -1301,6 +1331,7 @@ onMounted(() => {
                   <span>采信</span>
                 </button>
                 <button
+                  v-if="canManageReports"
                   type="button"
                   class="mini-action"
                   :class="{ active: detailItem.adoption_status === 1 }"
@@ -1311,6 +1342,7 @@ onMounted(() => {
                   <span>备选</span>
                 </button>
                 <button
+                  v-if="canManageReports"
                   type="button"
                   class="mini-action"
                   :class="{ active: detailItem.adoption_status === 0 }"
@@ -1361,7 +1393,7 @@ onMounted(() => {
               <div class="section-title-row">
                 <p class="eyebrow">编辑</p>
                 <button
-                  v-if="editingItemId !== detailItem.id"
+                  v-if="canManageReports && editingItemId !== detailItem.id"
                   type="button"
                   class="mini-action"
                   @click="beginEdit(detailItem)"

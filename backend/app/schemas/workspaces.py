@@ -57,6 +57,9 @@ class WorkspaceSectionRead(BaseModel):
     route_path: str
     sort_order: int
     group: str = "system"
+    # 分区可见的最低工作台角色：阅读分区（日报/周报/历史报告/实体大事记）为
+    # viewer，管理分区默认 member。前端导航与路由守卫按此数据驱动过滤。
+    min_role: str = "member"
 
 
 class WorkspaceLabelPolicyRead(BaseModel):
@@ -102,6 +105,17 @@ class WorkspaceFeedbackPolicyUpdate(BaseModel):
     viewer_can_edit: bool = False
     notify_on_comment: bool = True
     notify_on_publish: bool = False
+
+
+class WorkspaceReportPolicyRead(BaseModel):
+    workspace_code: str
+    # 每日流水线出稿后是否自动发布（actor=system）。默认 true：
+    # 用户口径“每天 12 点默认直接推送，采编只在需要时修订”。
+    auto_publish_daily: bool = True
+
+
+class WorkspaceReportPolicyUpdate(BaseModel):
+    auto_publish_daily: bool = True
 
 
 class WorkspaceDepartmentMembershipTarget(BaseModel):

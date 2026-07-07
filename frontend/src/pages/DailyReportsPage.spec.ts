@@ -23,6 +23,7 @@ const renditionsApi = vi.hoisted(() => ({
   createReportFormat: vi.fn(),
   dailyRenditionExportUrl: vi.fn(),
   deleteReportFormat: vi.fn(),
+  fetchDailyRenditions: vi.fn(),
   fetchReportFormats: vi.fn(),
   regenerateDailyRendition: vi.fn(),
   updateReportFormat: vi.fn()
@@ -291,6 +292,7 @@ describe("DailyReportsPage feedback policy", () => {
       updated_at: "2026-07-05T09:00:00Z"
     });
     renditionsApi.fetchReportFormats.mockResolvedValue([]);
+    renditionsApi.fetchDailyRenditions.mockResolvedValue([]);
     renditionsApi.dailyRenditionExportUrl.mockReturnValue("#");
     watchersApi.fetchObjectWatcher.mockResolvedValue({
       object_type: "daily_report_item",
@@ -524,7 +526,8 @@ describe("DailyReportsPage feedback policy", () => {
     ]);
     renditionsApi.regenerateDailyRendition.mockResolvedValue(renditionRecord());
 
-    const wrapper = mountPage();
+    // member+ 走 regenerate 重投影；viewer 只读路径见下方 viewer 阅读视角用例。
+    const wrapper = mountPage({ workspaceRole: "member" });
     await flushPromises();
     await flushPromises();
 
@@ -537,5 +540,81 @@ describe("DailyReportsPage feedback policy", () => {
     expect(anchoredRendition.exists()).toBe(true);
     expect(anchoredRendition.attributes("aria-current")).toBe("true");
     expect(anchoredRendition.text()).toContain("测试新闻标题");
+  });
+
+  it("hides editorial controls for workspace viewers while keeping reading intact", async () => {
+    const wrapper = mountPage({ workspaceRole: "viewer" });
+    await flushPromises();
+
+    // 顶部工具栏：viewer 无「生成日报草稿」与日期控件，仅保留刷新。
+    const toolbarTexts = wrapper.findAll(".report-command .toolbar-actions button").map((button) => button.text());
+    expect(toolbarTexts.some((text) => text.includes("生成日报草稿"))).toBe(false);
+    expect(toolbarTexts.some((text) => text.includes("刷新"))).toBe(true);
+    expect(wrapper.find(".date-control").exists()).toBe(false);
+
+    // 报告头部：draft 状态下 member 可见的「发布/重跑生成稿」对 viewer 隐藏。
+    const headerTexts = wrapper.findAll(".daily-report-header .toolbar-actions button").map((button) => button.text());
+    expect(headerTexts.some((text) => text.includes("发布"))).toBe(false);
+    expect(headerTexts.some((text) => text.includes("重跑"))).toBe(false);
+    // 格式管理入口隐藏，导出链接保留。
+    expect(wrapper.find(".rendition-actions").text()).not.toContain("格式");
+
+    // 详情弹层：采信/备选/剔除与编辑按钮整组隐藏，阅读正文保留。
+    await wrapper.find(".daily-item.story").trigger("click");
+    await flushPromises();
+    const modalActionTexts = Array.from(
+      document.body.querySelectorAll(".modal-editor-panel .editor-actions .mini-action")
+    ).map((button) => button.textContent ?? "");
+    expect(modalActionTexts.some((text) => text.includes("采信"))).toBe(false);
+    expect(modalActionTexts.some((text) => text.includes("剔除"))).toBe(false);
+    const editButtons = Array.from(
+      document.body.querySelectorAll(".section-title-row .mini-action")
+    ).map((button) => button.textContent ?? "");
+    expect(editButtons.some((text) => text.includes("编辑"))).toBe(false);
+    expect(document.body.querySelector(".modal-story-detail")?.textContent).toContain("测试摘要");
+  });
+
+  it("loads published renditions read-only for viewers without member regenerate", async () => {
+    renditionsApi.fetchReportFormats.mockResolvedValue([
+      reportFormat("company_sql_v1", "内网版"),
+      reportFormat("tech_insight_v1", "技术洞察版")
+    ]);
+    renditionsApi.fetchDailyRenditions.mockResolvedValue([renditionRecord()]);
+
+    const wrapper = mountPage({ workspaceRole: "viewer" });
+    await flushPromises();
+    await flushPromises();
+
+    // 默认切到技术洞察版：viewer 走 GET renditions 读取发布时投影的快照，
+    // 不触发 member 权限的 regenerate。
+    expect(renditionsApi.fetchDailyRenditions).toHaveBeenCalledWith("report-1");
+    expect(renditionsApi.regenerateDailyRendition).not.toHaveBeenCalled();
+    const renditionView = wrapper.find(".rendition-view");
+    expect(renditionView.text()).toContain("测试新闻标题");
+    // 头条编辑按钮对 viewer 隐藏。
+    expect(renditionView.find(".headline-toggle").exists()).toBe(false);
+  });
+
+  it("gives invited viewers the latest published daily report on landing", async () => {
+    // 游客旅程终点：受邀 viewer 登录 →（路由守卫落地 /daily-reports，见 router spec）
+    // → 直接读到最新已发布日报与其成稿。
+    reportsApi.fetchDailyReports.mockResolvedValue([
+      { ...reportRecord(), status: "published", published_at: "2026-07-05T12:00:00Z" }
+    ]);
+    renditionsApi.fetchReportFormats.mockResolvedValue([
+      reportFormat("company_sql_v1", "内网版"),
+      reportFormat("tech_insight_v1", "技术洞察版")
+    ]);
+    renditionsApi.fetchDailyRenditions.mockResolvedValue([renditionRecord()]);
+
+    const wrapper = mountPage({ workspaceRole: "viewer" });
+    await flushPromises();
+    await flushPromises();
+
+    expect(wrapper.find(".report-tab").text()).toContain("已发布");
+    expect(wrapper.find(".daily-report-card h3").text()).toBe("规划部日报");
+    expect(wrapper.find(".rendition-view").text()).toContain("测试新闻标题");
+    const headerButtons = wrapper.findAll(".daily-report-header .toolbar-actions button");
+    expect(headerButtons).toHaveLength(0);
   });
 });

@@ -20,6 +20,7 @@ from app.auth.service import (
 from app.core.database import get_db_session
 from app.models.identity import User
 from app.models.workspace import Workspace, WorkspaceMembership, WorkspaceSection
+from app.reports.publish import workspace_report_policy
 from app.schemas.workspaces import (
     DEFAULT_REQUIRED_CONTENT_FIELDS,
     WorkspaceAuthMembershipMappingRead,
@@ -33,6 +34,8 @@ from app.schemas.workspaces import (
     WorkspaceMemberRead,
     WorkspaceMemberUpsert,
     WorkspaceRead,
+    WorkspaceReportPolicyRead,
+    WorkspaceReportPolicyUpdate,
     WorkspaceSectionRead,
     WorkspaceUpdate,
 )
@@ -40,6 +43,15 @@ from app.schemas.workspaces import (
 router = APIRouter(prefix="/api/workspaces", tags=["workspaces"])
 REPO_ROOT = Path(__file__).resolve().parents[4]
 WORKSPACE_CREATOR_ROLES = {"super_admin", "editor_admin"}
+SECTION_ROLE_VALUES = {"viewer", "member", "admin", "owner"}
+# 阅读分区：viewer（游客）可见；其余分区默认 member 起（数据源/抓取/候选池/导出/
+# 用户/审计/同步等管理分区对 viewer 整组隐藏）。可被 section.config_json.min_role 覆盖。
+VIEWER_SECTION_KEYS = {
+    "daily_reports",
+    "weekly_reports",
+    "historical_reports",
+    "entity_milestones",
+}
 
 
 class WorkspaceSectionUpdate(BaseModel):
@@ -575,6 +587,61 @@ def update_workspace_feedback_policy(
     return _workspace_feedback_policy_to_read(workspace)
 
 
+@router.get("/{workspace_code}/report-policy", response_model=WorkspaceReportPolicyRead)
+def get_workspace_report_policy(
+    workspace_code: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> WorkspaceReportPolicyRead:
+    assert_workspace_member(session, current_user, workspace_code, min_role="viewer")
+    workspace = _get_enabled_workspace(session, workspace_code)
+    return _workspace_report_policy_to_read(workspace)
+
+
+@router.patch("/{workspace_code}/report-policy", response_model=WorkspaceReportPolicyRead)
+def update_workspace_report_policy(
+    workspace_code: str,
+    payload: WorkspaceReportPolicyUpdate,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> WorkspaceReportPolicyRead:
+    """报告策略（与 label/feedback policy 同级，存 workspaces.config_json.report_policy）。
+
+    auto_publish_daily 默认 true：每日流水线出稿即自动发布（actor=system）。
+    关掉后回到人工发布工作流。
+    """
+    assert_workspace_member(session, current_user, workspace_code, min_role="admin")
+    workspace = _get_enabled_workspace(session, workspace_code)
+    config = dict(workspace.config_json or {})
+    before = dict(config.get("report_policy") or {})
+    policy = {"auto_publish_daily": bool(payload.auto_publish_daily)}
+    config["report_policy"] = policy
+    workspace.config_json = config
+    write_audit(
+        session,
+        current_user,
+        action="workspace.report_policy.update",
+        object_type="workspace",
+        object_id=workspace.id,
+        detail={
+            "workspace_code": workspace.code,
+            "before": before,
+            "after": policy,
+        },
+    )
+    session.commit()
+    session.refresh(workspace)
+    return _workspace_report_policy_to_read(workspace)
+
+
+def _workspace_report_policy_to_read(workspace: Workspace) -> WorkspaceReportPolicyRead:
+    policy = workspace_report_policy(workspace)
+    return WorkspaceReportPolicyRead(
+        workspace_code=workspace.code,
+        auto_publish_daily=bool(policy.get("auto_publish_daily")),
+    )
+
+
 def _get_enabled_workspace(session: Session, workspace_code: str) -> Workspace:
     workspace = session.scalar(
         select(Workspace).where(
@@ -700,6 +767,18 @@ def _section_effective_enabled(section: WorkspaceSection) -> bool:
     return section.enabled
 
 
+def _section_min_role(section: WorkspaceSection) -> str:
+    """分区可见的最低工作台角色：config_json.min_role 覆盖 > 阅读分区 viewer > member。
+
+    数据驱动：前端 AppShell 导航与路由守卫按该字段过滤，viewer（游客）只看到
+    日报/周报/历史报告/实体大事记等阅读分区。
+    """
+    override = (section.config_json or {}).get("min_role")
+    if isinstance(override, str) and override in SECTION_ROLE_VALUES:
+        return override
+    return "viewer" if section.section_key in VIEWER_SECTION_KEYS else "member"
+
+
 def _section_to_read(section: WorkspaceSection) -> WorkspaceSectionRead:
     return WorkspaceSectionRead(
         section_key=section.section_key,
@@ -708,6 +787,7 @@ def _section_to_read(section: WorkspaceSection) -> WorkspaceSectionRead:
         route_path=section.route_path,
         sort_order=section.sort_order,
         group=str((section.config_json or {}).get("group") or "system"),
+        min_role=_section_min_role(section),
     )
 
 

@@ -75,6 +75,10 @@ const canCreateStrategyLoop = computed(
 const canCreateEntityMilestone = computed(
   () => roleRank[workspace.current?.current_user_workspace_role ?? ""] >= 1
 );
+// viewer（游客）纯阅读：生成/发布/采信/排序/编辑等编审操作整组隐藏。
+const canManageReports = computed(
+  () => roleRank[workspace.current?.current_user_workspace_role ?? ""] >= 1
+);
 
 const contentFieldLabels = [
   ["background", "背景"],
@@ -586,7 +590,13 @@ onMounted(() => {
           <RefreshCw :size="17" />
           <span>刷新</span>
         </button>
-        <button type="button" class="icon-button" :disabled="creating" @click="createDraft">
+        <button
+          v-if="canManageReports"
+          type="button"
+          class="icon-button"
+          :disabled="creating"
+          @click="createDraft"
+        >
           <Sparkles :size="17" />
           <span>{{ creating ? "生成中" : "生成周报草稿" }}</span>
         </button>
@@ -596,7 +606,7 @@ onMounted(() => {
     <p v-if="error" class="form-error">{{ error }}</p>
     <p v-if="message" class="form-success">{{ message }}</p>
 
-    <section class="run-command module-card compact">
+    <section v-if="canManageReports" class="run-command module-card compact">
       <label>
         周期
         <span class="input-with-icon">
@@ -687,7 +697,7 @@ onMounted(() => {
               </a>
             </template>
             <button
-              v-if="selectedReport.status !== 'published'"
+              v-if="canManageReports && selectedReport.status !== 'published'"
               type="button"
               class="icon-button"
               :disabled="publishingId === selectedReport.id || reportItems.length === 0"
@@ -799,6 +809,7 @@ onMounted(() => {
                     <span v-if="watcherStatus(item)">· {{ watcherStatus(item)?.watcher_count }}</span>
                   </button>
                   <button
+                    v-if="canManageReports"
                     type="button"
                     class="mini-action"
                     :class="{ active: item.adoption_status === 2 }"
@@ -809,6 +820,7 @@ onMounted(() => {
                     <span>采信</span>
                   </button>
                   <button
+                    v-if="canManageReports"
                     type="button"
                     class="mini-action"
                     :class="{ active: item.adoption_status === 1 }"
@@ -819,6 +831,7 @@ onMounted(() => {
                     <span>候选</span>
                   </button>
                   <button
+                    v-if="canManageReports"
                     type="button"
                     class="mini-action"
                     :class="{ active: item.adoption_status === 0 }"
@@ -829,6 +842,7 @@ onMounted(() => {
                     <span>剔除</span>
                   </button>
                   <button
+                    v-if="canManageReports"
                     type="button"
                     class="mini-action"
                     :disabled="!canMoveItem(item, -1)"
@@ -837,6 +851,7 @@ onMounted(() => {
                     <ArrowUp :size="15" />
                   </button>
                   <button
+                    v-if="canManageReports"
                     type="button"
                     class="mini-action"
                     :disabled="!canMoveItem(item, 1)"
@@ -844,7 +859,12 @@ onMounted(() => {
                   >
                     <ArrowDown :size="15" />
                   </button>
-                  <button v-if="editingItemId !== item.id" type="button" class="mini-action" @click="beginEdit(item)">
+                  <button
+                    v-if="canManageReports && editingItemId !== item.id"
+                    type="button"
+                    class="mini-action"
+                    @click="beginEdit(item)"
+                  >
                     <Pencil :size="15" />
                     <span>编辑</span>
                   </button>

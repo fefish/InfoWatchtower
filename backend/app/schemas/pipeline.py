@@ -40,6 +40,10 @@ class DailyPipelineRunRead(BaseModel):
     dedupe_groups_updated: int
     recommendation_run_id: str
     daily_report_id: str | None
+    # 自动发布结果：daily_report_status=published + auto_published=True 表示本次
+    # 流水线按工作台 report_policy.auto_publish_daily 自动发布（actor=system）。
+    daily_report_status: str | None = None
+    auto_published: bool = False
     candidates_total: int
     selected_total: int
     generated_total: int

@@ -300,10 +300,34 @@ const sectionIcons = {
   audit_logs: ShieldCheck
 } as const;
 
+const workspaceRoleRank: Record<string, number> = {
+  viewer: 0,
+  member: 1,
+  admin: 2,
+  owner: 3
+};
+
+// 当前工作台的有效角色：super_admin / editor_admin 全局角色视同 owner；
+// 其余取 membership 角色，未知时按 viewer 保守处理。
+const effectiveWorkspaceRole = computed(() => {
+  const globalRoles = session.user?.roles ?? [];
+  if (globalRoles.includes("super_admin") || globalRoles.includes("editor_admin")) {
+    return "owner";
+  }
+  return workspace.currentRole ?? "viewer";
+});
+
 const navItems = computed(() =>
   workspace.sections
     // 采集能力关闭（如 intranet 形态）时隐藏「抓取与覆盖」入口。
     .filter((section) => runtime.canIngest || section.section_key !== "ingestion_coverage")
+    // 数据驱动的角色过滤：viewer（游客）只看到 min_role=viewer 的阅读分区
+    // （日报/周报/历史报告/实体大事记），管理分区整组隐藏。
+    .filter(
+      (section) =>
+        (workspaceRoleRank[effectiveWorkspaceRole.value] ?? 0) >=
+        (workspaceRoleRank[section.min_role ?? "member"] ?? 1)
+    )
     .map((section) => ({
       key: section.section_key,
       label: section.name,

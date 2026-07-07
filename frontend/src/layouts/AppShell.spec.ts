@@ -3,6 +3,7 @@ import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import AppShell from "./AppShell.vue";
+import type { UserRole } from "../api/auth";
 import { useRuntimeStore } from "../stores/runtime";
 import { useSessionStore } from "../stores/session";
 
@@ -76,18 +77,44 @@ const routerLinkStub = {
   template: `<a :href="typeof to === 'string' ? to : to.path"><slot /></a>`
 };
 
-function planningWorkspace() {
+function planningWorkspace(role: string = "owner") {
   return {
     code: "planning_intel",
     name: "规划部情报工作台",
     description: "行业信号、日报周报、专题洞察和内部需求闭环。",
     workspace_type: "team",
     default_domain_code: "ai",
-    enabled: true
+    enabled: true,
+    current_user_workspace_role: role
   };
 }
 
-function mountShell(options: { workspaces?: ReturnType<typeof planningWorkspace>[] } = {}) {
+function sectionRecord(
+  sectionKey: string,
+  name: string,
+  routePath: string,
+  group: string,
+  minRole: string = "member"
+) {
+  return {
+    section_key: sectionKey,
+    name,
+    section_type: "core",
+    route_path: routePath,
+    sort_order: 1,
+    enabled: true,
+    group,
+    min_role: minRole
+  };
+}
+
+function mountShell(
+  options: {
+    workspaces?: ReturnType<typeof planningWorkspace>[];
+    sections?: ReturnType<typeof sectionRecord>[];
+    userRoles?: UserRole[];
+  } = {}
+) {
   const pinia = createPinia();
   setActivePinia(pinia);
 
@@ -101,7 +128,7 @@ function mountShell(options: { workspaces?: ReturnType<typeof planningWorkspace>
     display_name: "规划部管理员",
     department: null,
     email: "admin@example.com",
-    roles: ["super_admin"],
+    roles: options.userRoles ?? ["super_admin"],
     status: "active",
     is_active: true
   };
@@ -119,26 +146,12 @@ function mountShell(options: { workspaces?: ReturnType<typeof planningWorkspace>
   };
 
   workspaceApi.fetchWorkspaces.mockResolvedValue(options.workspaces ?? [planningWorkspace()]);
-  workspaceApi.fetchWorkspaceSections.mockResolvedValue([
-    {
-      section_key: "dashboard",
-      name: "今日速览",
-      section_type: "core",
-      route_path: "/dashboard",
-      sort_order: 1,
-      enabled: true,
-      group: "today"
-    },
-    {
-      section_key: "ingestion_coverage",
-      name: "抓取与覆盖",
-      section_type: "core",
-      route_path: "/ingestion-runs",
-      sort_order: 2,
-      enabled: true,
-      group: "collect"
-    }
-  ]);
+  workspaceApi.fetchWorkspaceSections.mockResolvedValue(
+    options.sections ?? [
+      sectionRecord("dashboard", "今日速览", "/dashboard", "today"),
+      sectionRecord("ingestion_coverage", "抓取与覆盖", "/ingestion-runs", "collect")
+    ]
+  );
   notificationsApi.fetchUnreadNotificationCount.mockResolvedValue({ unread_count: 3 });
   return mount(AppShell, {
     global: {
@@ -318,6 +331,49 @@ describe("AppShell", () => {
     await flushPromises();
 
     expect(wrapper.text()).not.toContain("抓取与覆盖");
+  });
+
+  it("filters navigation to reading sections for workspace viewers", async () => {
+    // 数据驱动的 min_role 过滤：viewer（游客）只看到日报/周报/历史报告/实体大事记，
+    // 数据源/抓取/候选池/导出/用户/审计等管理分区整组隐藏。
+    const wrapper = mountShell({
+      userRoles: ["viewer"],
+      workspaces: [planningWorkspace("viewer")],
+      sections: [
+        sectionRecord("dashboard", "今日速览", "/dashboard", "today", "member"),
+        sectionRecord("source_management", "数据源管理", "/sources", "collect", "member"),
+        sectionRecord("candidate_pool", "候选池", "/news", "curate", "member"),
+        sectionRecord("daily_reports", "日报", "/daily-reports", "curate", "viewer"),
+        sectionRecord("weekly_reports", "周报", "/weekly-reports", "curate", "viewer"),
+        sectionRecord("historical_reports", "历史报告库", "/historical-reports", "library", "viewer"),
+        sectionRecord("entity_milestones", "实体大事记", "/entity-milestones", "library", "viewer"),
+        sectionRecord("exports", "SQL导出", "/exports", "system", "member"),
+        sectionRecord("users", "用户权限", "/users", "system", "member"),
+        sectionRecord("audit_logs", "审计", "/audit-logs", "system", "member")
+      ]
+    });
+    await flushPromises();
+
+    const navLabels = wrapper.findAll(".nav-item").map((item) => item.text());
+    expect(navLabels).toEqual(["日报", "周报", "历史报告库", "实体大事记"]);
+    // 全局搜索入口保留（阅读分区之一）。
+    expect(wrapper.find('input[type="search"]').exists()).toBe(true);
+    // viewer 也没有新建工作台入口。
+    expect(wrapper.find(".workspace-create-button").exists()).toBe(false);
+  });
+
+  it("keeps management sections visible for workspace members", async () => {
+    const wrapper = mountShell({
+      userRoles: ["viewer"],
+      workspaces: [planningWorkspace("member")],
+      sections: [
+        sectionRecord("source_management", "数据源管理", "/sources", "collect", "member"),
+        sectionRecord("daily_reports", "日报", "/daily-reports", "curate", "viewer")
+      ]
+    });
+    await flushPromises();
+
+    expect(wrapper.findAll(".nav-item").map((item) => item.text())).toEqual(["数据源管理", "日报"]);
   });
 
   it("keeps the create-workspace entry as first-screen guidance when the user has no workspace", async () => {

@@ -18,6 +18,12 @@ const authApi = vi.hoisted(() => ({
   fetchMe: vi.fn()
 }));
 
+const workspacesApi = vi.hoisted(() => ({
+  fetchWorkspaces: vi.fn(),
+  fetchWorkspaceSections: vi.fn(),
+  createWorkspace: vi.fn()
+}));
+
 vi.mock("../api/setup", () => ({
   fetchSetupStatus: setupApi.fetchSetupStatus
 }));
@@ -29,6 +35,8 @@ vi.mock("../api/meta", () => ({
 vi.mock("../api/auth", () => ({
   fetchMe: authApi.fetchMe
 }));
+
+vi.mock("../api/workspaces", () => workspacesApi);
 
 function runtimeRecord(overrides: Partial<RuntimeRecord> = {}): RuntimeRecord {
   return {
@@ -69,6 +77,18 @@ function sessionUser(overrides: Partial<SessionUser> = {}): SessionUser {
   };
 }
 
+function workspaceRecord(role: string) {
+  return {
+    code: "planning_intel",
+    name: "规划部情报工作台",
+    description: "",
+    workspace_type: "intelligence_workspace",
+    default_domain_code: "ai",
+    enabled: true,
+    current_user_workspace_role: role
+  };
+}
+
 async function navigateTo(path: string) {
   setActivePinia(createPinia());
   const router = createInfoWatchtowerRouter(createMemoryHistory());
@@ -83,6 +103,8 @@ describe("router guards", () => {
     setupApi.fetchSetupStatus.mockResolvedValue({ needs_setup: false });
     metaApi.fetchRuntime.mockResolvedValue(runtimeRecord());
     authApi.fetchMe.mockRejectedValue(new Error("unauthenticated"));
+    workspacesApi.fetchWorkspaces.mockResolvedValue([workspaceRecord("member")]);
+    workspacesApi.fetchWorkspaceSections.mockResolvedValue([]);
   });
 
   it("redirects protected routes to setup while first-run setup is required", async () => {
@@ -140,5 +162,55 @@ describe("router guards", () => {
     const router = await navigateTo("/dashboard");
 
     expect(router.currentRoute.value.path).toBe("/account");
+  });
+
+  it("lands workspace viewers on the daily reports page after login", async () => {
+    // 受邀 viewer（游客）登录：默认落地日报阅读页，而不是管理员的 dashboard。
+    authApi.fetchMe.mockResolvedValue({ user: sessionUser({ roles: ["viewer"] }) });
+    workspacesApi.fetchWorkspaces.mockResolvedValue([workspaceRecord("viewer")]);
+
+    const router = await navigateTo("/login");
+
+    expect(router.currentRoute.value.path).toBe("/daily-reports");
+  });
+
+  it("redirects workspace viewers from management routes to daily reports", async () => {
+    authApi.fetchMe.mockResolvedValue({ user: sessionUser({ roles: ["viewer"] }) });
+    workspacesApi.fetchWorkspaces.mockResolvedValue([workspaceRecord("viewer")]);
+
+    for (const managementPath of ["/dashboard", "/sources", "/news", "/exports", "/users", "/audit-logs"]) {
+      const router = await navigateTo(managementPath);
+      expect(router.currentRoute.value.path).toBe("/daily-reports");
+    }
+  });
+
+  it("keeps viewer-readable routes accessible for workspace viewers", async () => {
+    authApi.fetchMe.mockResolvedValue({ user: sessionUser({ roles: ["viewer"] }) });
+    workspacesApi.fetchWorkspaces.mockResolvedValue([workspaceRecord("viewer")]);
+
+    for (const readablePath of ["/weekly-reports", "/historical-reports", "/entity-milestones", "/account"]) {
+      const router = await navigateTo(readablePath);
+      expect(router.currentRoute.value.path).toBe(readablePath);
+    }
+  });
+
+  it("keeps workspace members on management routes", async () => {
+    authApi.fetchMe.mockResolvedValue({ user: sessionUser({ roles: ["viewer"] }) });
+    workspacesApi.fetchWorkspaces.mockResolvedValue([workspaceRecord("member")]);
+
+    const router = await navigateTo("/sources");
+
+    expect(router.currentRoute.value.path).toBe("/sources");
+  });
+
+  it("never redirects global admins even with a viewer membership", async () => {
+    authApi.fetchMe.mockResolvedValue({ user: sessionUser({ roles: ["super_admin"] }) });
+    workspacesApi.fetchWorkspaces.mockResolvedValue([workspaceRecord("viewer")]);
+
+    const router = await navigateTo("/sources");
+
+    expect(router.currentRoute.value.path).toBe("/sources");
+    // 全局管理员不触发工作台角色侦查，导航不被 viewer 规则拦截。
+    expect(workspacesApi.fetchWorkspaces).not.toHaveBeenCalled();
   });
 });

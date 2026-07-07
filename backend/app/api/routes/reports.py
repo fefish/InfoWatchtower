@@ -8,7 +8,6 @@ from app.api.routes.auth import assert_workspace_member, get_current_user, requi
 from app.auth.service import write_audit
 from app.collaboration.notifications import (
     record_comment_activity,
-    record_daily_report_publish_activity,
     record_dedupe_group_adoption_changed_activity,
     record_rating_activity,
     record_reaction_activity,
@@ -32,6 +31,8 @@ from app.recommendations.service import (
 from app.recommendations.service import (
     PublishedDailyReportError as GenerationPublishedDailyReportError,
 )
+from app.reports.publish import publish_daily_report as publish_daily_report_service
+from app.reports.publish import rebuild_daily_report_renditions
 from app.reports.weekly import (
     InvalidWeekKeyError,
     PublishedWeeklyReportError,
@@ -46,13 +47,14 @@ from app.schemas.reports import (
     CommentRead,
     DailyReportBulkAdoptCreate,
     DailyReportBulkAdoptRead,
-    DailyReportBulkRejectCreate,
     DailyReportBulkAdoptSkippedItem,
+    DailyReportBulkRejectCreate,
     DailyReportGenerationRerunCreate,
     DailyReportGenerationRerunRead,
     DailyReportItemRead,
     DailyReportItemUpdate,
     DailyReportRead,
+    DailyReportUpdate,
     GeneratedNewsRead,
     RatingCreate,
     RatingRead,
@@ -106,19 +108,56 @@ def publish_daily_report(
 ) -> DailyReportRead:
     report = _load_daily_report(session, report_id)
     assert_workspace_member(session, current_user, report.workspace_code, min_role="member")
-    was_published = report.status == "published"
-    report.status = "published"
-    report.published_at = utc_now()
-    write_audit(
+    # 发布走共享服务：置状态 + 里程碑候选沉淀 + 审计 + renditions 投影。
+    # 每日流水线自动发布（actor=system）复用同一条链路（app/reports/publish.py）。
+    publish_daily_report_service(session, report, actor=current_user)
+    session.commit()
+    return _daily_report_to_read(_load_daily_report(session, report_id))
+
+
+@router.patch("/daily-reports/{report_id}", response_model=DailyReportRead)
+def update_daily_report(
+    report_id: str,
+    payload: DailyReportUpdate,
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> DailyReportRead:
+    """修订日报标题/摘要。draft 允许 member+；published 收紧为 admin+ 的发布后修订。
+
+    发布后修订只放开报告层字段：写 post_publish_revision 编辑审计并重投影
+    renditions，raw/generated_news 与公司 SQL 出口不受影响。
+    """
+    report = _load_daily_report(session, report_id)
+    published = report.status == "published"
+    assert_workspace_member(
         session,
         current_user,
-        "daily_report.publish",
-        "daily_report",
-        report.id,
-        {"day_key": report.day_key, "workspace_code": report.workspace_code},
+        report.workspace_code,
+        min_role="admin" if published else "member",
     )
-    if not was_published and _workspace_feedback_policy(session, report.workspace_code).get("notify_on_publish"):
-        record_daily_report_publish_activity(session, actor=current_user, report=report)
+    before = {"title": report.title, "summary": report.summary}
+    if payload.title is not None:
+        report.title = payload.title.strip()
+    if payload.summary is not None:
+        report.summary = payload.summary.strip()
+    after = {"title": report.title, "summary": report.summary}
+    if before == after:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No daily report fields provided",
+        )
+    session.add(
+        EditorialAction(
+            user=current_user,
+            object_type="daily_report",
+            object_id=report.id,
+            action_type="post_publish_revision" if published else "edit",
+            before_json=before,
+            after_json=after,
+        ),
+    )
+    if published:
+        rebuild_daily_report_renditions(session, report)
     session.commit()
     return _daily_report_to_read(_load_daily_report(session, report_id))
 
@@ -558,8 +597,21 @@ def update_daily_report_item(
     current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> DailyReportItemRead:
+    """编辑日报条目（报告层字段）。
+
+    发布后修订底线：published 日报不可删除、raw/generated_news 不可动，但报告层的
+    采信状态/头条/排序/editor 覆盖字段允许 workspace admin+ 继续修订——每次写
+    post_publish_revision 编辑审计，并自动重投影 renditions（公司 SQL 导出读当前
+    采信态，契约不变）。draft 仍是 member+ 的常规编辑。
+    """
     item = _load_daily_report_item(session, item_id)
-    assert_workspace_member(session, current_user, item.daily_report.workspace_code, min_role="member")
+    published = item.daily_report.status == "published"
+    assert_workspace_member(
+        session,
+        current_user,
+        item.daily_report.workspace_code,
+        min_role="admin" if published else "member",
+    )
     before = _item_editor_snapshot(item)
     if payload.adoption_status is not None:
         item.adoption_status = payload.adoption_status
@@ -583,11 +635,13 @@ def update_daily_report_item(
             user=current_user,
             object_type="daily_report_item",
             object_id=item.id,
-            action_type="edit",
+            action_type="post_publish_revision" if published else "edit",
             before_json=before,
             after_json=_item_editor_snapshot(item),
         ),
     )
+    if published:
+        rebuild_daily_report_renditions(session, item.daily_report)
     session.commit()
     return _daily_report_item_to_read(_load_daily_report_item(session, item.id))
 
@@ -1091,6 +1145,7 @@ def _comment_to_read(comment: Comment) -> CommentRead:
 def _item_editor_snapshot(item: DailyReportItem) -> dict:
     return {
         "adoption_status": item.adoption_status,
+        "is_headline": bool(item.is_headline),
         "sort_order": item.sort_order,
         "editor_title": item.editor_title,
         "editor_summary": item.editor_summary,

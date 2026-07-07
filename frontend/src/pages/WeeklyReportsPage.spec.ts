@@ -384,6 +384,40 @@ describe("WeeklyReportsPage", () => {
     expect(wrapper.text()).toContain("已登记实体事件：OpenAI · 周报条目");
   });
 
+  it("hides weekly editorial controls for workspace viewers while keeping reading intact", async () => {
+    const wrapper = mountPage({ workspaceRole: "viewer" });
+    await flushPromises();
+
+    // viewer 无「生成周报草稿」按钮与草稿参数卡片。
+    const heroButtons = wrapper.findAll(".module-hero .icon-button").map((button) => button.text());
+    expect(heroButtons.some((text) => text.includes("生成周报草稿"))).toBe(false);
+    expect(heroButtons.some((text) => text.includes("刷新"))).toBe(true);
+    expect(wrapper.find(".run-command").exists()).toBe(false);
+    // draft 状态下 member 可见的「发布周报」对 viewer 隐藏。
+    expect(wrapper.findAll(".weekly-detail .icon-button")).toHaveLength(0);
+
+    // 条目行：采信/候选/剔除/排序/编辑整组隐藏，关注（阅读反馈）与正文保留。
+    const actionTexts = wrapper.findAll(".weekly-brief-actions .mini-action").map((button) => button.text());
+    expect(actionTexts.some((text) => text.includes("采信"))).toBe(false);
+    expect(actionTexts.some((text) => text.includes("候选"))).toBe(false);
+    expect(actionTexts.some((text) => text.includes("剔除"))).toBe(false);
+    expect(actionTexts.some((text) => text.includes("编辑"))).toBe(false);
+    expect(actionTexts.some((text) => text.includes("关注"))).toBe(true);
+    expect(wrapper.find(".weekly-brief-main h3").text()).toBe("周报条目");
+  });
+
+  it("keeps weekly editorial controls for workspace members", async () => {
+    const wrapper = mountPage({ workspaceRole: "member" });
+    await flushPromises();
+
+    const heroButtons = wrapper.findAll(".module-hero .icon-button").map((button) => button.text());
+    expect(heroButtons.some((text) => text.includes("生成周报草稿"))).toBe(true);
+    expect(wrapper.find(".run-command").exists()).toBe(true);
+    const actionTexts = wrapper.findAll(".weekly-brief-actions .mini-action").map((button) => button.text());
+    expect(actionTexts.some((text) => text.includes("采信"))).toBe(true);
+    expect(actionTexts.some((text) => text.includes("编辑"))).toBe(true);
+  });
+
   it("loads and toggles weekly report item watcher state", async () => {
     const wrapper = mountPage();
     await flushPromises();

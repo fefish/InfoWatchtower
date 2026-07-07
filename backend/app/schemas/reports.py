@@ -49,6 +49,13 @@ class DailyReportRead(BaseModel):
     items: list[DailyReportItemRead] = Field(default_factory=list)
 
 
+class DailyReportUpdate(BaseModel):
+    """日报报告层修订：仅标题/摘要。published 后由 admin+ 走发布后修订链路。"""
+
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    summary: str | None = None
+
+
 class DailyReportItemUpdate(BaseModel):
     adoption_status: int | None = Field(default=None, ge=0, le=2)
     is_headline: bool | None = None
