@@ -47,7 +47,12 @@
   空搜索框聚焦时展示按用户和工作台隔离的本地最近打开结果。
 - 通知铃铛已接入真实未读数 API，点击进入 `/notifications`。
 - 顶部用户胶囊已改为 `/account` 真实账号入口。
-- `frontend/src/layouts/AppShell.spec.ts` 已覆盖真实搜索结果跳转、搜索结果类型分组、键盘选择、本地最近打开结果、真实通知入口、账号入口和禁采集部署隐藏采集导航。
+- 工作台切换器底部已有「发现工作台」入口（独立组件
+  `frontend/src/components/WorkspaceDiscovery.vue`，AppShell 只挂一行）：抽屉列出
+  `visibility=internal_public` 的可订阅工作台（名称/描述/成员数/已加入标识），
+  支持自助订阅（viewer）与退订；角色高于 viewer 显示「由管理员管理」；游客会话
+  隐藏订阅按钮并提示注册后可订阅。
+- `frontend/src/layouts/AppShell.spec.ts` 已覆盖真实搜索结果跳转、搜索结果类型分组、键盘选择、本地最近打开结果、真实通知入口、账号入口和禁采集部署隐藏采集导航；发现抽屉行为由 `frontend/src/components/WorkspaceDiscovery.spec.ts` 看护。
 
 ### 2.3 未做 / 禁显
 
@@ -87,6 +92,7 @@
 | `/tasks` | 部分 | 跨对象联动体验、评论和更多归档对象解释关系 |
 | `/sync` | 部分 | 端到端实机证据、生产告警投递/runbook、更多对象 manual_merge |
 | `/exports` | 部分 | 真实内网平台生产联调证据 |
+| `/workspace-settings` | 部分 | visibility 页面入口、E2E |
 | `/users` | 部分 | 真实 provider/内网门户验收 |
 | `/audit-logs` | 部分 | action taxonomy、告警/运行证据联动 |
 | `/login` | 部分 | 真实 provider 验收 |
@@ -659,6 +665,41 @@
 - `frontend/src/pages/ExportsPage.spec.ts` 覆盖导出任务锚点、trace 条目锚点、SQL 片段、字段来源、字段差异预览、preflight 摘要、preflight 失败阻断和批量 manifest。
 - 导入回执必须走真实 API，能展示历史回执、登记新回执，并把失败语句记录到导出任务；callback 无 token 必须失败，合法 service token 可写入回执。
 
+## 19.5 工作台配置 `/workspace-settings`
+
+### 19.5.1 目标态
+
+当前工作台的配置中心：admin/owner 在工作台内完成基本信息、导航分区、标签策略、
+报告策略、成员和报告格式的运营配置，不再依赖全局管理员或分散入口。
+
+### 19.5.2 已做
+
+- 分区注册：`workspace_settings` 是 system 分组核心分区（`config_json.min_role=admin`，
+  不可停用），路由 `/workspace-settings`；AppShell 按有效角色过滤后仅 admin/owner
+  （含全局 super_admin/editor_admin）可见，无权限访问渲染拒绝态说明。
+- 基本信息：名称/描述/默认板块编辑（`PATCH /api/workspaces/{code}`）。
+- 导航分区：`GET /api/workspaces/{code}/sections/manage` 列出分区，
+  `PATCH /api/workspaces/{code}/sections/{section_key}` 启停可选分区，核心分区锁定。
+- 标签策略：一级/二级/降级标签完整编辑器（与原 `/sources` 侧策略面板同一 API 口径）。
+- 报告策略：`report_policy.auto_publish_daily` 自动发布开关
+  （`GET/PATCH /api/workspaces/{code}/report-policy`）。
+- 成员与角色：成员列表、添加/移除、角色调整（复用 members API 及 owner 守护规则）。
+- 报告格式：自定义 report format 启停与新建（复用 `/api/report-formats`）。
+
+### 19.5.3 未做
+
+- viewer 反馈策略编辑仍在 `/users` 策略视图，不在本页。
+- 工作台 visibility 切换（`PATCH /api/workspaces/{code}/visibility`）暂无页面入口，
+  当前只有 API。
+
+### 19.5.4 测试看护
+
+- `frontend/src/pages/WorkspaceSettingsPage.spec.ts` 覆盖五块设置卡的 admin 渲染、
+  member/viewer 隐藏、基本信息保存、标签策略保存与失败错误态、自动发布开关、
+  报告格式启停/新建、可选分区启停与核心分区锁定、成员角色调整。
+- 后端 `workspace_settings` 分区播种、min_role=admin、不可停用和 sections manage
+  权限门由 `backend/tests/test_workspaces_api.py` 看护。
+
 ## 20. 用户权限 `/users`
 
 ### 20.1 目标态
@@ -762,8 +803,11 @@
   token/claims/membership 失败等固定错误文案。
 - session、登录限流、must_change_password 已接入；must_change_password 用户登录后直接进入
   `/account`。
+- 游客登录入口已接入：`GET /api/meta/runtime.auth_guest_enabled=true` 时登录页显示
+  「以游客身份浏览」按钮（`POST /api/auth/guest-login`），游客会话顶栏身份显示「游客」，
+  只读浏览 internal_public 工作台的已发布内容。
 - `frontend/src/pages/LoginPage.spec.ts` 已覆盖 public password、OIDC、intranet header 三种入口、
-  redirect query 和 OIDC callback 错误提示。
+  redirect query、OIDC callback 错误提示，以及游客入口的条件渲染/登录跳转/失败文案。
 
 ### 22.3 未做
 

@@ -71,6 +71,49 @@
     "password_reset_tokens": "Hashed reset tokens only; plaintext token is never stored.",
     "login_attempts": "Username + IP success/failure events for local rate limiting and audit support."
   },
+  "user_groups": {
+    "purpose": "Operational grouping of users. A group is NOT a third permission layer: it grants no capability by itself; permissions stay with global roles and workspace memberships.",
+    "tables": {
+      "user_groups": "code/name/description",
+      "user_group_members": "group_id/user_id, unique per group"
+    },
+    "endpoints": [
+      "GET /api/user-groups",
+      "POST /api/user-groups",
+      "GET /api/user-groups/{group_code}",
+      "PATCH /api/user-groups/{group_code}",
+      "DELETE /api/user-groups/{group_code}",
+      "POST /api/user-groups/{group_code}/members",
+      "DELETE /api/user-groups/{group_code}/members/{user_id}"
+    ],
+    "permission": "super_admin or editor_admin for group CRUD and group membership; bulk workspace enrollment additionally requires workspace admin on the target workspace",
+    "uses": [
+      "Bulk workspace enrollment: POST /api/workspaces/{workspace_code}/members/bulk expands group_code into per-user memberships idempotently (rules in workspace_model.json membership_management).",
+      "Task collaboration organization: assignment pickers group workspace members; assignment semantics live in strategic_loop.json task_assignment_v1."
+    ],
+    "audit_actions": [
+      "user_group.create",
+      "user_group.update",
+      "user_group.delete",
+      "user_group.member.add",
+      "user_group.member.remove",
+      "workspace.member.bulk_upsert"
+    ]
+  },
+  "guest_access": {
+    "env_key": "AUTH_GUEST_ENABLED",
+    "default": false,
+    "endpoint": "POST /api/auth/guest-login (CSRF-exempt like /api/auth/login: the caller has no session or CSRF cookie yet)",
+    "meta_field": "GET /api/meta/runtime exposes auth_guest_enabled so the login page can render the guest entry",
+    "scope": "Overlay switch on top of AUTH_MODE (not an AUTH_MODE value). Startup fail-fast restricts it to DEPLOY_MODE standalone/cloud; intranet gateways and extranet machine feeds must never carry anonymous sessions.",
+    "semantics": [
+      "Guest is one shared read-only local account: external_provider=guest, external_id=guest, global role viewer, no password (cannot use password login or change-password flows).",
+      "Guest sessions hold no workspace memberships. They browse enabled workspaces with visibility=internal_public through an implicit viewer perspective (workspace_model.json discovery_and_subscription); private workspaces stay invisible.",
+      "Every unsafe-method request from a guest session is rejected 403 by one central gate in get_current_user (only /api/auth/logout passes), with a register-first hint; reactions/comments/subscriptions never need per-endpoint guest checks.",
+      "Turning AUTH_GUEST_ENABLED off invalidates existing guest sessions immediately (treated as unauthenticated).",
+      "Guest logins are audited as auth.guest_login."
+    ]
+  },
   "password_flows": {
     "invite_accept": "Anonymous users can accept a pending invite code, create a local password account, receive the configured global role and explicit workspace memberships, and get a session cookie.",
     "change_password": "Only users with external_provider=local can change password with current_password. OIDC/intranet_header and other external identities return Password is managed externally; frontend /account must hide local password fields for those identities. must_change_password users may only call /api/auth/me, /api/auth/logout and /api/auth/password/change until complete.",
@@ -241,6 +284,7 @@
     "display_name_snapshot"
   ],
   "identity_audit_actions": [
+    "auth.guest_login",
     "invite.accept",
     "invite.create",
     "invite.revoke",
@@ -248,13 +292,22 @@
     "password.change",
     "password.forgot",
     "password.reset",
+    "user_group.create",
+    "user_group.update",
+    "user_group.delete",
+    "user_group.member.add",
+    "user_group.member.remove",
     "workspace.auth_membership_mapping.update",
     "identity.permission_rollback",
     "users.patch",
     "users.roles.update",
     "workspace.feedback_policy.update",
+    "workspace.member.bulk_upsert",
     "workspace.member.remove",
-    "workspace.member.upsert"
+    "workspace.member.subscribe",
+    "workspace.member.unsubscribe",
+    "workspace.member.upsert",
+    "workspace.visibility.update"
   ],
   "rbac_rule": "External identity proves who the user is; InfoWatchtower roles decide what the user can do."
 }

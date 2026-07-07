@@ -112,6 +112,7 @@
       "workspace_code",
       "status",
       "assignee_user_id",
+      "assignee (me resolves to the current user; any other value is treated as a user id)",
       "assigned_to_me",
       "due=overdue",
       "due=due_today"

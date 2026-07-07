@@ -190,6 +190,32 @@ AUTH_DEFAULT_ROLE=viewer
   其余邀请端点照常 double-submit 校验。
 - 内网用户评论、点赞、评分、采信、需求和任务只写内网库，不回流外网。
 
+### 4.3 游客登录（AUTH_GUEST_ENABLED，2026-07 已实现）
+
+游客登录不是新的 `AUTH_MODE`，而是叠加在现有登录方式之上的开关
+（契约：`config/contracts/auth_modes.json` `guest_access`）：
+
+```text
+AUTH_GUEST_ENABLED=false   # 默认关；仅 DEPLOY_MODE=standalone/cloud 可开
+POST /api/auth/guest-login # 开启后签发共享只读 guest 会话（CSRF 豁免，同 /login）
+```
+
+语义（实现：`backend/app/auth/guest.py`）：
+
+- 游客是**共享的只读本地账号**：`external_provider=guest`、全局角色复用
+  `viewer`、无密码（不可走密码登录、不可改密）；首次游客登录自动建号，之后幂等复用。
+- 游客**不持有任何 workspace membership**：按隐式 viewer 视角浏览
+  `visibility=internal_public` 的工作台（发现/订阅语义见
+  `config/contracts/workspace_model.json` `discovery_and_subscription`），
+  private 工作台完全不可见；游客也不出现在成员列表和 member_count 里。
+- 游客**禁止一切写操作**（评论/点赞/订阅等）：门禁集中在 `get_current_user`
+  （唯一入口依赖），非安全方法一律 403 并提示注册后可用，仅豁免
+  `POST /api/auth/logout`，不在各端点散落 if。
+- 关闭开关后存量游客会话立即失效（按未登录处理）；`AUTH_GUEST_ENABLED` 配到
+  intranet/extranet 形态由启动自检 fail-fast 拒绝。
+- `GET /api/meta/runtime` 下发 `auth_guest_enabled`，登录页据此渲染
+  「以游客身份浏览」按钮；游客会话顶栏身份显示「游客」。
+
 ## 5. 权限模型
 
 权限分两层：
@@ -227,18 +253,34 @@ viewer（游客）的前端阅读视角（2026-07 已实现）：`workspace_sect
 非 `super_admin` 访问带 `workspace_code` 的业务 API 时必须检查
 `workspace_memberships`。
 
+### 5.1 用户组（user_groups，2026-07 已实现）
+
+用户组是运营分组，不是第三层权限：组本身不授予任何能力，权限仍由全局角色与
+workspace membership 决定。
+
+- 表：`user_groups`（code/name/description）+ `user_group_members`
+  （group_id/user_id，组内唯一）。
+- 组 CRUD 与组成员增删的权限门是 `super_admin` / `editor_admin`。
+- 用途一：按组批量把成员加入工作台
+  （`POST /api/workspaces/{code}/members/bulk {group_code, workspace_role}`，
+  幂等展开为逐用户 membership；已在台成员保持原角色不降级、停用 membership 以
+  本次角色重新启用、停用账号跳过；`workspace_role` 只允许 viewer/member/admin，
+  owner 仍走单人流程 + 危险确认；审计动作 `workspace.member.bulk_upsert`）。
+- 用途二：任务协作视图的组织单位（指派任务时按工作台成员下拉选择）。
+
 ## 6. `/users` 后端能力
 
-`/users` 页面只是前端运营入口。后端需要提供四组能力：
+`/users` 页面只是前端运营入口。后端需要提供五组能力：
 
 | 能力组 | 后端对象 | 最低操作 |
 |---|---|---|
 | 用户 | `users` | 查询、启停、展示字段更新、代重置密码 |
 | 邀请 | `user_invites` | 创建、列表、撤销、接受 |
+| 用户组 | `user_groups`、`user_group_members` | 组 CRUD、成员增删、列表带成员数、按组批量入台（幂等） |
 | 工作台成员 | `workspace_memberships` | 加入、移除、改角色；owner 移出/降权必须显式确认，最后 owner 后端禁止 |
 | 权限策略 | `roles`、`permissions`、部署 auth config、工作台部门映射 | 角色矩阵只读，viewer 反馈策略和当前工作台部门映射可编辑 |
 
-没有这四组闭环前，前端用户管理页不应展示“完整权限中心”的假象。
+没有这五组闭环前，前端用户管理页不应展示“完整权限中心”的假象。
 
 ## 7. API 面
 
@@ -246,6 +288,7 @@ viewer（游客）的前端阅读视角（2026-07 已实现）：`workspace_sect
 
 ```text
 POST /api/auth/login
+POST /api/auth/guest-login
 POST /api/auth/logout
 GET  /api/auth/me
 GET  /api/auth/oidc/start
@@ -268,11 +311,25 @@ PATCH /api/users/{id}/roles
 POST  /api/users/{id}/reset-password
 GET   /api/roles
 
+GET    /api/user-groups
+POST   /api/user-groups
+GET    /api/user-groups/{code}
+PATCH  /api/user-groups/{code}
+DELETE /api/user-groups/{code}
+POST   /api/user-groups/{code}/members
+DELETE /api/user-groups/{code}/members/{user_id}
+
 GET    /api/workspaces/{code}/members
 POST   /api/workspaces/{code}/members
+POST   /api/workspaces/{code}/members/bulk
 DELETE /api/workspaces/{code}/members/{user_id}
 GET    /api/workspaces/{code}/auth-membership-mapping
 PATCH  /api/workspaces/{code}/auth-membership-mapping
+
+GET    /api/workspaces/discover
+POST   /api/workspaces/{code}/subscribe
+DELETE /api/workspaces/{code}/subscribe
+PATCH  /api/workspaces/{code}/visibility
 
 GET  /api/identity/permission-changes
 POST /api/identity/permission-rollbacks

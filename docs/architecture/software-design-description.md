@@ -92,10 +92,19 @@ scripts/   SQL 校验、历史导入、数据回填等工具
 - 记录成功源、失败源、抓取数、创建数、更新数和失败原因。
 - 支持常规抓取和历史补采。
 
+当前 12 类 `source_type` 全部有真适配器（`config/contracts/source_fields.json`），
+其中 `wechat` 是自研微信公众号 adapter：rsshub 主路径（feed_url/rsshub_route/账号
+标识推导）+ `article_urls` 定点抓取，wx 桥 sidecar 只是可选增强。adapter 凭据只允许
+`credential_ref` 引用（`env:VAR` / `file:/path`，`backend/app/core/credentials.py`），
+非法或缺失降级匿名抓取并记 WARNING。部署级采集类型允许清单由
+`INGESTION_SOURCE_TYPES` 控制（不在清单的源计入 run 摘要 `skipped_type_disabled`）。
+
 关键文件：
 
 - `backend/app/adapters/base.py`
 - `backend/app/adapters/rss.py`
+- `backend/app/adapters/wechat.py`
+- `backend/app/core/credentials.py`
 - `backend/app/ingestion/runs.py`
 - `backend/app/api/routes/ingestion.py`
 
@@ -138,6 +147,15 @@ scripts/   SQL 校验、历史导入、数据回填等工具
 ### 5.4 日报与周报
 
 日报从推荐项生成草稿。生成稿 ready 后才允许进入标准 SQL。管理员可在日报层采信、剔除、编辑、评论和评分。
+
+发布策略是工作台配置：`workspaces.config_json.report_policy.auto_publish_daily`
+（默认 true，`GET/PATCH /api/workspaces/{code}/report-policy`）决定流水线出稿后是否
+自动发布（actor=system，审计 `daily_report.auto_publish`）；已发布日报的报告层字段
+允许 admin+ 修订，写 `post_publish_revision` 审计并重投影 renditions，raw、
+`generated_news` 和公司 SQL 契约不受影响（`docs/backend/reports-editorial-design.md`
+§7.1/§7.2）。阅读侧 `workspace_sections` 的阅读分区 min_role=viewer，viewer 只读
+发布时投影的 rendition 快照，编审操作整组隐藏
+（`docs/product/frontend-product-design.md` §5.3）。
 
 周报第一版不自动生成长文，只管理采信项版本。周报草稿从已发布日报中 `adoption_status = 2` 的条目生成，按成品新闻一级标签形成板块。
 
@@ -190,9 +208,16 @@ extranet     公网发布者：OIDC SSO，开放 GET /api/sync/feed 向内网下
 `DEPLOY_MODE` 派生能力开关（`ingestion/sync_publisher/sync_consumer/embedding/search`），
 三层同时 gate：API 按开关 403（`require_capability`）、scheduler 按开关投任务、前端
 按免登录的 `GET /api/meta/runtime` 隐藏入口。非法组合（AUTH_MODE 不在形态白名单、
-intranet 覆盖打开采集、extranet 缺 `SYNC_SERVICE_TOKENS`、缺 `AUTH_SESSION_SECRET`
-等）由 `backend/app/core/deploy_checks.py` 在 API/scheduler/worker 三个进程入口
+intranet 覆盖打开采集、extranet 缺 `SYNC_SERVICE_TOKENS`、缺 `AUTH_SESSION_SECRET`、
+`AUTH_GUEST_ENABLED` 配到 standalone/cloud 之外等）由
+`backend/app/core/deploy_checks.py` 在 API/scheduler/worker 三个进程入口
 统一 fail-fast。
+
+安装层提供三种启动预设（`deploy/install.sh --preset rss-only|full|mirror`，默认
+full；契约：`config/contracts/deployment_modes.json` `install_presets`）：`rss-only`
+写 `INGESTION_SOURCE_TYPES=rss,paper_rss` 做部署级采集类型允许清单；`mirror` 写
+`CAPABILITY_INGESTION=false` + sync consumer pull，本地不采集、只从外部部署拉取
+成果；`full` 不写允许清单。预设只生成 env 组合，不引入新的代码分支。
 
 关键文件：
 
@@ -206,6 +231,31 @@ intranet 覆盖打开采集、extranet 缺 `SYNC_SERVICE_TOKENS`、缺 `AUTH_SES
 系统支持公网账号密码登录、通用 OIDC authorization code flow + PKCE（含 id_token
 验签/强校验）和公司内网可信 header 登录（可选 `AUTH_TRUSTED_PROXY_CIDRS` 信任边界
 兜底）。内网同步遵循单向硬不变式：外网公开信号向内网同步，内网用户反馈永不回流公网。
+
+权限与协作边界的三个补充设计（2026-07 已实现）：
+
+- **游客只读浏览**：`AUTH_GUEST_ENABLED` 是叠加在 `AUTH_MODE` 之上的开关（仅
+  standalone/cloud 允许，启动自检 fail-fast）。游客共享一个只读本地账号
+  （`external_provider=guest`），不持有 workspace membership，按隐式 viewer 视角
+  浏览 `internal_public` 工作台；一切非安全方法在 `get_current_user` 单点 403
+  （仅放行 logout）。契约：`config/contracts/auth_modes.json` `guest_access`。
+- **工作台可见性与自助订阅**：`workspaces.visibility`（`private | internal_public`）
+  + `GET /api/workspaces/discover` + `POST/DELETE /api/workspaces/{code}/subscribe`
+  让登录用户自助订阅公开工作台为 viewer 成员（幂等、不降级已有角色）；private
+  工作台对非成员不泄露存在。契约：`config/contracts/workspace_model.json`
+  `discovery_and_subscription`。
+- **用户组与批量入台**：`user_groups`/`user_group_members` 是运营分组而非第三层
+  权限；super_admin/editor_admin 管组，workspace admin 通过
+  `POST /api/workspaces/{code}/members/bulk` 按组幂等批量入台（不升降级已有角色、
+  owner 仍走单人危险确认流程）。任务指派（`topic_tasks.assignee_user_id`）要求被
+  指派人是同工作台成员并触发 `task.assigned` 站内通知
+  （`config/contracts/strategic_loop.json` `task_assignment_v1`）。
+
+每个工作台的运营配置收敛到工作台配置中心（前端 `/workspace-settings`，
+`workspace_sections` 注册的 system 分区，min_role=admin）：基本信息、导航分区启停
+（`GET /api/workspaces/{code}/sections/manage` + `PATCH .../sections/{key}`）、标签
+策略、报告策略（自动发布）、成员管理和报告格式注册表；viewer 反馈策略仍在 `/users`
+策略视图编辑。
 
 机器同步主路径是 extranet feed 下发 / intranet 定时拉取（已实现，
 `backend/app/sync/`）：
@@ -327,4 +377,4 @@ CI 门禁：
 | 深度历史补采 | arXiv/OpenAlex/Semantic Scholar paper_api v1 已补；仍需要超出 RSS 当前窗口的归档页、sitemap、OpenReview 等更多论文 provider |
 | 周报正文生成 | 当前只管理采信项和规则摘要投影，自动长文生成仍是后续任务 |
 | 实机验收证据 | 真实 OIDC provider、双实例网络同步演练、prod TLS 证书签发、门户真实 iframe 联调、离线升级演练、生产备份恢复演练（见 `SESSION-HANDOFF.md` E 系清单） |
-| wx 公众号采集 | wx 桥接 sidecar + wechat adapter（C-1，外部前置是确认 wx 二进制事实） |
+| wx 公众号采集增强 | `wechat` adapter 已自研落地（rsshub 主路径 + article_urls 定点抓取，不依赖 wx 二进制）；剩余为可选增强：wx 桥接 sidecar 参考实现与自建 RSSHub/桥的实机抓取验收 |

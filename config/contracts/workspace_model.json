@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "description": "Workspace, section and domain model for supporting multiple work scopes without forking the intelligence pipeline.",
-  "core_rule": "Every workspace keeps the core intelligence modules: source management, candidate pool, daily reports, weekly reports, historical archive, entity timeline archive, quality archive, SQL exports, users and audit. Optional modules are database-registered and disabled by default.",
+  "core_rule": "Every workspace keeps the core intelligence modules: source management, candidate pool, daily reports, weekly reports, historical archive, entity timeline archive, quality archive, SQL exports, workspace settings center, users and audit. Optional modules are database-registered and disabled by default.",
   "concepts": {
     "workspace": {
       "purpose": "A user-facing work scope that still uses the same intelligence pipeline.",
@@ -79,13 +79,16 @@
     "rules": [
       "Disabled workspaces are hidden from GET /api/workspaces but data is retained.",
       "planning_intel cannot be disabled.",
-      "Startup seed maintains only built-in planning_intel and ai_tools and must not overwrite custom workspaces."
-    ]
+      "Startup seed maintains only built-in planning_intel and ai_tools and must not overwrite custom workspaces.",
+      "workspaces.visibility: private workspaces are member-only; internal_public workspaces are listed in GET /api/workspaces/discover for logged-in users and readable by guest sessions. The startup seed only sets the initial value on creation (planning_intel=internal_public, everything else private) and never overwrites the visibility API decision."
+    ],
+    "visibility_endpoint": "PATCH /api/workspaces/{workspace_code}/visibility (workspace admin/owner; super_admin bypasses membership)"
   },
   "membership_management": {
     "endpoints": [
       "GET /api/workspaces/{workspace_code}/members",
       "POST /api/workspaces/{workspace_code}/members",
+      "POST /api/workspaces/{workspace_code}/members/bulk",
       "DELETE /api/workspaces/{workspace_code}/members/{user_id}"
     ],
     "min_role": "workspace admin or owner; super_admin bypasses membership",
@@ -101,7 +104,22 @@
       "Member removal disables the membership row instead of deleting history.",
       "The last enabled owner in a workspace cannot be removed.",
       "workspace.member.upsert and workspace.member.remove audit logs must include before/after membership snapshots so /api/identity/permission-changes can explain the diff and /api/identity/permission-rollbacks can restore the previous state.",
-      "The frontend member-management view must explain role impact and disable the remove action for the last owner."
+      "The frontend member-management view must explain role impact and disable the remove action for the last owner.",
+      "POST /api/workspaces/{workspace_code}/members/bulk expands a user_groups group_code into per-user memberships idempotently: existing enabled memberships keep their role (never downgraded), disabled memberships are re-enabled with the requested role, inactive accounts are skipped, and the requested workspace_role must be viewer/member/admin (owner requires the single-member flow with dangerous-change confirmation). The action is audited as workspace.member.bulk_upsert with added/reactivated/skipped user id lists."
+    ]
+  },
+  "discovery_and_subscription": {
+    "endpoints": [
+      "GET /api/workspaces/discover",
+      "POST /api/workspaces/{workspace_code}/subscribe",
+      "DELETE /api/workspaces/{workspace_code}/subscribe",
+      "PATCH /api/workspaces/{workspace_code}/visibility"
+    ],
+    "rules": [
+      "GET /api/workspaces/discover lists enabled internal_public workspaces for any logged-in user with name/description/member_count/joined/workspace_role; private workspaces never appear (no existence leak).",
+      "POST /api/workspaces/{code}/subscribe lets a logged-in user self-join an internal_public workspace as a viewer member, idempotently: an existing enabled membership keeps its role, a disabled membership is re-enabled as viewer. Private or unknown workspaces answer 404 with the same body. Audited as workspace.member.subscribe with before/after snapshots.",
+      "DELETE /api/workspaces/{code}/subscribe disables the caller own viewer membership idempotently (204 even when not subscribed); roles above viewer answer 400 and stay managed through the member-management endpoints (protects the last-owner rule). Audited as workspace.member.unsubscribe.",
+      "Guest sessions (AUTH_GUEST_ENABLED, see auth_modes.json guest_access) never hold memberships: they browse enabled internal_public workspaces through an implicit viewer perspective and every write, including subscribe, is rejected 403 by the central guest gate with a register-first hint."
     ]
   },
   "core_sections": [
@@ -114,7 +132,12 @@
     "historical_reports",
     "entity_milestones",
     "quality_archive",
+    "strategic_insights",
+    "requirements",
+    "topic_tasks",
+    "sync",
     "exports",
+    "workspace_settings",
     "users",
     "audit_logs"
   ],
@@ -124,8 +147,22 @@
     "collect": ["source_management", "ingestion_coverage"],
     "curate": ["candidate_pool", "daily_reports", "weekly_reports"],
     "library": ["historical_reports", "entity_milestones", "quality_archive"],
-    "collab": ["requirements", "topic_tasks"],
-    "system": ["sync", "exports", "users", "audit_logs"]
+    "collab": ["strategic_insights", "requirements", "topic_tasks"],
+    "system": ["sync", "exports", "workspace_settings", "users", "audit_logs"]
+  },
+  "section_min_role": {
+    "storage": "workspace_sections.config_json.min_role, seeded by SECTION_MIN_ROLE_SEED and resolvable per section",
+    "defaults": "Reading sections (daily_reports/weekly_reports/historical_reports/entity_milestones) are viewer; other sections default to member; workspace_settings is admin.",
+    "frontend_rule": "AppShell filters navigation by the effective workspace role (global super_admin/editor_admin count as owner); the router guard redirects viewers from management routes back to /daily-reports."
+  },
+  "section_management": {
+    "list_endpoint": "GET /api/workspaces/{workspace_code}/sections/manage (workspace admin+)",
+    "update_endpoint": "PATCH /api/workspaces/{workspace_code}/sections/{section_key} (workspace admin+)",
+    "rules": [
+      "Optional sections can be enabled/disabled per workspace from the workspace settings center (/workspace-settings); disabling any core section answers 400.",
+      "The user decision persists in workspace_sections.config_json.user_enabled so the startup seed cannot roll it back; the change is audited as workspace.section.update with before/after enabled.",
+      "workspace_settings is a system-group core section with config_json.min_role=admin: only workspace admin/owner (or global super_admin/editor_admin) see the settings center."
+    ]
   },
   "first_phase_disabled_sections": [
     "tool_catalog",
@@ -140,6 +177,7 @@
       "workspace_type",
       "default_domain_code",
       "enabled",
+      "visibility (private | internal_public)",
       "config_json.label_policy"
     ],
     "workspace_sections": [
@@ -150,7 +188,9 @@
       "route_path",
       "sort_order",
       "enabled",
-      "config_json.group (nav group: today/collect/curate/library/collab/system)"
+      "config_json.group (nav group: today/collect/curate/library/collab/system)",
+      "config_json.min_role (per-section minimum workspace role; see section_min_role)",
+      "config_json.user_enabled (admin enable/disable decision that survives startup re-seeding)"
     ],
     "workspace_memberships": [
       "workspace_id",
@@ -209,6 +249,21 @@
       "The /users policy view provides a visual editor for viewer_can_react/viewer_can_rate/viewer_can_comment/notify_on_comment/notify_on_publish and requires an explicit impact confirmation before PATCH.",
       "The /users policy view must show feedback_policy before/after diffs from GET /api/identity/permission-changes and may rollback selected changes via POST /api/identity/permission-rollbacks.",
       "The frontend must always send viewer_can_edit=false even if a stale response contains another value."
+    ]
+  },
+  "report_policy": {
+    "endpoint_read": "GET /api/workspaces/{workspace_code}/report-policy (workspace viewer+)",
+    "endpoint_update": "PATCH /api/workspaces/{workspace_code}/report-policy (workspace admin+ or super_admin)",
+    "stored_at": "workspaces.config_json.report_policy (same level as label_policy and feedback_policy)",
+    "default": {
+      "auto_publish_daily": true
+    },
+    "rules": [
+      "When auto_publish_daily is true, the daily pipeline publishes the generated report automatically with actor=system and audit action daily_report.auto_publish (manual publish stays daily_report.publish); the pipeline response carries auto_published.",
+      "A request-level auto_publish_daily parameter on POST /api/pipeline/daily-runs may override the workspace policy (null follows the policy).",
+      "Auto publish does not bypass publish guards: fallback drafts stay fallback_needs_review and company SQL export gating is unchanged.",
+      "Changing report_policy writes audit_logs with action workspace.report_policy.update.",
+      "The policy is edited from the workspace settings center (/workspace-settings); post-publish revision semantics live in docs/backend/reports-editorial-design.md section 7.2."
     ]
   },
   "content_policy_resolution": {

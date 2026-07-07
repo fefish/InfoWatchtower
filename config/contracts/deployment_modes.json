@@ -132,6 +132,7 @@
     "AUTH_MODE not in modes[DEPLOY_MODE].allowed_auth_modes (full per-mode whitelist; intranet therefore requires intranet_header, and public-facing cloud/extranet reject intranet_header header-forgery logins)",
     "AUTH_SESSION_SECRET empty and AUTH_SESSION_SECRETS rotation list empty (all auth modes sign session cookies; either variable non-empty passes; validated at API, scheduler and worker startup)",
     "AUTH_TRUSTED_PROXY_CIDRS non-empty but contains an invalid CIDR (fail-closed)",
+    "AUTH_GUEST_ENABLED=true with DEPLOY_MODE not in [standalone, cloud] (guest sessions conflict with the intranet gateway identity boundary and the extranet machine-feed posture; see auth_modes.json guest_access)",
     "DEPLOY_MODE=intranet and CAPABILITY_INGESTION=true",
     "DEPLOY_MODE=extranet and SYNC_SERVICE_TOKENS empty",
     "AUTH_MODE=oidc and OIDC_CLIENT_ID empty",
@@ -179,6 +180,7 @@
     "OIDC_CLAIM_EMAIL",
     "AUTH_DEFAULT_WORKSPACE_CODES",
     "AUTH_DEPARTMENT_WORKSPACE_MAP",
+    "AUTH_GUEST_ENABLED",
     "WX_BRIDGE_URL",
     "WX_BRIDGE_TOKEN"
   ],

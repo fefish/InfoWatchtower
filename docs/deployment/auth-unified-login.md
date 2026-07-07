@@ -178,6 +178,34 @@ owner  -> 工作台所有者
 不带 `workspace_code` 的全局列表（例如全局 ingestion/recommendation/export 列表）仍只允许
 `super_admin`。后续新增业务路由必须复用同一 helper，不要散落手写判断。
 
+### 5.3 工作台可见性与自助订阅（2026-07 已实现）
+
+`workspaces.visibility`（`private` | `internal_public`，种子只在建台赋初值：
+`planning_intel=internal_public`，其余 private，之后由
+`PATCH /api/workspaces/{code}/visibility`（workspace admin/owner）管理）：
+
+- `GET /api/workspaces/discover`：登录用户可见的 internal_public 工作台列表
+  （名称/描述/成员数/是否已加入）；private 永不出现，不泄露存在性。
+- `POST /api/workspaces/{code}/subscribe`：自助订阅成 viewer member，幂等；
+  已有更高角色不降级；private/不存在一律 404。
+- `DELETE /api/workspaces/{code}/subscribe`：退订自己的 viewer membership，幂等；
+  角色高于 viewer 返回 400，仍由成员管理端点维护（保护最后 owner 规则）。
+
+### 5.4 游客登录（AUTH_GUEST_ENABLED，2026-07 已实现）
+
+`AUTH_GUEST_ENABLED=true`（默认 false，启动自检限 `DEPLOY_MODE=standalone/cloud`）
+时，登录页出现「以游客身份浏览」按钮（`GET /api/meta/runtime.auth_guest_enabled`
+下发），`POST /api/auth/guest-login`（CSRF 豁免，同 `/api/auth/login`）签发共享只读
+guest 会话：
+
+- 共享 guest 本地账号（`external_provider=guest`，全局角色 viewer，无密码不可改密）；
+- 不建任何 workspace membership，按隐式 viewer 视角浏览 internal_public 工作台
+  的已发布内容；
+- 一切写操作（评论/点赞/订阅等）由 `get_current_user` 集中门禁 403 并提示注册后可用
+  （仅放行 logout）；关闭开关后存量游客会话立即失效。
+- 契约与语义细节：`config/contracts/auth_modes.json` `guest_access`、
+  `docs/backend/identity-access-design.md` §4.3。
+
 ## 6. 公司内网部署
 
 如果公司内部已有门户/网关可以拿到工号和姓名，最轻接入方式是 `intranet_header`：
