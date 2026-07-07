@@ -217,6 +217,12 @@ workspace role   工作台内能力
 | `member` | 采编协作、评论、评分、日报/周报编辑 |
 | `viewer` | 只读；反馈能力由 `feedback_policy` 决定 |
 
+viewer（游客）的前端阅读视角（2026-07 已实现）：`workspace_sections` 的日报/周报/
+历史报告库/实体大事记四个阅读分区 min_role=viewer，其余管理分区默认 member 起；
+导航按当前工作台有效角色数据驱动过滤，viewer 访问管理路由重定向回 `/daily-reports`，
+日报/周报页编审操作整组隐藏。产品旅程见
+`docs/product/frontend-product-design.md` §5.3。
+
 `super_admin` 可以绕过工作台 membership，但业务页面仍应显示当前工作台上下文。
 非 `super_admin` 访问带 `workspace_code` 的业务 API 时必须检查
 `workspace_memberships`。

@@ -75,6 +75,14 @@ Docker 本地启动：
 make up
 ```
 
+一键安装（生成 env + 起容器）支持三种启动预设：
+
+```bash
+cd deploy && ./install.sh --local [--preset rss-only|full|mirror]
+# rss-only 只抓 RSS 类源；mirror 本地不采集、只拉外部部署成果；默认 full。
+# 说明见 docs/deployment/deployment-ops.md §1.2。
+```
+
 首次构建或改依赖：
 
 ```bash

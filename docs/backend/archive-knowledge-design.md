@@ -102,8 +102,8 @@ inventory
 
 | 页面 | API | 语义 |
 |---|---|---|
-| `/historical-reports` | `/api/historical-reports*`、`/api/legacy-import/*` | 历史报告和导入验收 |
-| `/entity-milestones` | `/api/tracked-entities`、`/api/entity-milestones*`、`PATCH /api/entity-milestones/{id}` | 实体和事件时间线、当前事件治理 |
+| `/historical-reports` | `/api/report-archive*`、`/api/historical-reports*`、`/api/legacy-import/*` | 统一报告归档（已发布日报/周报 + legacy 导入合并，按月/关键词回溯，含条目数/采信率/头条/来源 top3 统计）和导入验收 |
+| `/entity-milestones` | `/api/tracked-entities*`（含 POST/PATCH/DELETE 与 `GET /{id}/timeline`）、`/api/entity-milestones*`（含 POST 手工补录）、`PATCH /api/entity-milestones/{id}`、`GET /api/entity-timeline/summary` | 实体目录管理、按月分组时间线、候选确认/驳回与当前事件治理、工作台级大事记总览统计 |
 | `/daily-reports`、`/weekly-reports` | `POST /api/daily-report-items/{id}/entity-milestones`、`POST /api/weekly-report-items/{id}/entity-milestones` | 从当前采信条目登记实体事件 |
 | `/quality-archive` | `/api/quality-archive/*`、`/api/historical-feedback-items`、`/api/historical-job-runs` | 历史反馈和旧任务 |
 
@@ -144,6 +144,39 @@ published daily/weekly item
 - `POST /api/weekly-report-items/{id}/entity-milestones`
 - `PATCH /api/entity-milestones/{id}`
 
+当前 v2（2026-07）新增发布即沉淀与实体目录管理：
+
+- 发布日报（`POST /api/daily-reports/{id}/publish`）时由
+  `app/archive/milestones.py::extract_candidate_milestones_for_daily_report` 自动扫描
+  `adoption_status = 2` 的已采信条目，标题/摘要命中 `tracked_entities` 名称或
+  `aliases_json` 别名即生成 `curation_status = candidate`、`selected_for_timeline = false`
+  的候选里程碑；按 (tracked_entity, news_item) 幂等（`legacy_table =
+  published_report_candidate_milestones`，`legacy_id = entity_id:news_item_id`），
+  人工已登记同一实体+素材时不再重复生成；可追溯 `metadata_json.current_refs`
+  （news/raw/generated_news/日报条目）。抽取只写归档层，不改报告、推荐、公司 SQL。
+- `POST /api/tracked-entities`（admin，工作台内名称大小写不敏感唯一）、
+  `PATCH /api/tracked-entities/{id}`、`DELETE /api/tracked-entities/{id}`
+  （仅 `legacy_system=current`；有里程碑的实体不可删除）。
+- `GET /api/tracked-entities/{id}/timeline`（viewer 可读）：按事件月份倒序分组返回时间线，
+  无时间事件归入「未标注时间」组，附候选/已确认计数。
+- `POST /api/entity-milestones`（admin 手工补录）：`legacy_table = manual_entity_milestones`，
+  创建即 `confirmed` 并进入时间线，可选 `news_item_id` 保留素材追溯。
+- 候选确认/驳回复用 `PATCH /api/entity-milestones/{id}`（`curation_status`
+  取值增加 `candidate`；确认写 `confirmed` 并展示，驳回写 `revoked` 并移出时间线）。
+- 统一报告归档 `GET /api/report-archive` 与 `GET /api/report-archive/summary`
+  （viewer 可读）：合并已发布日报/周报与 legacy `historical_reports`，
+  支持月份/关键词/类型/来源过滤，每条附条目数、采信数、头条数、来源 top3；
+  legacy 条目的条目数以引用数近似。只读，不产生写操作。
+- 大事记总览 `GET /api/entity-timeline/summary?workspace_code=...`（viewer 可读）：
+  工作台级实体/事件计数、精选事件数、按实体类型/事件类型/重要度分布、最早/最晚
+  事件时间与未解析引用统计，供 `/entity-milestones` 页头总览。只读。
+
+用户逻辑（阅读视角）：历史报告库与实体大事记是 viewer（游客）可见的四个阅读分区
+之二（另两个是日报/周报，见 `docs/product/frontend-product-design.md` §5.3）。
+普通读者的旅程是「报告归档按月/关键词回溯 → 打开某天报告读成稿 → 从条目关注的
+实体跳转实体时间线看长期脉络」；候选里程碑由日报发布自动沉淀（上文发布即沉淀），
+读者看到的时间线只含 `confirmed` 精选事件，候选确认/驳回是 admin 的治理动作。
+
 写入规则：
 
 - `entity_name` 必填；未传 `tracked_entity_id` 时按当前工作台和实体名复用或创建
@@ -165,10 +198,13 @@ published daily/weekly item
 | 操作 | 最低权限 |
 |---|---|
 | 查看历史归档 | workspace viewer |
+| 查看统一报告归档 / 实体时间线 | workspace viewer |
 | 查看导入验收缺口 | workspace admin 或 super_admin |
 | 执行导入脚本 | 运维权限 + 数据库权限 |
-| 新增当前实体事件 | workspace member |
-| 编辑/确认/撤销当前实体事件 | workspace admin |
+| 新增当前实体事件（从报告条目登记） | workspace member |
+| 实体目录增删改（tracked_entities） | workspace admin |
+| 手工补录里程碑 | workspace admin |
+| 编辑/确认/驳回/撤销当前实体事件 | workspace admin |
 | 用实体事件创建需求来源 | workspace admin |
 | 用历史反馈创建需求来源 | workspace admin |
 

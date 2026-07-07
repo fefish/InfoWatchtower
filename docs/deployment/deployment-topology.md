@@ -31,8 +31,9 @@
 `INGESTION_SCHEDULER_ENABLED` 两个正交开关，"部署形态"没有一等抽象：
 
 1. **本地一次拉取一键部署**：`git clone` → `deploy/install.sh --local` → 配好
-   能力（含 wx 公众号等同事系统采集能力）即可用。现状：install 流程已通，
-   但 11 个 source_type 只有 4 个有真实适配器，wechat 采集零迁入。
+   能力（含 wx 公众号等同事系统采集能力）即可用。当时现状：install 流程已通，
+   但 11 个 source_type 只有 4 个有真实适配器，wechat 采集零迁入
+   （2026-07 已收口：12 类全部真适配器，含 wechat，见 §5；install 预设见 §1.1）。
 2. **云主机官方部署**：管理员采集，非管理员只读消费。现状：viewer 角色与
    membership 门已实现，缺形态定义与 TLS 收口。
 3. **内网部署**：被内网门户 iframe 嵌入，外层已有工号+部门登录态，评论等
@@ -62,6 +63,19 @@
 | 默认角色策略 | 首管即超管 | 邀请制，默认 viewer | header 自动建号（`AUTH_AUTO_PROVISION=true`），默认 viewer | OIDC/邀请建号，默认 viewer |
 | 网络 | 端口全暴露（本机） | 仅 443（TLS 收口） | backend 仅网关可达（部署强制），代理白名单兜底 | 443 + feed 端点 |
 | 升级 | `upgrade.sh`（git pull） | 同左（后续补 GHCR 镜像） | **离线包/镜像导入**：`scripts/export_offline_bundle.sh` 出包 + `scripts/upgrade_offline.sh` 导入 | `upgrade.sh` |
+
+### 1.1 启动预设（install.sh --preset，形态之上的 env 组合）
+
+`deploy/install.sh --local|--domain <d> [--preset rss-only|full|mirror]`（默认 `full`）
+在 `DEPLOY_MODE` 之上生成三种预设 env 组合（契约
+`config/contracts/deployment_modes.json` 的 `install_presets`；三预设注释块见
+`deploy/env.production.example` 顶部）：
+
+| 预设 | env 组合 | 语义 |
+|---|---|---|
+| `full` | 不写 `INGESTION_SOURCE_TYPES`（空 = 全部允许） | 全量能力，默认值 |
+| `rss-only` | `INGESTION_SOURCE_TYPES=rss,paper_rss` | 平台只抓 RSS 类信息源；run 内按允许清单过滤启用源，不在清单的源计入 run 摘要 `skipped_type_disabled`（非成功也非失败）；清单值必须是 `source_fields.json` 12 类 source_type 的子集，拼错启动拒绝 |
+| `mirror` | `CAPABILITY_INGESTION=false` + `CAPABILITY_SYNC_CONSUMER=true` + `SYNC_PULL_ENABLED=true` + `SYNC_REMOTE_BASE_URL/SYNC_REMOTE_TOKEN`（必填）+ `INGESTION_SCHEDULER_ENABLED=false` | 本地不采集，只从我们的外部部署拉取成果；是 standalone/cloud 形态叠加 consumer override 的合法组合（启动自检与 `check_prod_deploy.py` 均校验），完整样例 `deploy/env.mirror.example`。install.sh 未提供远端地址/token 时写 `REPLACE_WITH_*` 占位并提示补填后重跑，不带占位值启动 |
 
 ## 2. WP4：DEPLOY_MODE 与能力开关
 
@@ -100,6 +114,10 @@ SYNC_FAILED_INBOX_RETRY_LIMIT          # 默认 50
 EMBED_FRAME_ANCESTORS          # CSP frame-ancestors 白名单，默认 'self'
 AUTH_CSRF_ENABLED              # CSRF 强校验开关；intranet/extranet/cloud 默认 true，standalone 默认 false
 AUTH_TRUSTED_PROXY_CIDRS       # 可信反代网段（逗号分隔 CIDR）。非空时身份头/限流 XFF 只信白名单直连 peer
+AUTH_SESSION_SECRETS           # session secret 轮换列表（逗号分隔）：第一个签名、全部可验签，配置后覆盖单值
+                               # AUTH_SESSION_SECRET；换密钥把新 secret 放第一位、旧的留尾部即可不掉线
+INGESTION_SOURCE_TYPES         # 部署级采集类型允许清单（rss-only 预设用；空 = 全部允许）。run 内过滤启用源，
+                               # 不在清单的源计入 run 摘要 skipped_type_disabled；非法值启动拒绝
 OIDC_JWKS_URI                  # OIDC id_token 验签 JWKS 地址（缺省时用 issuer discovery 的 jwks_uri）
 ```
 
@@ -114,13 +132,16 @@ OIDC_JWKS_URI                  # OIDC id_token 验签 JWKS 地址（缺省时用
 - `AUTH_MODE` 不在契约 `modes[DEPLOY_MODE].allowed_auth_modes` 白名单内
   （全矩阵校验：intranet 只允许 `intranet_header`；cloud/extranet 等公网形态拒绝
   `intranet_header`，否则等于开放请求头伪造登录）。
-- `AUTH_SESSION_SECRET` 为空（所有 auth_mode 都签发签名 session cookie，缺 secret
-  必须启动失败而不是运行期每请求 500）。
+- `AUTH_SESSION_SECRET` 与 `AUTH_SESSION_SECRETS` 轮换列表同时为空（所有 auth_mode
+  都签发签名 session cookie，缺 secret 必须启动失败而不是运行期每请求 500；
+  任一非空即通过，轮换列表第一个即当前签名 secret）。
 - `AUTH_TRUSTED_PROXY_CIDRS` 非空但含非法 CIDR（fail-closed）。
 - `DEPLOY_MODE=intranet` 且 `CAPABILITY_INGESTION=true`（不允许覆盖打开）。
 - `DEPLOY_MODE=extranet` 且 `SYNC_SERVICE_TOKENS` 为空（发布者必须有机器鉴权）。
 - `capability_sync_consumer=true` 且 `SYNC_PULL_ENABLED=true` 但
   `SYNC_REMOTE_BASE_URL`/`SYNC_REMOTE_TOKEN` 缺失。
+- `INGESTION_SOURCE_TYPES` 含未知 source_type（合法值为
+  `config/contracts/source_fields.json` 的 12 类；清单拼错等于静默漏采，必须拒启）。
 - `DEPLOY_MODE` 不在四值枚举内。
 
 启动 warning（不拒启）：`AUTH_MODE=intranet_header` 但未配置
@@ -378,16 +399,38 @@ discovery 的 `jwks_uri`）时用纯标准库 RSASSA-PKCS1-v1_5 验签 RS256/384
 
 | 能力 | 进入形式 | 状态 |
 |---|---|---|
-| wx 公众号采集 | **wx 桥接 sidecar + wechat adapter**（§5.1） | C-1，规格已锁 |
+| wx 公众号采集 | **wechat 自研 adapter 已落地**（rsshub 主路径 + article_urls 定点抓取，§5.1）；wx 桥接 sidecar 降级为可选增强 | adapter 已完成（2026-07）；wx 桥（C-1）待同事确认二进制事实 |
 | 论文 API 日期窗回填 | `paper_api` arXiv v1、OpenAlex Works v1、Semantic Scholar bulk search v1 真适配器已替换 stub；更多论文 provider 后续扩展 | 已完成 v1 |
 | content_scorer/quality_gate | 纯函数移植，挂 news 归一化后可选评分阶段 | C-2 |
 | 远程增量同步协议 | 已吸收为 §3 feed 协议蓝本（不搬代码） | 本规格 |
 | RSS/RSSHub/去重/报告 | 不引入（InfoWatchtower 已有且更好） | 关闭 |
 | brief-PPT / GitHub PR 推送 | 不搬（硬编码同事内网 IP/个人仓） | 关闭 |
 
-### 5.1 wx 桥接契约（wechat adapter）
+### 5.1 wechat adapter（已落地）与 wx 桥接契约（可选增强）
 
-物理约束：wx CLI 依赖登录微信的 Windows 机器 + 本地数据库文件，**不可进容器**。
+**2026-07 更新**：第 12 类 `wechat` source_type 已由自研 `WeChatMpAdapter`
+（`backend/app/adapters/wechat.py`，契约 `config/contracts/source_fields.json`
+fetch_config_conventions.wechat 与 `adapter_pipeline.json` wechat_discovery_rule）
+落地，**不依赖同事的 wx 二进制**，两条路径：
+
+1. **rsshub 模式（主路径，账号级增量）**：`fetch_config.feed_url` 完整 RSS 地址，
+   或 `rsshub_route`（实例 base 依次取 `rsshub_base` → `rsshub_base_env` → 全局
+   `RSSHUB_BASE_URL` → 公共 rsshub.app 兜底），或仅给账号标识
+   （`account_name/account_username/wx_account`）按 `rsshub_route_template`
+   （默认 `/wechat/mp/{account}`）推导路由；RSS 解析复用 `rss.py`，不复制逻辑。
+2. **article_urls 模式（定点抓取）**：给定 mp.weixin.qq.com 文章 URL 列表直接抓
+   文章页解析（og meta/正文/发布时间/账号名，合集页自动枚举），URL 规整成稳定
+   entry_key；风控验证页显式抛错记失败，不落 raw_items。
+
+发现边界：无登录态时公众号历史目录不可直接枚举，账号级增量发现依赖自建
+RSSHub/微信转 RSS 桥（rsshub 模式）或下述 wx 桥。凭据走
+`credential_ref → auth_token_env → auth_token`。台账里 31 个「微信公众号(wx-cli)」
+metadata_only 源补配任一入口后即可启用。能力边界不变：wechat adapter 只在
+`capability_ingestion=true` 的形态可用；extranet/cloud 启用前须自评公众号非官方
+抓取的合规风险（默认建议仅 standalone）。
+
+wx 桥接 sidecar 降级为**可选增强**（提升账号级发现能力，非前置）。物理约束：
+wx CLI 依赖登录微信的 Windows 机器 + 本地数据库文件，**不可进容器**。
 融合方式是"外部桥 + 契约"：
 
 - **桥（bridge）**：跑在有微信登录态的宿主机上的小 HTTP 服务（C-1 交付一个
@@ -401,32 +444,34 @@ POST {WX_BRIDGE_URL}/fetch   Authorization: Bearer <WX_BRIDGE_TOKEN>
                    "content_html"?}]}
 ```
 
-- **adapter**：注册 `wechat` source_type 的真适配器；源配置
-  `fetch_config: {"wx_account": "...", "window_days": 7}`，桥地址与 token 用
-  实例级 env（`WX_BRIDGE_URL/WX_BRIDGE_TOKEN`）。桥返回缺 `content_html` 时
-  adapter 直接抓 `mp.weixin.qq.com` 文章页抽 `rich_media_content` 兜底
-  （移植旧正则），失败回退 digest。产出走标准 `raw_items` upsert。
-- 台账里 31 个「微信公众号(wx-cli)」metadata_only 源在 adapter 落地后由
-  导入逻辑识别为 `wechat` 类型并可启用。
-- 能力边界：wechat adapter 只在 `capability_ingestion=true` 的形态可用；
-  extranet/cloud 启用前须自评公众号非官方抓取的合规风险（默认建议仅 standalone）。
-- **未决前置**：wx 二进制的获取方式/登录态维持/是否可跑 Linux，文档缺失，
-  写 adapter 前必须先向同事确认（C-1 的外部阻塞点）。
+- **桥接入 adapter 的方式**：wechat adapter 的 config 设计不排斥桥——
+  `wx_account/account_name/account_username` 与 `window_days` 字段与桥接契约共用，
+  桥地址与 token 用实例级 env（`WX_BRIDGE_URL/WX_BRIDGE_TOKEN`）；桥落地后可在
+  **不改源配置**的前提下把主路径从 rsshub 升级为桥拉取。桥返回缺 `content_html`
+  时 adapter 直接抓 `mp.weixin.qq.com` 文章页抽正文兜底（该正则已随
+  article_urls 模式落地）。产出走标准 `raw_items` upsert。
+- **未决前置（仅针对桥）**：wx 二进制的获取方式/登录态维持/是否可跑 Linux，
+  文档缺失，写桥前必须先向同事确认（C-1 的外部阻塞点；adapter 本体已不被阻塞）。
 
-### 5.2 全部 11 类 source_type 已有真适配器 + stub 显式语义保留
+### 5.2 全部 12 类 source_type 已有真适配器 + stub 显式语义保留
 
 原 6 个 EmptyAdapter 桩（wiseflow/crawler/csv/paper_page/manual/internal）已全部由
-真适配器替换（`backend/app/adapters/` 的 wiseflow.py/crawler.py/csv_file.py/
-paper_page.py/push_based.py；实现状态表见
-`docs/backend/backend-capability-test-matrix.md` §3）。其中 `manual/internal` 是
-推入式语义：条目由 manual-import / 内部系统写入，定时抓取如实返回 0 条新增
-（成功、非失败）；`internal` 配置 `api_url` 后升级为通用 JSON API 拉取器。
-`paper_api` 由 arXiv v1、OpenAlex Works v1 和 Semantic Scholar bulk search v1 承接。
+真适配器替换，第 12 类 `wechat` 也已落地（`backend/app/adapters/` 的
+wiseflow.py/crawler.py/csv_file.py/paper_page.py/push_based.py/wechat.py；
+实现状态表见 `docs/backend/backend-capability-test-matrix.md` §3）。其中
+`manual/internal` 是推入式语义：条目由 manual-import / 内部系统写入，定时抓取
+如实返回 0 条新增（成功、非失败）；`internal` 配置 `api_url` 后升级为通用 JSON
+API 拉取器。`paper_api` 由 arXiv v1、OpenAlex Works v1 和 Semantic Scholar bulk
+search v1 承接。前端已对推入式源展示「推入式」徽标与导入预览分组语义提示
+（`backend-capability-test-matrix.md` §3.1，已完成）。
 
 run 层的 `skipped_unimplemented` 显式语义保留为安全网：任何未来注册但未实现的
 adapter 参与 run 时，该源 outcome 记 `skipped_unimplemented`（不算成功也不算失败），
 run 摘要写 `source_skipped_unimplemented`，前端明示"N 个源类型尚未实现采集"
 （`app/adapters/stubs.py` 仅供该语义的回归测试注册，禁止进默认注册表）。
+与之并列的 `skipped_type_disabled`（部署级 `INGESTION_SOURCE_TYPES` 允许清单
+过滤，rss-only 预设）语义见 §1.1 与 `adapter_pipeline.json` type_allowlist_rule，
+前端在 run 详情以「类型停用」标签与分组提示条呈现。
 
 ## 6. 采集"0 结果"语义修复（配合前端测试补齐）
 
@@ -517,7 +562,9 @@ run 摘要写 `source_skipped_unimplemented`，前端明示"N 个源类型尚未
 
 ### C 系（交编码代理，见 `docs/implementation/implementation-handoff.md` 进度节）
 
-- C-1 wx 桥 + wechat adapter（外部前置：向同事确认 wx 二进制事实）。
+- C-1 已部分完成：wechat adapter 已自研落地（rsshub 主路径 + article_urls
+  定点抓取，§5.1，不依赖 wx 二进制）；剩余 wx 桥 sidecar 为可选增强
+  （外部前置：向同事确认 wx 二进制事实）。
 - C-2 content_scorer/quality_gate 纯函数移植。
 - C-3 已完成：paper_api(arXiv/OpenAlex/Semantic Scholar) 真适配器 + §5.2 stub 显式语义；
   wiseflow/crawler/csv/paper_page/manual/internal 六类真适配器也已落地（§5.2）；

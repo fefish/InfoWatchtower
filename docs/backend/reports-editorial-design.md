@@ -195,6 +195,45 @@ recommendation_items.selected
 - 自动把 fallback 生成稿标记为 ready。
 - 自动导出公司 SQL。
 
+### 7.1 发布服务与每日自动发布（2026-07 已实现）
+
+手动发布与流水线自动发布共用一条链路（`backend/app/reports/publish.py` 的
+`publish_daily_report`，幂等）：置 `published` 状态与 `published_at` → 沉淀实体
+里程碑候选（`archive-knowledge-design.md` §6 发布即沉淀）→ 写审计 → 投影所有
+启用格式的 renditions（游客/viewer 打开日报即可读成稿，无需 member 权限触发
+regenerate）。rendition 仍只是采信条目的投影快照，不回写采信状态、
+`generated_news` 与公司 SQL。
+
+自动发布由工作台级策略控制：
+
+- 策略存放 `workspaces.config_json.report_policy.auto_publish_daily`（默认
+  `true`，与 label_policy / feedback_policy 同级），API 为
+  `GET/PATCH /api/workspaces/{code}/report-policy`（读 viewer+，改 admin+，写
+  `workspace.report_policy.update` 审计）。
+- 每日流水线（`POST /api/pipeline/daily-runs` 与 scheduler）出稿后按策略自动
+  发布：actor 为 system（审计 user 留空、不触发个人通知），audit action 固定
+  `daily_report.auto_publish`（手动发布是 `daily_report.publish`）；响应带
+  `auto_published` 标记。请求级 `auto_publish_daily` 参数可覆盖策略
+  （null=跟随工作台策略）。
+- 自动发布不改变 §7 的发布禁止项：fallback 生成稿仍是
+  `fallback_needs_review`，标准公司 SQL 导出仍拒绝，不会因为自动发布而放行。
+
+### 7.2 发布后修订（post_publish_revision，2026-07 已实现）
+
+published 日报允许**报告层**继续修订，但收紧权限并全程留痕：
+
+- `PATCH /api/daily-reports/{id}`（标题/摘要）：draft 为 member+；published 收紧
+  为 admin+，写 `action_type=post_publish_revision` 的 `editorial_actions`
+  （before/after 快照），并自动重投影 renditions。
+- `PATCH /api/daily-report-items/{id}`：published 日报的条目采信状态/头条/排序/
+  editor 覆盖字段允许 admin+ 继续修订（draft 仍是 member+ 常规编辑），同样写
+  `post_publish_revision` 审计并重投影 renditions。
+- 底线：published 日报不可删除；raw_items / generated_news 永不被修订触碰；
+  公司 SQL 契约不变——导出读**当前**采信态，gating 规则原样成立（已发布 +
+  `adoption_status=2` + `generation_status=ready` + 非 `rule_v1`），发布后把某
+  条目改为剔除即从导出集合消失，改回采信即恢复，字段与 validate_company_sql.py
+  校验一字不动。
+
 ## 8. 多版成稿关系
 
 Reports & Editorial 拥有采信事实。Report Renditions 拥有成稿投影。
@@ -259,7 +298,7 @@ PATCH /api/weekly-report-items/{id}
 | 缺口 | 判定标准 |
 |---|---|
 | 编审状态机不完整 | draft/published/locked/archived 有明确规则 |
-| 已发布后修订规则不清 | 修订写版本和审计，不静默覆盖 |
+| ~~已发布后修订规则不清~~（已收口，§7.2） | 修订写 `post_publish_revision` 审计并重投影 renditions，不静默覆盖；`content_versions` 长版本历史仍待补 |
 | 候选池批量操作仍需深化 | 批量采信到日报草稿、服务端筛选排序、批量剔除 v1 已完成；后续补 watch 和更完整 trace |
 | 周报正文生成不足 | 周报摘要段规则投影 v1 已完成；后续补 LLM 摘要模型和整篇周报长文生成 |
 | 发布通知继续深化 | 已按 `feedback_policy.notify_on_publish` 写 activity event 并通知同工作台成员；后续与归档、邮件和更多对象关注者联动 |

@@ -15,7 +15,7 @@
       },
       "allowed_auth_modes": ["local", "public_password"],
       "csrf_default": false,
-      "notes": "sync_publisher may be overridden to true via CAPABILITY_SYNC_PUBLISHER for local linkage debugging."
+      "notes": "sync_publisher may be overridden to true via CAPABILITY_SYNC_PUBLISHER for local linkage debugging. The mirror install preset (see install_presets) runs standalone/cloud with CAPABILITY_INGESTION=false + CAPABILITY_SYNC_CONSUMER=true to consume an external deployment without local ingestion."
     },
     "cloud": {
       "purpose": "Official cloud deployment: admins ingest, non-admins are read-only consumers via viewer roles.",
@@ -67,6 +67,11 @@
   "capability_flags": {
     "ingestion": {
       "override_env": "CAPABILITY_INGESTION",
+      "source_type_allowlist": {
+        "env": "INGESTION_SOURCE_TYPES",
+        "rule": "Deployment-level comma-separated source_type allowlist (rss-only preset etc.). Empty = all types allowed (full preset). When non-empty, ingestion runs skip enabled sources whose type is not listed and record them as skipped_type_disabled in the run summary (source_skipped_type_disabled counter; neither succeeded nor failed). Values must be a subset of the 12 known source types from config/contracts/source_fields.json source_types (incl. wechat); unknown values fail startup.",
+        "difference_from_scheduler_types": "INGESTION_SCHEDULER_SOURCE_TYPES only decides which types the scheduler requests; INGESTION_SOURCE_TYPES filters inside every run (manual and scheduled)."
+      },
       "gates": {
         "api": [
           "POST /api/ingestion/runs",
@@ -125,19 +130,28 @@
   "startup_failfast_rules": [
     "DEPLOY_MODE not in [standalone, cloud, intranet, extranet]",
     "AUTH_MODE not in modes[DEPLOY_MODE].allowed_auth_modes (full per-mode whitelist; intranet therefore requires intranet_header, and public-facing cloud/extranet reject intranet_header header-forgery logins)",
-    "AUTH_SESSION_SECRET empty (all auth modes sign session cookies; validated at API, scheduler and worker startup)",
+    "AUTH_SESSION_SECRET empty and AUTH_SESSION_SECRETS rotation list empty (all auth modes sign session cookies; either variable non-empty passes; validated at API, scheduler and worker startup)",
     "AUTH_TRUSTED_PROXY_CIDRS non-empty but contains an invalid CIDR (fail-closed)",
     "DEPLOY_MODE=intranet and CAPABILITY_INGESTION=true",
     "DEPLOY_MODE=extranet and SYNC_SERVICE_TOKENS empty",
     "AUTH_MODE=oidc and OIDC_CLIENT_ID empty",
     "AUTH_MODE=oidc and neither OIDC_ISSUER nor explicit OIDC_AUTHORIZATION_ENDPOINT/OIDC_TOKEN_ENDPOINT is configured",
-    "sync_consumer enabled with SYNC_PULL_ENABLED=true but SYNC_REMOTE_BASE_URL or SYNC_REMOTE_TOKEN missing"
+    "sync_consumer enabled with SYNC_PULL_ENABLED=true but SYNC_REMOTE_BASE_URL or SYNC_REMOTE_TOKEN missing",
+    "INGESTION_SOURCE_TYPES contains values outside the 12 known source types (source_fields.json source_types incl. wechat); a typo in the allowlist would silently drop coverage, so it must fail startup"
   ],
+  "install_presets": {
+    "description": "deploy/install.sh --preset generated env combinations (default full). Presets are env combinations on top of DEPLOY_MODE, not new modes; mirror is the standalone/cloud + consumer-override combination and must stay legal under startup_failfast_rules (checked by scripts/check_prod_deploy.py).",
+    "full": "Default. No INGESTION_SOURCE_TYPES allowlist written (empty = all source types allowed).",
+    "rss-only": "INGESTION_SOURCE_TYPES=rss,paper_rss. Ingestion runs skip other enabled source types as skipped_type_disabled (see capability_flags.ingestion.source_type_allowlist).",
+    "mirror": "Local site does not ingest and only pulls finished data from our external deployment: CAPABILITY_INGESTION=false + CAPABILITY_SYNC_CONSUMER=true + SYNC_PULL_ENABLED=true + SYNC_REMOTE_BASE_URL/SYNC_REMOTE_TOKEN (required, otherwise startup fails per sync_consumer rule) + INGESTION_SCHEDULER_ENABLED=false. Full template: deploy/env.mirror.example. install.sh prompts for remote base URL/token and writes REPLACE_WITH_* placeholders (then exits before compose up) when they are not provided."
+  },
   "startup_warnings": [
     "AUTH_MODE=intranet_header without AUTH_TRUSTED_PROXY_CIDRS: identity headers are trusted from any peer; the trusted gateway must be the only ingress (logged as a warning, not fail-fast, to keep existing gateway-only deployments bootable)"
   ],
   "related_env": [
     "INSTANCE_ID",
+    "INGESTION_SOURCE_TYPES",
+    "AUTH_SESSION_SECRETS",
     "SYNC_SERVICE_TOKENS",
     "SYNC_REMOTE_BASE_URL",
     "SYNC_REMOTE_TOKEN",

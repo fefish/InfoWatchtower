@@ -22,10 +22,11 @@
     "paper_api",
     "paper_page",
     "manual",
-    "internal"
+    "internal",
+    "wechat"
   ],
   "fetch_config_conventions": {
-    "description": "各 source_type 的 fetch_config 字段约定（2026-07 六类 adapter 真实现后固化）。密钥一律不写入 fetch_config 明文，用 *_env 指向环境变量，credential_ref 解析机制落地后迁移。",
+    "description": "各 source_type 的 fetch_config 字段约定（2026-07 六类 adapter 真实现后固化，2026-07 第二轮补第 12 类 wechat）。密钥一律不写入 fetch_config 明文：credential_ref（env:VAR_NAME / file:/absolute/path，backend/app/core/credentials.py）是首选凭据指针，*_env 间接引用保留兼容，解析顺序 credential_ref → auth_token_env → auth_token。",
     "rss / paper_rss": {
       "url": "feed 地址（也可放 data_sources.url）",
       "max_items": "单次抓取上限"
@@ -92,7 +93,19 @@
       "items_path": "条目列表点号路径，缺省自动探测（根列表/items/data/results/records）",
       "field_map": "{title,url,content,published_at,entry_key} 点号路径映射",
       "max_items": "默认 200",
-      "auth_token/auth_token_env": "鉴权，推荐 *_env"
+      "auth_token/auth_token_env": "鉴权，推荐 credential_ref（*_env 保留兼容）"
+    },
+    "wechat": {
+      "note": "微信公众号（mp.weixin.qq.com）自研适配器：rsshub 主路径（账号级增量）+ article_urls 定点抓取双模式；发现边界见 adapter_pipeline.json 的 wechat_discovery_rule",
+      "feed_url": "完整 RSS 地址（自建 RSSHub / 微信转 RSS 桥输出；rsshub.app 前缀按 RSSHUB_BASE_URL 约定自动改走自建实例）",
+      "rsshub_route": "RSSHub 路由（如 /wechat/mp/gh_xxx，建议值，具体取决于自建实例路由表）",
+      "rsshub_base/rsshub_base_env": "实例级 RSSHub base（直接值或环境变量间接引用）；缺省依次回落全局 RSSHUB_BASE_URL、公共 rsshub.app（多数路由 403，仅兜底）",
+      "rsshub_route_template": "按账号标识推导路由的模板，默认 /wechat/mp/{account}",
+      "account_name/account_username/wx_account": "公众号标识；仅给账号标识时按 rsshub_route_template 推导路由，字段与未来 wx 桥接契约（WX_BRIDGE_URL/WX_BRIDGE_TOKEN sidecar）共用",
+      "article_urls": "mp.weixin.qq.com 文章 URL 列表（或 {url, created_hint, title} 字典，与 page_manual 的 articles 形态兼容）；合集页（mp/appmsgalbum）自动枚举文章链接",
+      "window_days": "预留：账号级增量回看窗口（桥接契约共用字段）",
+      "max_items": "单次抓取上限，默认 50，封顶 200",
+      "credential_ref/auth_token_env/auth_token": "自建 RSSHub/桥的 Bearer 鉴权，推荐 credential_ref"
     }
   },
   "canonical_data_source_fields": [
@@ -120,7 +133,7 @@
       "name": "source_type",
       "type": "enum",
       "required": true,
-      "notes": "wiseflow/rss/page_monitor/page_manual/crawler/csv/paper_rss/paper_api/paper_page/manual/internal."
+      "notes": "wiseflow/rss/page_monitor/page_manual/crawler/csv/paper_rss/paper_api/paper_page/manual/internal/wechat."
     },
     {
       "name": "name",
@@ -194,7 +207,7 @@
       "name": "credential_ref",
       "type": "string",
       "required": false,
-      "notes": "Reference to environment-specific credentials. Secrets must not be stored in synced source config."
+      "notes": "Reference to environment-specific credentials. Secrets must not be stored in synced source config. Implemented resolver (backend/app/core/credentials.py) supports env:VAR_NAME and file:/absolute/path; malformed or missing refs degrade to no-credential with a WARNING instead of raising. Adapter token resolution order is credential_ref -> auth_token_env -> auth_token."
     },
     {
       "name": "primary_category",

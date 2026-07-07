@@ -92,17 +92,41 @@ internet / intranet
 `config/contracts/deployment_modes.json` 的 `startup_failfast_rules`。前端通过免登录的
 `GET /api/meta/runtime` 感知当前形态与能力开关。
 
+### 1.2 启动预设（install.sh --preset）
+
+`deploy/install.sh` 在形态之上支持三种启动预设（契约
+`config/contracts/deployment_modes.json` 的 `install_presets`）：
+
+```text
+cd deploy
+./install.sh --local  --preset rss-only    # 本地，只抓 RSS 类信息源
+./install.sh --domain example.com          # 生产，默认 --preset full（全量能力）
+./install.sh --local  --preset mirror      # 本地镜像站：不采集，只拉外部部署成果
+```
+
+| 预设 | 生成的 env 组合 | 说明 |
+|---|---|---|
+| `full`（默认） | 不写 `INGESTION_SOURCE_TYPES` | 空清单 = 全部 source_type 允许 |
+| `rss-only` | `INGESTION_SOURCE_TYPES=rss,paper_rss` | 抓取 run 内按允许清单过滤启用源，不在清单的源计入 run 摘要 `skipped_type_disabled`；清单值必须是 12 类 source_type 的子集（含 wechat），非法值启动拒绝 |
+| `mirror` | `CAPABILITY_INGESTION=false` + `CAPABILITY_SYNC_CONSUMER=true` + `SYNC_PULL_ENABLED=true` + `SYNC_REMOTE_BASE_URL/SYNC_REMOTE_TOKEN` + `INGESTION_SCHEDULER_ENABLED=false` | standalone/cloud + consumer override 的合法组合；完整模板 `deploy/env.mirror.example`。install.sh 会交互式询问远端地址/token，未提供时写 `REPLACE_WITH_*` 占位并退出等待补填 |
+
+`scripts/check_prod_deploy.py` 已校验 mirror 组合（`CAPABILITY_INGESTION=false` +
+`CAPABILITY_SYNC_CONSUMER=true` 时 `SYNC_PULL_ENABLED=true` 必须给全
+`SYNC_REMOTE_BASE_URL/SYNC_REMOTE_TOKEN`）。
+
 当前 scheduler 已接入每日完整流水线，默认关闭自动任务。开启后可按固定墙上时间执行：
 
 ```text
 ingestion -> normalize/dedupe -> recommendation -> daily_report_draft
 ```
 
-生产环境推荐每天北京时间 09:00 生成昨天的规划部日报，避免早上任务误生成当天未完成数据：
+`INGESTION_SCHEDULER_DAILY_TIME` 代码默认值为 `12:00`（Asia/Shanghai）：配合
+`DAILY_PIPELINE_DAY_OFFSET_DAYS=-1` 实现「每天中午汇总昨天」的用户口径，同时给
+上午的补采/人工干预留出窗口。也可以显式改为 09:00 等早间时间：
 
 ```text
 INGESTION_SCHEDULER_ENABLED=true
-INGESTION_SCHEDULER_DAILY_TIME=09:00
+INGESTION_SCHEDULER_DAILY_TIME=12:00
 INGESTION_SCHEDULER_TIMEZONE=Asia/Shanghai
 INGESTION_SCHEDULER_WORKSPACE_CODE=planning_intel
 INGESTION_SCHEDULER_SOURCE_TYPES=rss,paper_rss,page_manual,page_monitor,wiseflow
@@ -118,7 +142,7 @@ MINIMAX_GENERATION_ENABLED=false
 # MINIMAX_BASE_URL=https://api.minimaxi.com/v1
 ```
 
-若不设置 `INGESTION_SCHEDULER_DAILY_TIME`，scheduler 会保留旧的 interval 模式：启动后立即入队一次，然后按 `INGESTION_SCHEDULER_INTERVAL_SECONDS` 间隔重复。固定生产任务优先使用 `INGESTION_SCHEDULER_DAILY_TIME`，减少容器重启导致的时间漂移。
+`INGESTION_SCHEDULER_DAILY_TIME` 显式置空时，scheduler 回退旧的 interval 模式：启动后立即入队一次，然后按 `INGESTION_SCHEDULER_INTERVAL_SECONDS` 间隔重复。固定生产任务优先使用 `INGESTION_SCHEDULER_DAILY_TIME`（缺省即 12:00），减少容器重启导致的时间漂移。
 
 如果要限制单次调度处理源数量，可设置 `INGESTION_SCHEDULER_LIMIT=10`。
 
@@ -395,6 +419,8 @@ cd deploy
 ./install.sh --local
 ```
 
+两种入口都支持 `--preset rss-only|full|mirror`（默认 `full`，见 §1.2）。
+
 脚本会生成 `.env`（生产默认 `/srv/infowatchtower/.env.production`，本地默认
 `deploy/.env`）、随机 `POSTGRES_PASSWORD` 和 `AUTH_SESSION_SECRET`，执行
 `docker compose up -d --build`，等待 `/healthz` 通过并打印访问地址。默认不写
@@ -441,12 +467,13 @@ reverse proxy 会等 backend healthcheck 通过后再启动。
 
 ### 8.4 生产配置检查
 
-仓库提供三份形态 env 模板和部署检查脚本：
+仓库提供四份形态/预设 env 模板和部署检查脚本：
 
 ```text
-deploy/env.production.example   # standalone/cloud（默认 DEPLOY_MODE=cloud）
+deploy/env.production.example   # standalone/cloud（默认 DEPLOY_MODE=cloud；顶部注释含三预设说明）
 deploy/env.intranet.example     # intranet
 deploy/env.extranet.example     # extranet
+deploy/env.mirror.example       # mirror 预设（standalone/cloud + 不采集 + sync consumer pull）
 scripts/check_prod_deploy.py
 ```
 

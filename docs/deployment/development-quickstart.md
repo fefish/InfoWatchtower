@@ -107,6 +107,21 @@ docker compose -f deploy/docker-compose.local.yml up --build
 
 日常开发不要每次都加 `--build`。改普通 Python/Vue 代码后，优先用 `make up` 或 `make restart`。
 
+本地 compose（`deploy/docker-compose.local.yml`）的 backend/worker/scheduler 已把
+`backend/app`、`backend/alembic` 和 `config/` 以只读 volume 实时挂载进容器，backend
+以 `--reload` 运行——`make up` 起来的就是工作区当前代码，改后端 Python 不需要重建
+镜像。这是针对一次 P0 事故的修复：此前后端跑旧镜像、前端热更新到新代码，出现
+「前新后旧」版本错位，新前端调 `/api/meta/runtime` 得到 404，全站进入保守禁用
+（fail-closed）状态。前端对这类失败已给出可诊断横幅（`frontend/src/stores/runtime.ts`
+的 `metaErrorKind`）：
+
+- `stale-backend`（meta 404）：提示「后端版本过旧（缺少 /api/meta/runtime）：前端
+  代码已更新但后端进程/镜像未更新，请重启或重建后端后重试」；
+- `unreachable`（网络层失败）：提示确认后端已启动；
+- 其余 HTTP 错误：显示状态码并说明功能已保守禁用；AppShell 提供手动重试按钮。
+
+看到全站能力被禁用横幅时，先看横幅分类再排查，不要盲目重装。
+
 WSL2 建议把仓库放在 Linux 文件系统内，例如 `~/projects/InfoWatchtower`，不要放在 `/mnt/c/...`，否则前端热更新和 `node_modules` 会明显变慢。
 
 ## 4.1 部署形态本地联调（DEPLOY_MODE / runtime meta / CSRF / sync feed）

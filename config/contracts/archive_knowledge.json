@@ -32,6 +32,23 @@
         "legacy_table": "report_item_entity_milestones",
         "legacy_id_rule": "source_report_type + source_report_item_id + tracked_entity_id"
       },
+      "current_identity_variants": {
+        "published_report_candidate_milestones": {
+          "legacy_table": "published_report_candidate_milestones",
+          "legacy_id_rule": "tracked_entity_id + news_item_id",
+          "created_by": "app/archive/milestones.py on daily report publish",
+          "initial_curation_status": "candidate",
+          "initial_selected_for_timeline": false,
+          "idempotency": "one candidate per (tracked_entity, news_item); manual report-item registrations for the same pair suppress auto candidates"
+        },
+        "manual_entity_milestones": {
+          "legacy_table": "manual_entity_milestones",
+          "legacy_id_rule": "manual: + uuid4 hex",
+          "created_by": "POST /api/entity-milestones",
+          "initial_curation_status": "confirmed",
+          "initial_selected_for_timeline": true
+        }
+      },
       "required_fields": [
         "workspace_code",
         "domain_code",
@@ -46,6 +63,7 @@
       ],
       "curation_status_values": [
         "draft",
+        "candidate",
         "confirmed",
         "revoked",
         "imported"
@@ -77,8 +95,74 @@
       "min_workspace_role": "admin",
       "request": "EntityMilestoneUpdate",
       "response": "EntityMilestoneDetailRead",
-      "rule": "Only legacy_system=current milestones are editable; imported legacy milestones are immutable."
+      "rule": "Only legacy_system=current milestones are editable; imported legacy milestones are immutable. Candidate confirm/reject reuses this API with curation_status confirmed/revoked."
+    },
+    "create_tracked_entity": {
+      "method": "POST",
+      "path": "/api/tracked-entities",
+      "min_workspace_role": "admin",
+      "request": "TrackedEntityCreate",
+      "response": "TrackedEntityListItem",
+      "rule": "Case-insensitive unique name per workspace; duplicates return 409."
+    },
+    "update_tracked_entity": {
+      "method": "PATCH",
+      "path": "/api/tracked-entities/{id}",
+      "min_workspace_role": "admin",
+      "request": "TrackedEntityUpdate",
+      "response": "TrackedEntityListItem",
+      "rule": "Only legacy_system=current entities are editable; imported legacy entities are immutable."
+    },
+    "delete_tracked_entity": {
+      "method": "DELETE",
+      "path": "/api/tracked-entities/{id}",
+      "min_workspace_role": "admin",
+      "rule": "Only legacy_system=current entities without milestones can be deleted."
+    },
+    "get_tracked_entity_timeline": {
+      "method": "GET",
+      "path": "/api/tracked-entities/{id}/timeline",
+      "min_workspace_role": "viewer",
+      "response": "TrackedEntityTimelineRead",
+      "rule": "Milestones grouped by event month (desc); undated events group under 未标注时间 at the end."
+    },
+    "create_entity_milestone_manual": {
+      "method": "POST",
+      "path": "/api/entity-milestones",
+      "min_workspace_role": "admin",
+      "request": "EntityMilestoneManualCreate",
+      "response": "EntityMilestoneDetailRead",
+      "rule": "Manual backfill for a tracked entity; created as confirmed and selected for timeline; optional news_item_id keeps raw/news trace."
+    },
+    "list_report_archive": {
+      "method": "GET",
+      "path": "/api/report-archive",
+      "min_workspace_role": "viewer",
+      "response": "list[ReportArchiveListItem]",
+      "rule": "Merged read-only view of published daily/weekly reports and imported historical reports with month/keyword/type/origin filters and per-report stats (item_count, adopted_count, headline_count, adoption_rate, top_sources)."
+    },
+    "get_report_archive_summary": {
+      "method": "GET",
+      "path": "/api/report-archive/summary",
+      "min_workspace_role": "viewer",
+      "response": "ReportArchiveSummaryRead",
+      "rule": "Aggregates archive totals, month buckets, and average adoption rate; never mutates reports."
+    },
+    "get_entity_timeline_summary": {
+      "method": "GET",
+      "path": "/api/entity-timeline/summary",
+      "min_workspace_role": "viewer",
+      "response": "EntityTimelineSummaryRead",
+      "rule": "Workspace-level read-only overview: entity/milestone totals, selected milestone count, distributions by entity_type/event_type/importance_level, earliest/latest event time, and unresolved legacy reference counts."
     }
+  },
+  "publish_extraction": {
+    "trigger": "POST /api/daily-reports/{id}/publish",
+    "service": "app/archive/milestones.py::extract_candidate_milestones_for_daily_report",
+    "scan_scope": "daily_report_items with adoption_status = 2 only",
+    "match_rule": "case-insensitive containment of tracked entity name or aliases_json terms in item title/summary",
+    "idempotency_key": "legacy(current, published_report_candidate_milestones, tracked_entity_id:news_item_id)",
+    "writes": "tracked entity milestones only; never raw/news/report/recommendation/company SQL"
   },
   "request_fields": {
     "ReportItemEntityMilestoneCreate": {
@@ -119,9 +203,54 @@
         "importance_level": "string",
         "importance_score": "number 0..100",
         "confidence_score": "number 0..1",
-        "curation_status": "draft|confirmed|revoked",
+        "curation_status": "draft|candidate|confirmed|revoked",
         "curation_note": "string",
         "metadata_json": "object merged into existing metadata"
+      }
+    },
+    "TrackedEntityCreate": {
+      "required": {
+        "workspace_code": "string",
+        "name": "non-empty string, unique per workspace (case-insensitive)"
+      },
+      "optional": {
+        "domain_code": "string, default ai",
+        "entity_type": "string, default company",
+        "rank": "string",
+        "aliases": "list of strings; used by publish-time candidate extraction",
+        "notes": "string",
+        "influence_score": "number >= 0"
+      }
+    },
+    "TrackedEntityUpdate": {
+      "optional": {
+        "name": "non-empty string, unique per workspace",
+        "entity_type": "string",
+        "rank": "string",
+        "aliases": "list of strings",
+        "notes": "string",
+        "influence_score": "number >= 0"
+      }
+    },
+    "EntityMilestoneManualCreate": {
+      "required": {
+        "tracked_entity_id": "existing tracked entity",
+        "event_title": "non-empty string"
+      },
+      "optional": {
+        "event_type": "string, default manual",
+        "event_time": "datetime, default now",
+        "event_brief": "string",
+        "impact_brief": "string",
+        "source_url": "string",
+        "source_name": "string",
+        "board": "string",
+        "importance_level": "string, default medium",
+        "importance_score": "number 0..100, default 70",
+        "confidence_score": "number 0..1, default 1",
+        "news_item_id": "same-workspace news item for traceability",
+        "note": "string",
+        "metadata_json": "object"
       }
     }
   },
@@ -167,10 +296,13 @@
   "tests": {
     "backend": [
       "backend/tests/test_operations_api.py::test_report_items_create_entity_milestones_with_source_trace",
-      "backend/tests/test_operations_api.py::test_requirement_source_links_trace_historical_feedback"
+      "backend/tests/test_operations_api.py::test_requirement_source_links_trace_historical_feedback",
+      "backend/tests/test_entity_milestone_extraction.py",
+      "backend/tests/test_report_archive_api.py"
     ],
     "frontend": [
       "frontend/src/pages/EntityMilestonesPage.spec.ts",
+      "frontend/src/pages/HistoricalReportsPage.spec.ts",
       "frontend/src/pages/QualityArchivePage.spec.ts",
       "frontend/src/pages/RequirementsPage.spec.ts",
       "frontend/src/pages/DailyReportsPage.spec.ts",

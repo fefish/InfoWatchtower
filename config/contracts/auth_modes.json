@@ -144,7 +144,13 @@
     "cookie_max_age_seconds_env": "AUTH_SESSION_TTL_SECONDS",
     "cookie_secure_env": "AUTH_SESSION_COOKIE_SECURE; defaults to true when APP_ENV=production, but local HTTP Docker acceptance may set false",
     "payload_nonce": "users.updated_at serialized as sv; changing password or admin reset invalidates old cookies",
-    "startup_self_check": "APP_ENV=production requires DATABASE_URL. AUTH_SESSION_SECRET must be non-empty for every auth mode (local/public_password/oidc/intranet_header all sign session cookies); the check runs in validate_deploy_settings shared by the API, scheduler and worker entrypoints, with the original public_password check in main.py kept as a fallback."
+    "secret_rotation": {
+      "env": "AUTH_SESSION_SECRETS",
+      "format": "comma-separated secret list; when set it overrides the single-value AUTH_SESSION_SECRET",
+      "semantics": "The first entry signs newly issued session cookies; every entry can verify existing cookies. To rotate without logging users out, prepend the new secret and keep the old one at the tail; removing a secret from the list immediately invalidates cookies signed with it.",
+      "startup_check": "The fail-fast secret check passes when either AUTH_SESSION_SECRET or AUTH_SESSION_SECRETS is non-empty (Settings syncs the first rotation entry back into auth_session_secret so all single-value read points see the signing secret)."
+    },
+    "startup_self_check": "APP_ENV=production requires DATABASE_URL. AUTH_SESSION_SECRET (or the AUTH_SESSION_SECRETS rotation list) must be non-empty for every auth mode (local/public_password/oidc/intranet_header all sign session cookies); the check runs in validate_deploy_settings shared by the API, scheduler and worker entrypoints, with the original public_password check in main.py kept as a fallback."
   },
   "setup_flow": {
     "status_endpoint": "GET /api/setup/status -> {needs_setup}",

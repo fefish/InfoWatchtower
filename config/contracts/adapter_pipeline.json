@@ -20,7 +20,8 @@
   "adapter_rule": "Each source type may have its own input structure, but every adapter must persist the full raw payload and emit canonical raw_items. Normalization enriches and maps fields; it must not discard the original payload.",
   "adapter_network_rule": "HTTP adapters that fetch RSS, paper RSS, paper API, archive pages or sitemaps must not inherit host proxy environment variables by default; local, intranet and container-internal sources must be fetched directly unless a source-specific proxy is explicitly configured.",
   "stub_adapter_rule": "Registered placeholder adapters must not silently return zero items as a successful fetch. If a source_type is present but not implemented, the adapter must raise AdapterNotImplementedError, the source summary status must be skipped_unimplemented, and the run must record source_skipped_unimplemented without counting that source as succeeded or failed.",
-  "push_based_adapter_rule": "manual and internal are implemented push-based adapters, not stubs: their entries arrive via manual-import or internal push APIs, so fetch() legitimately returns an empty list and the run records the source as succeeded with zero new items. internal upgrades to a generic JSON API puller when fetch_config.api_url is set. The stub_adapter_rule applies only to source types without an implementation.",
+  "push_based_adapter_rule": "manual and internal are implemented push-based adapters, not stubs: their entries arrive via manual-import or internal push APIs, so fetch() legitimately returns an empty list and the run records the source as succeeded with zero new items. internal upgrades to a generic JSON API puller when fetch_config.api_url is set. The stub_adapter_rule applies only to source types without an implementation. Frontend must render push-based semantics explicitly: SourcesPage shows a 推入式 badge/tooltip for manual/internal without a pull entry (and a 待配置 badge for wechat without RSSHub/article entry), and IngestionRunsPage groups zero-item push-based sources as expected behavior instead of failures.",
+  "type_allowlist_rule": "Deployment-level INGESTION_SOURCE_TYPES allowlist (rss-only preset etc., see deployment_modes.json install_presets): empty means all types allowed; when non-empty, enabled sources whose source_type is not in the list are not fetched, each is recorded in run summary_json.sources with status skipped_type_disabled, and the run counts them as source_skipped_type_disabled (not succeeded, not failed). Unknown values in the allowlist fail startup.",
   "raw_item_identity_rule": "raw_items are idempotent by data_source_id + entry_key. entry_key must fit raw_items.entry_key length 255. If an upstream feed id or redirect URL is longer, the ingestion layer must deterministically shorten it with a stable hash suffix while preserving the original value inside raw_payload_json.",
   "source_type_to_adapter": {
     "wiseflow": "WiseflowReadInfoAdapter",
@@ -32,8 +33,10 @@
     "paper_api": "PaperApiAdapter (arXiv v1 + OpenAlex works v1 + Semantic Scholar bulk search v1)",
     "paper_page": "PaperPageAdapter",
     "manual": "ManualNewsAdapter",
-    "internal": "InternalSourceAdapter"
+    "internal": "InternalSourceAdapter",
+    "wechat": "WeChatMpAdapter (rsshub feed primary path + article_urls direct fetch)"
   },
+  "wechat_discovery_rule": "wechat (mp.weixin.qq.com) has no public account-level article listing without a logged-in WeChat client, so account-level incremental discovery MUST go through the rsshub mode (self-hosted RSSHub / WeChat-to-RSS bridge via fetch_config.feed_url, rsshub_route or account identifier + rsshub_route_template) or a future wx bridge sidecar (WX_BRIDGE_URL/WX_BRIDGE_TOKEN contract in docs/deployment/deployment-topology.md §5.1; account_name/account_username/wx_account/window_days fields are shared with that contract). article_urls mode is point-fetch only (single articles and mp/appmsgalbum album pages). rsshub mode reuses RssFeedAdapter entry parsing; feed URLs of self-hosted instances are never written into source_specific_json (only the route). Risk-control verification pages must raise a fetch failure instead of being persisted as raw_items.",
   "canonical_raw_item_fields": [
     "id",
     "data_source_id",
