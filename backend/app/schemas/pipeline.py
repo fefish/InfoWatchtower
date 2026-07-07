@@ -26,6 +26,9 @@ class DailyPipelineRunCreate(BaseModel):
     generation_timeout_seconds: float = Field(default=45.0, ge=5, le=180)
     create_daily_draft: bool = True
     run_ingestion: bool = True
+    # run 级自动重试覆盖（pipeline-jobs-design §6.2）：null=跟随工作台
+    # schedule_policy.retry，0=本次不自动重试，1..5=覆盖失败后自动重试次数。
+    retry_max_attempts: int | None = Field(default=None, ge=0, le=5)
 
 
 class DailyPipelineRunRead(BaseModel):
@@ -47,3 +50,7 @@ class DailyPipelineRunRead(BaseModel):
     candidates_total: int
     selected_total: int
     generated_total: int
+    # run 级重试链追溯（pipeline_runs 行，§3.1）。
+    pipeline_run_id: str | None = None
+    pipeline_run_status: str | None = None
+    attempt: int = 1

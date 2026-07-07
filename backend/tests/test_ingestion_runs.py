@@ -858,7 +858,9 @@ def test_ingestion_coverage_trends_aggregate_recent_runs_and_failures(monkeypatc
     client, engine = make_auth_client(monkeypatch, tmp_path, AUTH_MODE="public_password")
     assert client.post("/api/auth/login", json={"username": "admin", "password": "password"}).status_code == 200
     Session = sessionmaker(bind=engine)
-    now = datetime.now(UTC)
+    # 锚定到昨日 UTC 正午（北京时间 20:00）：避免真实墙钟跨午夜时 -10min/-5min 两个 run
+    # 掉进不同北京日桶导致断言翻车（本测试曾在 00:0x 北京时间偶发失败）。
+    now = datetime.now(UTC).replace(hour=12, minute=0, second=0, microsecond=0) - timedelta(days=1)
     with Session() as session:
         source = add_workspace_source(session, name="Unstable RSS", url="https://example.com/unstable.xml")
         source_id = source.id

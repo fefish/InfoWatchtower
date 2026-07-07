@@ -704,6 +704,7 @@ def _workspace_report_policy_to_read(workspace: Workspace) -> WorkspaceReportPol
 
 @router.get("/discover", response_model=list[WorkspaceDiscoverRead])
 def discover_workspaces(
+    q: str | None = Query(default=None, max_length=128),
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> list[WorkspaceDiscoverRead]:
@@ -711,6 +712,10 @@ def discover_workspaces(
 
     private 工作台永不出现在发现列表（不泄露存在性）。游客可浏览该列表，
     但 joined 恒为 False 且不能订阅（共享游客账号不建 membership）。
+
+    可选 `q`：对 name/description 做大小写不敏感 contains 过滤。过滤范围
+    严格限于 enabled 且 internal_public 的工作台——查询在上面的 where 之后
+    进行，任何关键词都不可能让 private 工作台出现（防存在性泄露）。
     """
     workspaces = session.scalars(
         select(Workspace).where(
@@ -718,6 +723,14 @@ def discover_workspaces(
             Workspace.visibility == "internal_public",
         ),
     ).all()
+    if q is not None:
+        needle = q.strip().lower()
+        if needle:
+            workspaces = [
+                workspace
+                for workspace in workspaces
+                if needle in workspace.name.lower() or needle in (workspace.description or "").lower()
+            ]
     workspaces = sorted(
         workspaces,
         key=lambda workspace: (
@@ -1185,3 +1198,136 @@ def _workspace_feedback_policy_to_read(workspace: Workspace) -> WorkspaceFeedbac
     config = workspace.config_json or {}
     policy = _normalize_feedback_policy(dict(config.get("feedback_policy") or {}))
     return WorkspaceFeedbackPolicyRead(workspace_code=workspace.code, **policy)
+
+
+# ---------------------------------------------------------------------------
+# 工作台级调度策略 schedule_policy（pipeline-jobs-design §8.2，WP3-A 追加区域）
+# 契约：config/contracts/workspace_model.json `schedule_policy`。
+# ---------------------------------------------------------------------------
+
+from datetime import datetime as _schedule_datetime  # noqa: E402
+
+from app.core.config import Settings as _ScheduleSettings, get_settings as _get_schedule_settings  # noqa: E402
+from app.pipeline.schedule_policy import (  # noqa: E402
+    SchedulePolicyValidationError,
+    normalize_schedule_policy,
+    resolve_workspace_schedule,
+    scheduler_timezone,
+    stored_schedule_policy,
+    workspace_schedule_policy,
+)
+from app.schemas.schedule_policy import (  # noqa: E402
+    ResolvedScheduleRead,
+    ScheduleInstanceBaselineRead,
+    SchedulePolicyDocument,
+    SchedulePolicyRetry,
+    SchedulePolicyWeekly,
+    WorkspaceSchedulePolicyRead,
+    WorkspaceSchedulePolicyUpdate,
+)
+
+
+@router.get("/{workspace_code}/schedule-policy", response_model=WorkspaceSchedulePolicyRead)
+def get_workspace_schedule_policy(
+    workspace_code: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+    settings: _ScheduleSettings = Depends(_get_schedule_settings),
+) -> WorkspaceSchedulePolicyRead:
+    """读取策略 + resolved 生效值 + next_run_at 预览（workspace viewer+）。"""
+    assert_workspace_member(session, current_user, workspace_code, min_role="viewer")
+    workspace = _get_enabled_workspace(session, workspace_code)
+    return _workspace_schedule_policy_to_read(settings, workspace)
+
+
+@router.patch("/{workspace_code}/schedule-policy", response_model=WorkspaceSchedulePolicyRead)
+def update_workspace_schedule_policy(
+    workspace_code: str,
+    payload: WorkspaceSchedulePolicyUpdate,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+    settings: _ScheduleSettings = Depends(_get_schedule_settings),
+) -> WorkspaceSchedulePolicyRead:
+    """调度策略（与 label/feedback/report policy 同级，存 config_json.schedule_policy）。
+
+    workspace admin+ 或 super_admin 写；字段取值域校验非法值 422；
+    审计 workspace.schedule_policy.update（before/after 快照）。改动下一个
+    scheduler tick 生效，无需重启（分层配置模型 §8.1）。
+    """
+    assert_workspace_member(session, current_user, workspace_code, min_role="admin")
+    workspace = _get_enabled_workspace(session, workspace_code)
+    try:
+        policy = normalize_schedule_policy(payload.model_dump())
+    except SchedulePolicyValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    config = dict(workspace.config_json or {})
+    before = dict(stored_schedule_policy(workspace) or {})
+    config["schedule_policy"] = policy
+    workspace.config_json = config
+    write_audit(
+        session,
+        current_user,
+        action="workspace.schedule_policy.update",
+        object_type="workspace",
+        object_id=workspace.id,
+        detail={
+            "workspace_code": workspace.code,
+            "before": before,
+            "after": policy,
+        },
+    )
+    session.commit()
+    session.refresh(workspace)
+    return _workspace_schedule_policy_to_read(settings, workspace)
+
+
+def _workspace_schedule_policy_to_read(
+    settings: _ScheduleSettings,
+    workspace: Workspace,
+) -> WorkspaceSchedulePolicyRead:
+    policy = workspace_schedule_policy(workspace)
+    timezone = scheduler_timezone(settings)
+    resolved = resolve_workspace_schedule(
+        settings,
+        workspace,
+        now=_schedule_datetime.now(timezone),
+    )
+    return WorkspaceSchedulePolicyRead(
+        workspace_code=workspace.code,
+        policy=SchedulePolicyDocument(
+            enabled=policy["enabled"],
+            daily_time=policy["daily_time"],
+            day_offset=policy["day_offset"],
+            source_types=policy["source_types"],
+            retry=SchedulePolicyRetry(**policy["retry"]),
+            weekly=SchedulePolicyWeekly(**policy["weekly"]),
+        ),
+        resolved=ResolvedScheduleRead(
+            effective_enabled=resolved.effective_enabled,
+            effective_daily_time=resolved.effective_daily_time,
+            effective_day_offset=resolved.effective_day_offset,
+            effective_source_types=resolved.effective_source_types,
+            policy_source=resolved.policy_source,
+            next_run_at=resolved.next_run_at.isoformat() if resolved.next_run_at else None,
+            retry=SchedulePolicyRetry(
+                max_attempts=resolved.retry_max_attempts,
+                backoff_seconds=resolved.retry_backoff_seconds,
+            ),
+            weekly=SchedulePolicyWeekly(
+                enabled=resolved.weekly_enabled,
+                weekly_day=resolved.weekly_day,
+                weekly_time=resolved.weekly_time,
+            ),
+        ),
+        instance=ScheduleInstanceBaselineRead(
+            scheduler_enabled=bool(settings.ingestion_scheduler_enabled),
+            daily_time=(settings.ingestion_scheduler_daily_time or "").strip() or None,
+            timezone=settings.ingestion_scheduler_timezone,
+            day_offset=int(getattr(settings, "daily_pipeline_day_offset_days", 0) or 0),
+            source_types=list(settings.ingestion_source_type_list),
+            workspace_code=settings.ingestion_scheduler_workspace_code,
+        ),
+    )

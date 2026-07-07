@@ -4,6 +4,7 @@ from app.models.content import (
     DedupeGroup,
     DedupeGroupItem,
     GeneratedNews,
+    GenerationUsage,
     IngestionRun,
     NewsItem,
     RawItem,
@@ -47,8 +48,15 @@ from app.models.strategy import (
     StrategicImplication,
     TopicTask,
 )
+from app.models.pipeline import PipelineRun, SchedulerHeartbeat
 from app.models.sync import SyncConflict, SyncCursor, SyncInbox, SyncOutbox, SyncRun
-from app.models.workspace import Workspace, WorkspaceMembership, WorkspaceSection, WorkspaceSourceLink
+from app.models.workspace import (
+    Workspace,
+    WorkspaceJoinCode,
+    WorkspaceMembership,
+    WorkspaceSection,
+    WorkspaceSourceLink,
+)
 
 __all__ = [
     "AuditLog",
@@ -66,6 +74,7 @@ __all__ = [
     "ExportJobItem",
     "ExportImportReceipt",
     "GeneratedNews",
+    "GenerationUsage",
     "HistoricalFeedbackItem",
     "HistoricalJobRun",
     "HistoricalReport",
@@ -79,6 +88,7 @@ __all__ = [
     "NotificationPreference",
     "ObjectWatcher",
     "Permission",
+    "PipelineRun",
     "Rating",
     "RawItem",
     "Reaction",
@@ -87,6 +97,7 @@ __all__ = [
     "Requirement",
     "RequirementSourceLink",
     "Role",
+    "SchedulerHeartbeat",
     "StrategicImplication",
     "SyncConflict",
     "SyncCursor",
@@ -101,6 +112,7 @@ __all__ = [
     "WeeklyReport",
     "WeeklyReportItem",
     "Workspace",
+    "WorkspaceJoinCode",
     "WorkspaceMembership",
     "WorkspaceSection",
     "WorkspaceSourceLink",

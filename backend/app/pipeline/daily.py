@@ -147,6 +147,16 @@ def run_daily_pipeline_job(
     create_daily_draft: bool = True,
     run_ingestion: bool = True,
     day_key: str | None = None,
+    *,
+    # run 级重试链（pipeline-jobs-design §3.1/§6.2）：scheduler per-workspace/
+    # retry 投递会带 pipeline_run_id（行由 scheduler 先建）；兼容模式投递不带
+    # 任何新参数（字节一致），由本 job 落 trigger_type=scheduler 的 run 行。
+    pipeline_run_id: str | None = None,
+    trigger_type: str = "scheduler",
+    triggered_by: str = "",
+    attempt: int = 1,
+    retry_of_run_id: str | None = None,
+    retry_max_attempts: int | None = None,
 ) -> dict[str, Any]:
     # 日报管线含采集阶段（intranet 消费远端成稿，不本地跑管线），与采集 job 同门
     skipped = ingestion_capability_skip("daily_pipeline", workspace_code)
@@ -166,6 +176,12 @@ def run_daily_pipeline_job(
             create_daily_draft=create_daily_draft,
             run_ingestion=run_ingestion,
             day_key=day_key,
+            pipeline_run_id=pipeline_run_id,
+            trigger_type=trigger_type,
+            triggered_by=triggered_by,
+            attempt=attempt,
+            retry_of_run_id=retry_of_run_id,
+            retry_max_attempts=retry_max_attempts,
         ),
     )
 
@@ -183,32 +199,49 @@ async def _run_daily_pipeline_job(
     create_daily_draft: bool,
     run_ingestion: bool,
     day_key: str | None,
+    pipeline_run_id: str | None = None,
+    trigger_type: str = "scheduler",
+    triggered_by: str = "",
+    attempt: int = 1,
+    retry_of_run_id: str | None = None,
+    retry_max_attempts: int | None = None,
 ) -> dict[str, Any]:
+    # 延迟导入避免 daily <-> runs 循环依赖（runs 引 run_daily_pipeline）。
+    from app.models.pipeline import PipelineRun
+    from app.pipeline.runs import create_pipeline_run, execute_pipeline_run
+
     session_factory = get_session_factory()
     if session_factory is None:
         raise RuntimeError("DATABASE_URL is required for daily pipeline jobs.")
 
+    request = DailyPipelineRequest(
+        workspace_code=workspace_code,
+        day_key=day_key,
+        source_types=source_types,
+        ingestion_limit=ingestion_limit,
+        ingestion_concurrency=ingestion_concurrency,
+        ingestion_source_timeout_seconds=ingestion_source_timeout_seconds,
+        ingestion_max_items_per_source=ingestion_max_items_per_source,
+        recommendation_limit=recommendation_limit,
+        source_daily_limit=source_daily_limit,
+        generation_timeout_seconds=generation_timeout_seconds,
+        create_daily_draft=create_daily_draft,
+        run_ingestion=run_ingestion,
+    )
     with session_factory() as session:
-        result = await run_daily_pipeline(
-            session,
-            DailyPipelineRequest(
-                workspace_code=workspace_code,
-                day_key=day_key,
-                source_types=source_types,
-                ingestion_limit=ingestion_limit,
-                ingestion_concurrency=ingestion_concurrency,
-                ingestion_source_timeout_seconds=ingestion_source_timeout_seconds,
-                ingestion_max_items_per_source=ingestion_max_items_per_source,
-                recommendation_limit=recommendation_limit,
-                source_daily_limit=source_daily_limit,
-                generation_timeout_seconds=generation_timeout_seconds,
-                create_daily_draft=create_daily_draft,
-                run_ingestion=run_ingestion,
-            ),
-        )
-        payload = daily_pipeline_payload(result)
-        session.commit()
-        return payload
+        run = session.get(PipelineRun, pipeline_run_id) if pipeline_run_id else None
+        if run is None:
+            run = create_pipeline_run(
+                session,
+                request=request,
+                trigger_type=trigger_type,
+                triggered_by=triggered_by,
+                attempt=attempt,
+                retry_of_run_id=retry_of_run_id,
+                retry_max_attempts_override=retry_max_attempts,
+            )
+            session.commit()
+        return await execute_pipeline_run(session, run)
 
 
 def daily_pipeline_payload(result: DailyPipelineResult) -> dict[str, Any]:
