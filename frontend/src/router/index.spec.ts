@@ -178,10 +178,27 @@ describe("router guards", () => {
     authApi.fetchMe.mockResolvedValue({ user: sessionUser({ roles: ["viewer"] }) });
     workspacesApi.fetchWorkspaces.mockResolvedValue([workspaceRecord("viewer")]);
 
-    for (const managementPath of ["/dashboard", "/sources", "/news", "/exports", "/users", "/audit-logs"]) {
+    for (const managementPath of [
+      "/dashboard",
+      "/sources",
+      "/news",
+      "/exports",
+      "/users",
+      "/audit-logs",
+      "/workspace-settings"
+    ]) {
       const router = await navigateTo(managementPath);
       expect(router.currentRoute.value.path).toBe("/daily-reports");
     }
+  });
+
+  it("keeps workspace admins on the workspace settings route", async () => {
+    authApi.fetchMe.mockResolvedValue({ user: sessionUser({ roles: ["viewer"] }) });
+    workspacesApi.fetchWorkspaces.mockResolvedValue([workspaceRecord("admin")]);
+
+    const router = await navigateTo("/workspace-settings");
+
+    expect(router.currentRoute.value.path).toBe("/workspace-settings");
   });
 
   it("keeps viewer-readable routes accessible for workspace viewers", async () => {

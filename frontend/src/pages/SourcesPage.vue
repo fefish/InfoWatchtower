@@ -11,8 +11,6 @@ import {
   RefreshCw,
   Rss,
   Settings,
-  Tag,
-  Trash2,
   X
 } from "lucide-vue-next";
 import { computed, reactive, ref, watch } from "vue";
@@ -29,11 +27,6 @@ import {
   type DataSourceRecord,
   type SourceImportPreview
 } from "../api/sources";
-import {
-  fetchWorkspaceLabelPolicy,
-  updateWorkspaceLabelPolicy,
-  type WorkspaceLabelPolicy
-} from "../api/workspaces";
 import { useRuntimeStore } from "../stores/runtime";
 import { useWorkspaceStore } from "../stores/workspace";
 
@@ -42,7 +35,6 @@ const runtime = useRuntimeStore();
 const sources = ref<DataSourceRecord[]>([]);
 const loading = ref(false);
 const importing = ref(false);
-const savingPolicy = ref(false);
 const savingConfig = ref(false);
 const fetchingSourceId = ref("");
 const error = ref("");
@@ -52,78 +44,6 @@ const importPreview = ref<SourceImportPreview | null>(null);
 const importPreviewCatalog = ref<"legacy" | "tech">("legacy");
 const previewLoading = ref(false);
 const selectedSource = ref<DataSourceRecord | null>(null);
-const activePolicyTab = ref<"level1" | "level2" | "format">("level1");
-
-const aiSqlPrimaryCategories = [
-  "AI Infra",
-  "AI 应用",
-  "测评技术",
-  "大厂动态",
-  "模型",
-  "算法",
-  "推理加速",
-  "训练技术",
-  "智能体",
-  "基础竞争力"
-];
-const companySqlContentFields = [
-  "background",
-  "effects",
-  "eventSummary",
-  "technologyAndInnovation",
-  "valueAndImpact"
-];
-const contentFieldLabels: Record<string, string> = {
-  background: "背景",
-  effects: "效果总结",
-  eventSummary: "事件总结",
-  technologyAndInnovation: "技术和创新点总结",
-  valueAndImpact: "价值和影响"
-};
-const aiToolPrimaryCategories = ["工具新功能", "工具新案例", "工具新技术"];
-const aiToolSecondaryLabels = ["cursor", "claude code", "opencode", "codex"];
-
-const workspacePolicyPresets = {
-  ai_sql: {
-    labelSetCode: "ai_sql_categories",
-    newsFormatCode: "company_sql_v1",
-    exportCategoryMode: "news_primary",
-    requiredContentFields: [...companySqlContentFields],
-    primaryCategories: aiSqlPrimaryCategories,
-    secondaryLabelsByPrimary: {},
-    defaultCategory: "AI 应用",
-    fallbackCategory: "AI 应用"
-  },
-  ai_tools: {
-    labelSetCode: "ai_tools_categories",
-    newsFormatCode: "tool_intel_v1",
-    exportCategoryMode: "news_primary",
-    requiredContentFields: [...companySqlContentFields],
-    primaryCategories: aiToolPrimaryCategories,
-    secondaryLabelsByPrimary: Object.fromEntries(
-      aiToolPrimaryCategories.map((category) => [category, [...aiToolSecondaryLabels]])
-    ) as Record<string, string[]>,
-    defaultCategory: "工具新功能",
-    fallbackCategory: "工具新功能"
-  }
-};
-
-const policyForm = reactive({
-  labelSetCode: "ai_sql_categories",
-  newsFormatCode: "company_sql_v1",
-  exportCategoryMode: "news_primary",
-  requiredContentFields: [...companySqlContentFields],
-  allowedPrimaryCategories: [...aiSqlPrimaryCategories],
-  secondaryLabelsByPrimary: {} as Record<string, string[]>,
-  defaultCategory: "AI 应用",
-  fallbackCategory: "AI 应用"
-});
-const categoryDraft = ref("");
-const contentFieldDraft = ref("");
-const secondaryDraft = reactive({
-  primary: "",
-  label: ""
-});
 
 const configForm = reactive({
   enabled: true,
@@ -167,56 +87,12 @@ const enabledInWorkspaceCount = computed(
   () => sources.value.filter((source) => source.workspace_link_enabled).length
 );
 
-const activePrimaryCategories = computed(() =>
-  policyForm.allowedPrimaryCategories.length > 0 ? policyForm.allowedPrimaryCategories : aiSqlPrimaryCategories
-);
-const secondaryLabelTotal = computed(() =>
-  activePrimaryCategories.value.reduce(
-    (total: number, category: string) => total + secondaryLabelsFor(category).length,
-    0
-  )
-);
-
-const currentPolicyPreset = computed(() => {
-  if (workspace.currentCode === "ai_tools") {
-    return workspacePolicyPresets.ai_tools;
-  }
-  return workspacePolicyPresets.ai_sql;
-});
 const canManageIngestion = computed(() => runtime.canIngest);
 const createUrlPlaceholder = computed(() =>
   createForm.sourceType === "paper_api"
     ? "https://api.semanticscholar.org/graph/v1/paper/search/bulk?query=artificial%20intelligence"
     : "https://..."
 );
-
-async function loadWorkspacePolicy() {
-  if (!workspace.currentCode) {
-    return;
-  }
-  try {
-    const policy = await fetchWorkspaceLabelPolicy(workspace.currentCode);
-    fillPolicyForm(policy);
-  } catch (exc) {
-    error.value = exc instanceof Error ? exc.message : "加载工作台标签策略失败";
-  }
-}
-
-function fillPolicyForm(policy: WorkspaceLabelPolicy) {
-  policyForm.labelSetCode = policy.label_set_code;
-  policyForm.newsFormatCode = policy.news_format_code;
-  policyForm.exportCategoryMode = policy.export_category_mode || "news_primary";
-  policyForm.requiredContentFields = normalizeContentFields(policy.required_content_fields);
-  policyForm.allowedPrimaryCategories = [...policy.allowed_primary_categories];
-  policyForm.secondaryLabelsByPrimary = normalizeSecondaryLabels(
-    policy.secondary_labels_by_primary ?? {},
-    policyForm.allowedPrimaryCategories
-  );
-  policyForm.defaultCategory = policy.default_category;
-  policyForm.fallbackCategory = policy.fallback_category;
-  secondaryDraft.primary = policyForm.allowedPrimaryCategories[0] ?? "";
-  syncPolicyFallbacks();
-}
 
 async function loadSources() {
   loading.value = true;
@@ -437,13 +313,6 @@ function sourceIcon(type: string) {
   return icons[type as keyof typeof icons] ?? Globe2;
 }
 
-function tagInputWidth(value: string) {
-  const width = Array.from(value || "").reduce((total, character) => {
-    return total + (/[\u4e00-\u9fff]/.test(character) ? 14 : 8);
-  }, 18);
-  return `${Math.max(54, Math.min(128, width))}px`;
-}
-
 function formatDateTime(value: string | null) {
   if (!value) {
     return "";
@@ -580,203 +449,6 @@ function closeConfig() {
   selectedSource.value = null;
 }
 
-function syncPolicyFallbacks() {
-  if (!policyForm.allowedPrimaryCategories.includes(policyForm.defaultCategory)) {
-    policyForm.defaultCategory = policyForm.allowedPrimaryCategories[0];
-  }
-  if (!policyForm.allowedPrimaryCategories.includes(policyForm.fallbackCategory)) {
-    policyForm.fallbackCategory = policyForm.defaultCategory;
-  }
-  if (!policyForm.allowedPrimaryCategories.includes(secondaryDraft.primary)) {
-    secondaryDraft.primary = policyForm.allowedPrimaryCategories[0] ?? "";
-  }
-}
-
-function normalizedPolicyCategories() {
-  const next: string[] = [];
-  for (const category of policyForm.allowedPrimaryCategories) {
-    const value = category.trim();
-    if (value && !next.includes(value)) {
-      next.push(value);
-    }
-  }
-  return next;
-}
-
-function normalizeSecondaryLabels(labelsByPrimary: Record<string, string[]>, primaryCategories: string[]) {
-  const normalized: Record<string, string[]> = {};
-  for (const category of primaryCategories) {
-    const labels = labelsByPrimary[category] ?? [];
-    const next: string[] = [];
-    for (const label of labels) {
-      const value = label.trim();
-      if (value && !next.includes(value)) {
-        next.push(value);
-      }
-    }
-    if (next.length > 0) {
-      normalized[category] = next;
-    }
-  }
-  return normalized;
-}
-
-function secondaryLabelsFor(category: string) {
-  return policyForm.secondaryLabelsByPrimary[category] ?? [];
-}
-
-function addPolicyCategory() {
-  const value = categoryDraft.value.trim();
-  if (!value || policyForm.allowedPrimaryCategories.includes(value)) {
-    categoryDraft.value = "";
-    return;
-  }
-  policyForm.allowedPrimaryCategories.push(value);
-  policyForm.secondaryLabelsByPrimary[value] = [];
-  categoryDraft.value = "";
-  syncPolicyFallbacks();
-}
-
-function renamePolicyCategory(index: number, value: string) {
-  const previous = policyForm.allowedPrimaryCategories[index];
-  policyForm.allowedPrimaryCategories[index] = value;
-  if (previous !== value) {
-    policyForm.secondaryLabelsByPrimary[value] = policyForm.secondaryLabelsByPrimary[previous] ?? [];
-    delete policyForm.secondaryLabelsByPrimary[previous];
-  }
-  syncPolicyFallbacks();
-}
-
-function removePolicyCategory(index: number) {
-  if (policyForm.allowedPrimaryCategories.length <= 1) {
-    return;
-  }
-  const [removed] = policyForm.allowedPrimaryCategories.slice(index, index + 1);
-  policyForm.allowedPrimaryCategories.splice(index, 1);
-  delete policyForm.secondaryLabelsByPrimary[removed];
-  syncPolicyFallbacks();
-}
-
-function resetPolicyCategories() {
-  const preset = currentPolicyPreset.value;
-  policyForm.labelSetCode = preset.labelSetCode;
-  policyForm.newsFormatCode = preset.newsFormatCode;
-  policyForm.exportCategoryMode = preset.exportCategoryMode;
-  policyForm.requiredContentFields = [...preset.requiredContentFields];
-  policyForm.allowedPrimaryCategories = [...preset.primaryCategories];
-  policyForm.secondaryLabelsByPrimary = normalizeSecondaryLabels(
-    preset.secondaryLabelsByPrimary,
-    policyForm.allowedPrimaryCategories
-  );
-  policyForm.defaultCategory = preset.defaultCategory;
-  policyForm.fallbackCategory = preset.fallbackCategory;
-  secondaryDraft.primary = policyForm.allowedPrimaryCategories[0] ?? "";
-}
-
-function normalizeContentFields(fields: string[]) {
-  const next: string[] = [];
-  for (const field of fields) {
-    const value = field.trim();
-    if (value && !next.includes(value)) {
-      next.push(value);
-    }
-  }
-  return next.length ? next : [...companySqlContentFields];
-}
-
-function addContentField() {
-  const value = contentFieldDraft.value.trim();
-  if (!value || policyForm.requiredContentFields.includes(value)) {
-    contentFieldDraft.value = "";
-    return;
-  }
-  policyForm.requiredContentFields.push(value);
-  contentFieldDraft.value = "";
-}
-
-function contentFieldLabel(field: string) {
-  return contentFieldLabels[field] ?? "自定义字段";
-}
-
-function renameContentField(index: number, value: string) {
-  policyForm.requiredContentFields[index] = value;
-}
-
-function removeContentField(index: number) {
-  if (
-    policyForm.newsFormatCode === "company_sql_v1" &&
-    policyForm.requiredContentFields.length <= companySqlContentFields.length
-  ) {
-    error.value = "company_sql_v1 不能删除公司 SQL 必填字段";
-    return;
-  }
-  policyForm.requiredContentFields.splice(index, 1);
-}
-
-function addSecondaryLabel() {
-  const primary = secondaryDraft.primary || policyForm.allowedPrimaryCategories[0];
-  const label = secondaryDraft.label.trim();
-  if (!primary || !label) {
-    return;
-  }
-  const labels = policyForm.secondaryLabelsByPrimary[primary] ?? [];
-  if (!labels.includes(label)) {
-    policyForm.secondaryLabelsByPrimary[primary] = [...labels, label];
-  }
-  secondaryDraft.label = "";
-}
-
-function renameSecondaryLabel(primary: string, index: number, value: string) {
-  const labels = [...secondaryLabelsFor(primary)];
-  labels[index] = value;
-  policyForm.secondaryLabelsByPrimary[primary] = labels;
-}
-
-function removeSecondaryLabel(primary: string, index: number) {
-  const labels = [...secondaryLabelsFor(primary)];
-  labels.splice(index, 1);
-  policyForm.secondaryLabelsByPrimary[primary] = labels;
-}
-
-async function saveWorkspacePolicy() {
-  if (!workspace.currentCode) {
-    return;
-  }
-  const categories = normalizedPolicyCategories();
-  if (categories.length === 0) {
-    error.value = "至少保留一个一级标签";
-    return;
-  }
-  policyForm.allowedPrimaryCategories = categories;
-  policyForm.requiredContentFields = normalizeContentFields(policyForm.requiredContentFields);
-  policyForm.secondaryLabelsByPrimary = normalizeSecondaryLabels(
-    policyForm.secondaryLabelsByPrimary,
-    categories
-  );
-  syncPolicyFallbacks();
-  savingPolicy.value = true;
-  error.value = "";
-  lastImportMessage.value = "";
-  try {
-    const updated = await updateWorkspaceLabelPolicy(workspace.currentCode, {
-      label_set_code: policyForm.labelSetCode,
-      news_format_code: policyForm.newsFormatCode,
-      export_category_mode: policyForm.exportCategoryMode,
-      required_content_fields: policyForm.requiredContentFields,
-      allowed_primary_categories: categories,
-      secondary_labels_by_primary: policyForm.secondaryLabelsByPrimary,
-      default_category: policyForm.defaultCategory,
-      fallback_category: policyForm.fallbackCategory
-    });
-    fillPolicyForm(updated);
-    lastImportMessage.value = `已保存：${workspace.current?.name} 的统一标签策略`;
-  } catch (exc) {
-    error.value = exc instanceof Error ? exc.message : "保存工作台标签策略失败";
-  } finally {
-    savingPolicy.value = false;
-  }
-}
-
 async function saveConfig() {
   if (!selectedSource.value || !workspace.currentCode) {
     return;
@@ -840,7 +512,6 @@ watch(
   () => workspace.currentCode,
   (code) => {
     if (code) {
-      void loadWorkspacePolicy();
       void loadSources();
     }
   },
@@ -908,10 +579,16 @@ watch(
       </div>
     </section>
 
+    <p class="workspace-form-hint sources-policy-note">
+      标签策略与报告格式已移至
+      <RouterLink to="/workspace-settings#labels">工作台配置</RouterLink>
+      统一管理。
+    </p>
+
     <p v-if="error" class="form-error">{{ error }}</p>
     <p v-if="lastImportMessage" :class="importMessageClass">{{ lastImportMessage }}</p>
 
-    <section class="source-page-grid">
+    <section class="source-page-grid single-column">
       <div class="source-list">
       <header class="source-list-title">
         <div>
@@ -1014,217 +691,6 @@ watch(
         {{ canManageIngestion ? "暂无数据源，可先导入旧种子源。" : "当前为只读消费模式，等待外网同步后会显示数据源。" }}
       </p>
       </div>
-
-      <aside class="control-rail">
-        <section class="policy-panel">
-        <header class="policy-header">
-          <div>
-            <p class="policy-kicker">
-              <Tag :size="16" />
-              <span>标签策略设置</span>
-            </p>
-            <h3>{{ policyForm.labelSetCode }}</h3>
-            <p>配置用于模型分类与去重后定稿的工作台标签。</p>
-          </div>
-          <div class="policy-stats">
-            <span>{{ activePrimaryCategories.length }} 一级</span>
-            <span>{{ secondaryLabelTotal }} 二级</span>
-          </div>
-        </header>
-
-        <div class="label-policy-grid">
-          <div class="policy-tabs" role="tablist" aria-label="标签策略配置">
-            <button
-              type="button"
-              :class="{ active: activePolicyTab === 'level1' }"
-              @click="activePolicyTab = 'level1'"
-            >
-              一级标签 {{ activePrimaryCategories.length }}
-            </button>
-            <button
-              type="button"
-              :class="{ active: activePolicyTab === 'level2' }"
-              @click="activePolicyTab = 'level2'"
-            >
-              二级标签 {{ secondaryLabelTotal }}
-            </button>
-            <button
-              type="button"
-              :class="{ active: activePolicyTab === 'format' }"
-              @click="activePolicyTab = 'format'"
-            >
-              新闻结构
-            </button>
-          </div>
-
-          <section v-if="activePolicyTab === 'level1'" class="policy-tab-panel">
-            <div class="label-section-title">
-              <span>一级标签</span>
-              <small>用于模型分类与去重后定稿</small>
-            </div>
-            <div class="tag-cloud editable">
-              <label
-                v-for="(category, index) in policyForm.allowedPrimaryCategories"
-                :key="`${category}-${index}`"
-                class="tag-chip-edit"
-              >
-                <input
-                  :value="category"
-                  :style="{ width: tagInputWidth(category) }"
-                  @input="renamePolicyCategory(index, ($event.target as HTMLInputElement).value)"
-                  aria-label="一级标签名称"
-                />
-                <button
-                  type="button"
-                  :disabled="policyForm.allowedPrimaryCategories.length <= 1"
-                  @click="removePolicyCategory(index)"
-                  title="删除一级标签"
-                >
-                  <Trash2 :size="13" />
-                </button>
-              </label>
-            </div>
-            <div class="quick-add-card">
-              <label>
-                <span>新增一级标签</span>
-                <div class="inline-control">
-                  <input v-model="categoryDraft" placeholder="输入标签名称" @keydown.enter.prevent="addPolicyCategory" />
-                  <button type="button" class="mini-icon-button add" @click="addPolicyCategory" title="新增一级标签">
-                    <Plus :size="16" />
-                  </button>
-                </div>
-              </label>
-            </div>
-          </section>
-
-          <section v-else-if="activePolicyTab === 'level2'" class="policy-tab-panel">
-            <div class="label-section-title">
-              <span>二级标签</span>
-              <small>只显示已配置项</small>
-            </div>
-            <div v-if="secondaryLabelTotal > 0" class="secondary-groups">
-              <div
-                v-for="category in activePrimaryCategories"
-                v-show="secondaryLabelsFor(category).length > 0"
-                :key="category"
-                class="secondary-group"
-              >
-                <strong>{{ category }}</strong>
-                <div class="secondary-line">
-                  <label
-                    v-for="(label, labelIndex) in secondaryLabelsFor(category)"
-                    :key="`${category}-${label}-${labelIndex}`"
-                    class="secondary-pill"
-                  >
-                    <input
-                      :value="label"
-                      @input="renameSecondaryLabel(category, labelIndex, ($event.target as HTMLInputElement).value)"
-                      aria-label="二级标签名称"
-                    />
-                    <button type="button" @click="removeSecondaryLabel(category, labelIndex)" title="删除二级标签">
-                      <X :size="12" />
-                    </button>
-                  </label>
-                </div>
-              </div>
-            </div>
-            <div v-else class="empty-policy-card">
-              <Tag :size="24" />
-              <p>暂无二级标签</p>
-            </div>
-            <div class="quick-add-card">
-              <label>
-                <span>新增二级标签</span>
-                <div class="inline-control stackable">
-                  <select v-model="secondaryDraft.primary">
-                    <option v-for="category in activePrimaryCategories" :key="category" :value="category">
-                      {{ category }}
-                    </option>
-                  </select>
-                  <input v-model="secondaryDraft.label" placeholder="输入二级标签名" @keydown.enter.prevent="addSecondaryLabel" />
-                  <button type="button" class="mini-icon-button add" @click="addSecondaryLabel" title="新增二级标签">
-                    <Plus :size="16" />
-                  </button>
-                </div>
-              </label>
-            </div>
-          </section>
-
-          <section v-else class="policy-tab-panel">
-            <div class="label-section-title">
-              <span>新闻结构</span>
-              <small>生成稿与 SQL 导出字段</small>
-            </div>
-            <label class="format-code-field">
-              <span>格式代码</span>
-              <input v-model="policyForm.newsFormatCode" placeholder="company_sql_v1" />
-            </label>
-            <label class="format-code-field">
-              <span>SQL category 模式</span>
-              <select v-model="policyForm.exportCategoryMode">
-                <option value="news_primary">跟随新闻一级标签（AI 十分类）</option>
-              </select>
-            </label>
-            <div class="format-field-list">
-              <label
-                v-for="(field, index) in policyForm.requiredContentFields"
-                :key="`${field}-${index}`"
-                class="tag-chip-edit format-chip"
-              >
-                <input
-                  :value="field"
-                  @input="renameContentField(index, ($event.target as HTMLInputElement).value)"
-                  aria-label="新闻内容字段"
-                />
-                <small>{{ contentFieldLabel(field) }}</small>
-                <button type="button" @click="removeContentField(index)" title="删除新闻字段">
-                  <Trash2 :size="13" />
-                </button>
-              </label>
-            </div>
-            <div class="quick-add-card">
-              <label>
-                <span>新增新闻字段</span>
-                <div class="inline-control">
-                  <input v-model="contentFieldDraft" placeholder="新增字段" @keydown.enter.prevent="addContentField" />
-                  <button type="button" class="mini-icon-button add" @click="addContentField" title="新增新闻字段">
-                    <Plus :size="16" />
-                  </button>
-                </div>
-              </label>
-            </div>
-          </section>
-        </div>
-
-        <footer class="policy-footer">
-          <div class="policy-selects">
-            <label>
-              <span>默认标签</span>
-              <select v-model="policyForm.defaultCategory">
-                <option v-for="category in activePrimaryCategories" :key="category" :value="category">
-                  {{ category }}
-                </option>
-              </select>
-            </label>
-            <label>
-              <span>兜底标签</span>
-              <select v-model="policyForm.fallbackCategory">
-                <option v-for="category in activePrimaryCategories" :key="category" :value="category">
-                  {{ category }}
-                </option>
-              </select>
-            </label>
-          </div>
-
-          <div class="policy-actions">
-            <button type="button" class="ghost-button" @click="resetPolicyCategories">恢复默认</button>
-            <button type="button" class="config-save" :disabled="savingPolicy" @click="saveWorkspacePolicy">
-              {{ savingPolicy ? "保存中" : "保存策略" }}
-            </button>
-          </div>
-        </footer>
-        </section>
-      </aside>
     </section>
   </section>
 

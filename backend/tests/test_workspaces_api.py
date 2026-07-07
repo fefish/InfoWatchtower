@@ -506,6 +506,160 @@ def test_section_management_rejects_disabling_core_sections(monkeypatch, tmp_pat
     assert missing.status_code == 404
 
 
+def test_workspace_settings_section_is_seeded_admin_only(monkeypatch, tmp_path):
+    """工作台配置中心注册为核心管理分区：所有工作台播种、min_role=admin、不可停用。"""
+    client = make_client(monkeypatch, tmp_path)
+    login = client.post("/api/auth/login", json={"username": "admin", "password": "password"})
+    assert login.status_code == 200
+
+    for workspace_code in ("planning_intel", "ai_tools"):
+        sections = client.get(f"/api/workspaces/{workspace_code}/sections")
+        assert sections.status_code == 200
+        settings_section = next(
+            item for item in sections.json() if item["section_key"] == "workspace_settings"
+        )
+        assert settings_section["name"] == "工作台配置"
+        assert settings_section["route_path"] == "/workspace-settings"
+        assert settings_section["group"] == "system"
+        assert settings_section["min_role"] == "admin"
+
+    rejected = client.patch(
+        "/api/workspaces/planning_intel/sections/workspace_settings",
+        json={"enabled": False},
+    )
+    assert rejected.status_code == 400
+    assert "cannot be disabled" in rejected.json()["detail"]
+
+    created = client.post(
+        "/api/workspaces",
+        json={"code": "settings_probe", "name": "配置探针工作台", "description": ""},
+    )
+    assert created.status_code == 201
+    probe_sections = client.get("/api/workspaces/settings_probe/sections")
+    probe_settings = next(
+        item for item in probe_sections.json() if item["section_key"] == "workspace_settings"
+    )
+    assert probe_settings["min_role"] == "admin"
+
+
+def test_sections_manage_view_lists_disabled_modules_for_admins(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+    login = client.post("/api/auth/login", json={"username": "admin", "password": "password"})
+    assert login.status_code == 200
+
+    engine = get_engine()
+    assert engine is not None
+    _register_optional_section(engine)
+
+    manage = client.get("/api/workspaces/planning_intel/sections/manage")
+    assert manage.status_code == 200
+    rows = {item["section_key"]: item for item in manage.json()}
+    # 管理视图包含默认关闭的可选模块（普通 GET /sections 看不到），核心分区带 core 标记。
+    assert rows["tool_catalog"] == {
+        "section_key": "tool_catalog",
+        "name": "工具目录",
+        "group": "system",
+        "sort_order": 95,
+        "enabled": False,
+        "core": False,
+    }
+    assert rows["workspace_settings"]["core"] is True
+    assert rows["daily_reports"]["core"] is True
+    assert rows["daily_reports"]["enabled"] is True
+
+
+def test_sections_manage_view_requires_workspace_admin(monkeypatch, tmp_path):
+    admin = make_client(monkeypatch, tmp_path)
+    login = admin.post("/api/auth/login", json={"username": "admin", "password": "password"})
+    assert login.status_code == 200
+
+    member_invite = admin.post(
+        "/api/auth/invites",
+        json={
+            "role_code": "viewer",
+            "workspaces": [{"code": "planning_intel", "workspace_role": "member"}],
+            "expires_in_days": 7,
+        },
+    )
+    assert member_invite.status_code == 200
+    member = TestClient(create_app())
+    assert member.post(
+        f"/api/auth/invites/{member_invite.json()['code']}/accept",
+        json={
+            "username": "manage-member",
+            "display_name": "分区管理成员",
+            "password": "strong-password",
+        },
+    ).status_code == 200
+
+    rejected = member.get("/api/workspaces/planning_intel/sections/manage")
+    assert rejected.status_code == 403
+
+
+def test_workspace_basic_info_is_editable_by_workspace_admin(monkeypatch, tmp_path):
+    """工作台配置中心「基本信息」卡片：owner/admin 可改名称/描述/主题域，
+    启停 enabled 仍是 super_admin 专属操作。"""
+    admin = make_client(monkeypatch, tmp_path)
+    login = admin.post("/api/auth/login", json={"username": "admin", "password": "password"})
+    assert login.status_code == 200
+
+    owner_invite = admin.post(
+        "/api/auth/invites",
+        json={
+            "role_code": "viewer",
+            "workspaces": [{"code": "planning_intel", "workspace_role": "admin"}],
+            "expires_in_days": 7,
+        },
+    )
+    assert owner_invite.status_code == 200
+    workspace_admin = TestClient(create_app())
+    assert workspace_admin.post(
+        f"/api/auth/invites/{owner_invite.json()['code']}/accept",
+        json={
+            "username": "settings-admin",
+            "display_name": "工作台配置管理员",
+            "password": "strong-password",
+        },
+    ).status_code == 200
+
+    renamed = workspace_admin.patch(
+        "/api/workspaces/planning_intel",
+        json={"name": "规划部情报中心", "description": "配置中心改描述", "default_domain_code": "ai"},
+    )
+    assert renamed.status_code == 200
+    assert renamed.json()["name"] == "规划部情报中心"
+    assert renamed.json()["description"] == "配置中心改描述"
+
+    cannot_toggle = workspace_admin.patch(
+        "/api/workspaces/planning_intel",
+        json={"enabled": False},
+    )
+    assert cannot_toggle.status_code == 403
+
+    viewer_invite = admin.post(
+        "/api/auth/invites",
+        json={
+            "role_code": "viewer",
+            "workspaces": [{"code": "planning_intel", "workspace_role": "member"}],
+            "expires_in_days": 7,
+        },
+    )
+    member = TestClient(create_app())
+    assert member.post(
+        f"/api/auth/invites/{viewer_invite.json()['code']}/accept",
+        json={
+            "username": "settings-member",
+            "display_name": "工作台普通成员",
+            "password": "strong-password",
+        },
+    ).status_code == 200
+    member_rejected = member.patch(
+        "/api/workspaces/planning_intel",
+        json={"name": "成员不能改"},
+    )
+    assert member_rejected.status_code == 403
+
+
 def test_section_management_requires_workspace_admin(monkeypatch, tmp_path):
     admin = make_client(monkeypatch, tmp_path)
     login = admin.post("/api/auth/login", json={"username": "admin", "password": "password"})

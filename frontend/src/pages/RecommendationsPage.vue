@@ -6,6 +6,7 @@ import {
   RefreshCw,
   SlidersHorizontal,
   Sparkles,
+  Tag,
   XCircle
 } from "lucide-vue-next";
 import { computed, onMounted, ref, watch } from "vue";
@@ -340,6 +341,14 @@ onMounted(() => {
           <CalendarDays :size="16" />
           <input v-model="targetDayKey" type="date" />
         </label>
+        <RouterLink
+          class="icon-button secondary"
+          to="/workspace-settings#labels"
+          title="候选池分类口径由工作台标签策略决定，在工作台配置中维护"
+        >
+          <Tag :size="17" />
+          <span>标签策略</span>
+        </RouterLink>
         <button type="button" class="icon-button secondary" :disabled="loading" @click="loadRuns">
           <RefreshCw :size="17" />
           <span>刷新</span>

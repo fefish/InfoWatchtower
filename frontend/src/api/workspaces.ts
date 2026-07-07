@@ -7,6 +7,8 @@ export interface WorkspaceRecord {
   workspace_type: string;
   default_domain_code: string;
   enabled: boolean;
+  // private（仅成员可见）| internal_public（可被发现/订阅，游客可只读浏览）
+  visibility?: string;
   current_user_workspace_role?: string | null;
 }
 
@@ -183,6 +185,37 @@ export async function fetchWorkspaceSections(workspaceCode: string): Promise<Wor
   return requestJson<WorkspaceSectionRecord[]>(`/api/workspaces/${workspaceCode}/sections`);
 }
 
+// 导航分区管理视图（workspace admin+）：包含已停用可选模块与核心分区标记，
+// 供工作台配置中心的启停 UI 使用。
+export interface WorkspaceSectionManageRecord {
+  section_key: string;
+  name: string;
+  group: string;
+  sort_order: number;
+  enabled: boolean;
+  core: boolean;
+}
+
+export async function fetchWorkspaceSectionsManage(
+  workspaceCode: string
+): Promise<WorkspaceSectionManageRecord[]> {
+  return requestJson<WorkspaceSectionManageRecord[]>(`/api/workspaces/${workspaceCode}/sections/manage`);
+}
+
+export async function updateWorkspaceSection(
+  workspaceCode: string,
+  sectionKey: string,
+  payload: { enabled: boolean }
+): Promise<{ section_key: string; name: string; enabled: boolean }> {
+  return requestJson<{ section_key: string; name: string; enabled: boolean }>(
+    `/api/workspaces/${workspaceCode}/sections/${sectionKey}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
 export async function fetchWorkspaceLabelPolicy(workspaceCode: string): Promise<WorkspaceLabelPolicy> {
   return requestJson<WorkspaceLabelPolicy>(`/api/workspaces/${workspaceCode}/label-policy`);
 }
@@ -222,5 +255,47 @@ export async function updateWorkspaceFeedbackPolicy(
   return requestJson<WorkspaceFeedbackPolicy>(`/api/workspaces/${workspaceCode}/feedback-policy`, {
     method: "PATCH",
     body: JSON.stringify(payload)
+  });
+}
+
+// --- 工作台发现与自助订阅（visibility=internal_public） ---
+
+export interface DiscoverableWorkspaceRecord {
+  code: string;
+  name: string;
+  description: string;
+  member_count: number;
+  // 当前用户是否已有 membership（游客恒为 false：游客按隐式 viewer 视角浏览）
+  joined: boolean;
+  workspace_role: string | null;
+}
+
+export async function fetchDiscoverableWorkspaces(): Promise<DiscoverableWorkspaceRecord[]> {
+  return requestJson<DiscoverableWorkspaceRecord[]>("/api/workspaces/discover");
+}
+
+export interface WorkspaceSubscriptionRecord {
+  workspace_code: string;
+  workspace_role: string;
+  subscribed: boolean;
+}
+
+export async function subscribeWorkspace(workspaceCode: string): Promise<WorkspaceSubscriptionRecord> {
+  return requestJson<WorkspaceSubscriptionRecord>(`/api/workspaces/${workspaceCode}/subscribe`, {
+    method: "POST"
+  });
+}
+
+export async function unsubscribeWorkspace(workspaceCode: string): Promise<void> {
+  await requestVoid(`/api/workspaces/${workspaceCode}/subscribe`, { method: "DELETE" });
+}
+
+export async function updateWorkspaceVisibility(
+  workspaceCode: string,
+  visibility: "private" | "internal_public"
+): Promise<WorkspaceRecord> {
+  return requestJson<WorkspaceRecord>(`/api/workspaces/${workspaceCode}/visibility`, {
+    method: "PATCH",
+    body: JSON.stringify({ visibility })
   });
 }

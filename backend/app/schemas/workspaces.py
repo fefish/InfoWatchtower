@@ -20,6 +20,8 @@ class WorkspaceRead(BaseModel):
     workspace_type: str
     default_domain_code: str
     enabled: bool = True
+    # private（仅成员可见）| internal_public（登录用户可发现/订阅，游客可只读浏览）
+    visibility: str = "private"
     current_user_workspace_role: str | None = None
 
 
@@ -116,6 +118,29 @@ class WorkspaceReportPolicyRead(BaseModel):
 
 class WorkspaceReportPolicyUpdate(BaseModel):
     auto_publish_daily: bool = True
+
+
+class WorkspaceDiscoverRead(BaseModel):
+    """GET /api/workspaces/discover 的条目：登录用户可见的 internal_public 工作台。"""
+
+    code: str
+    name: str
+    description: str
+    member_count: int
+    # 当前用户是否已有 enabled membership（游客恒为 False：游客不建 membership）
+    joined: bool
+    # 已加入时的工作台角色；游客对 internal_public 返回 "viewer"（隐式只读视角）
+    workspace_role: str | None = None
+
+
+class WorkspaceSubscriptionRead(BaseModel):
+    workspace_code: str
+    workspace_role: str
+    subscribed: bool = True
+
+
+class WorkspaceVisibilityUpdate(BaseModel):
+    visibility: str = Field(pattern=r"^(private|internal_public)$")
 
 
 class WorkspaceDepartmentMembershipTarget(BaseModel):

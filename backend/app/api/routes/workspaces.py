@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.routes.auth import assert_workspace_member, get_current_user, require_super_admin
+from app.auth.guest import is_guest_user
 from app.auth.service import (
     CORE_WORKSPACE_SECTIONS,
     DEFAULT_WORKSPACE_FEEDBACK_POLICY,
@@ -27,6 +28,7 @@ from app.schemas.workspaces import (
     WorkspaceAuthMembershipMappingUpdate,
     WorkspaceCreate,
     WorkspaceDepartmentMembershipTarget,
+    WorkspaceDiscoverRead,
     WorkspaceFeedbackPolicyRead,
     WorkspaceFeedbackPolicyUpdate,
     WorkspaceLabelPolicyRead,
@@ -37,7 +39,9 @@ from app.schemas.workspaces import (
     WorkspaceReportPolicyRead,
     WorkspaceReportPolicyUpdate,
     WorkspaceSectionRead,
+    WorkspaceSubscriptionRead,
     WorkspaceUpdate,
+    WorkspaceVisibilityUpdate,
 )
 
 router = APIRouter(prefix="/api/workspaces", tags=["workspaces"])
@@ -62,6 +66,17 @@ class WorkspaceSectionManageRead(BaseModel):
     section_key: str
     name: str
     enabled: bool
+
+
+class WorkspaceSectionManageItem(BaseModel):
+    """工作台配置中心「导航分区」卡片的管理视图：含停用分区与核心标记。"""
+
+    section_key: str
+    name: str
+    group: str
+    sort_order: int
+    enabled: bool
+    core: bool
 
 
 def _global_role_codes(user: User) -> set[str]:
@@ -105,7 +120,11 @@ def list_workspaces(
     session: Session = Depends(get_db_session),
 ) -> list[WorkspaceRead]:
     statement = select(Workspace).where(Workspace.enabled.is_(True))
-    if not _is_super_admin(current_user):
+    if is_guest_user(current_user):
+        # 游客不持有 membership：按隐式 viewer 视角列出全部 internal_public 工作台
+        # （语义见 app/auth/guest.py），private 工作台对游客不可见。
+        statement = statement.where(Workspace.visibility == "internal_public")
+    elif not _is_super_admin(current_user):
         statement = (
             statement.join(WorkspaceMembership, WorkspaceMembership.workspace_id == Workspace.id)
             .where(
@@ -168,12 +187,20 @@ def create_workspace(
 def update_workspace(
     workspace_code: str,
     payload: WorkspaceUpdate,
-    current_user: User = Depends(require_super_admin),
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> WorkspaceRead:
+    """工作台基本信息（名称/描述/默认主题域）由工作台 admin/owner 维护
+    （工作台配置中心「基本信息」卡片）；启停 `enabled` 属于全局生命周期
+    操作，仍只允许 super_admin。
+    """
     workspace = session.scalar(select(Workspace).where(Workspace.code == workspace_code))
     if workspace is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
+    if payload.enabled is not None and not _is_super_admin(current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Requires super_admin")
+    if not _is_super_admin(current_user):
+        assert_workspace_member(session, current_user, workspace.code, min_role="admin")
 
     changes: dict[str, object] = {}
     if payload.name is not None:
@@ -420,6 +447,36 @@ def list_workspace_sections(
     ]
 
 
+@router.get("/{workspace_code}/sections/manage", response_model=list[WorkspaceSectionManageItem])
+def list_workspace_sections_manage(
+    workspace_code: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> list[WorkspaceSectionManageItem]:
+    """导航分区管理视图（workspace admin+）：与 GET /sections 不同，
+    包含已停用的可选模块（否则停用后无法再启用）并标记核心分区。
+    """
+    workspace = _get_enabled_workspace(session, workspace_code)
+    assert_workspace_member(session, current_user, workspace.code, min_role="admin")
+    core_keys = _core_section_keys(workspace.code)
+    sections = session.scalars(
+        select(WorkspaceSection)
+        .where(WorkspaceSection.workspace_id == workspace.id)
+        .order_by(WorkspaceSection.sort_order, WorkspaceSection.section_key),
+    ).all()
+    return [
+        WorkspaceSectionManageItem(
+            section_key=section.section_key,
+            name=section.name,
+            group=str((section.config_json or {}).get("group") or "system"),
+            sort_order=section.sort_order,
+            enabled=_section_effective_enabled(section),
+            core=section.section_key in core_keys,
+        )
+        for section in sections
+    ]
+
+
 @router.patch("/{workspace_code}/sections/{section_key}", response_model=WorkspaceSectionManageRead)
 def update_workspace_section(
     workspace_code: str,
@@ -642,6 +699,220 @@ def _workspace_report_policy_to_read(workspace: Workspace) -> WorkspaceReportPol
     )
 
 
+# --- 工作台发现与自助订阅（visibility=internal_public，规格见 workspace_model 契约） ---
+
+
+@router.get("/discover", response_model=list[WorkspaceDiscoverRead])
+def discover_workspaces(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> list[WorkspaceDiscoverRead]:
+    """登录用户可发现的 internal_public 工作台列表（含是否已加入与成员数）。
+
+    private 工作台永不出现在发现列表（不泄露存在性）。游客可浏览该列表，
+    但 joined 恒为 False 且不能订阅（共享游客账号不建 membership）。
+    """
+    workspaces = session.scalars(
+        select(Workspace).where(
+            Workspace.enabled.is_(True),
+            Workspace.visibility == "internal_public",
+        ),
+    ).all()
+    workspaces = sorted(
+        workspaces,
+        key=lambda workspace: (
+            (workspace.config_json or {}).get("sort_order", 1000),
+            workspace.code,
+        ),
+    )
+    guest = is_guest_user(current_user)
+    items: list[WorkspaceDiscoverRead] = []
+    for workspace in workspaces:
+        membership = None
+        if not guest:
+            membership = session.scalar(
+                select(WorkspaceMembership).where(
+                    WorkspaceMembership.workspace_id == workspace.id,
+                    WorkspaceMembership.user_id == current_user.id,
+                    WorkspaceMembership.enabled.is_(True),
+                ),
+            )
+        items.append(
+            WorkspaceDiscoverRead(
+                code=workspace.code,
+                name=workspace.name,
+                description=workspace.description,
+                member_count=_workspace_member_count(session, workspace),
+                joined=membership is not None,
+                workspace_role=(
+                    "viewer" if guest else (membership.workspace_role if membership else None)
+                ),
+            ),
+        )
+    return items
+
+
+@router.post("/{workspace_code}/subscribe", response_model=WorkspaceSubscriptionRead)
+def subscribe_workspace(
+    workspace_code: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> WorkspaceSubscriptionRead:
+    """登录用户自助订阅 internal_public 工作台，成为 viewer member（幂等）。
+
+    - private 或不存在的工作台一律 404，不泄露存在性；
+    - 已是成员时不改动既有角色，直接返回当前 membership；
+    - 曾被移出（membership disabled）的用户可重新以 viewer 订阅；
+    - 游客在 get_current_user 的集中写门禁被 403 拦截（注册后可订阅）。
+    """
+    workspace = _get_subscribable_workspace(session, workspace_code)
+    membership = session.scalar(
+        select(WorkspaceMembership).where(
+            WorkspaceMembership.workspace_id == workspace.id,
+            WorkspaceMembership.user_id == current_user.id,
+        ),
+    )
+    if membership is not None and membership.enabled:
+        return WorkspaceSubscriptionRead(
+            workspace_code=workspace.code,
+            workspace_role=membership.workspace_role,
+            subscribed=True,
+        )
+    before_membership = _membership_snapshot(membership)
+    if membership is None:
+        membership = WorkspaceMembership(
+            workspace_id=workspace.id,
+            user_id=current_user.id,
+            workspace_role="viewer",
+            enabled=True,
+        )
+        session.add(membership)
+    else:
+        membership.workspace_role = "viewer"
+        membership.enabled = True
+    write_audit(
+        session,
+        current_user,
+        action="workspace.member.subscribe",
+        object_type="workspace",
+        object_id=workspace.id,
+        detail={
+            "workspace_code": workspace.code,
+            "user_id": current_user.id,
+            "before": before_membership,
+            "after": _membership_snapshot(membership),
+        },
+    )
+    session.commit()
+    session.refresh(membership)
+    return WorkspaceSubscriptionRead(
+        workspace_code=workspace.code,
+        workspace_role=membership.workspace_role,
+        subscribed=True,
+    )
+
+
+@router.delete("/{workspace_code}/subscribe", status_code=status.HTTP_204_NO_CONTENT)
+def unsubscribe_workspace(
+    workspace_code: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> Response:
+    """退订：移除自己的 viewer membership（幂等）。
+
+    角色高于 viewer 的成员由管理员管理（400），避免 owner/admin 自助退订
+    绕过「最后一个 owner」等成员管理保护。
+    """
+    workspace = _get_enabled_workspace(session, workspace_code)
+    membership = session.scalar(
+        select(WorkspaceMembership).where(
+            WorkspaceMembership.workspace_id == workspace.id,
+            WorkspaceMembership.user_id == current_user.id,
+            WorkspaceMembership.enabled.is_(True),
+        ),
+    )
+    if membership is None:
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    if membership.workspace_role != "viewer":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Roles above viewer are managed by workspace admins",
+        )
+    before_membership = _membership_snapshot(membership)
+    membership.enabled = False
+    write_audit(
+        session,
+        current_user,
+        action="workspace.member.unsubscribe",
+        object_type="workspace",
+        object_id=workspace.id,
+        detail={
+            "workspace_code": workspace.code,
+            "user_id": current_user.id,
+            "before": before_membership,
+            "after": _membership_snapshot(membership),
+        },
+    )
+    session.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.patch("/{workspace_code}/visibility", response_model=WorkspaceRead)
+def update_workspace_visibility(
+    workspace_code: str,
+    payload: WorkspaceVisibilityUpdate,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> WorkspaceRead:
+    """工作台可见性（owner/admin）：private 仅成员可见；internal_public 可被
+    登录用户发现/订阅、被游客只读浏览。种子只赋初值，此处的决定不被重播种回滚。
+    """
+    workspace = _get_enabled_workspace(session, workspace_code)
+    assert_workspace_member(session, current_user, workspace.code, min_role="admin")
+    before = workspace.visibility
+    workspace.visibility = payload.visibility
+    write_audit(
+        session,
+        current_user,
+        action="workspace.visibility.update",
+        object_type="workspace",
+        object_id=workspace.id,
+        detail={
+            "workspace_code": workspace.code,
+            "before": {"visibility": before},
+            "after": {"visibility": payload.visibility},
+        },
+    )
+    session.commit()
+    session.refresh(workspace)
+    return _workspace_to_read(workspace, current_user=current_user, session=session)
+
+
+def _get_subscribable_workspace(session: Session, workspace_code: str) -> Workspace:
+    workspace = session.scalar(
+        select(Workspace).where(
+            Workspace.code == workspace_code,
+            Workspace.enabled.is_(True),
+        ),
+    )
+    if workspace is None or workspace.visibility != "internal_public":
+        # private 与不存在同响应：不向非成员泄露工作台存在性
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
+    return workspace
+
+
+def _workspace_member_count(session: Session, workspace: Workspace) -> int:
+    value = session.scalar(
+        select(func.count())
+        .select_from(WorkspaceMembership)
+        .where(
+            WorkspaceMembership.workspace_id == workspace.id,
+            WorkspaceMembership.enabled.is_(True),
+        ),
+    )
+    return int(value or 0)
+
+
 def _get_enabled_workspace(session: Session, workspace_code: str) -> Workspace:
     workspace = session.scalar(
         select(Workspace).where(
@@ -720,6 +991,7 @@ def _workspace_to_read(
         workspace_type=workspace.workspace_type,
         default_domain_code=workspace.default_domain_code,
         enabled=workspace.enabled,
+        visibility=workspace.visibility,
         current_user_workspace_role=_current_workspace_role(session, workspace, current_user),
     )
 
@@ -731,6 +1003,9 @@ def _current_workspace_role(
 ) -> str | None:
     if current_user is None:
         return None
+    if is_guest_user(current_user):
+        # 游客隐式 viewer 视角（不建 membership）；前端导航/路由守卫按 viewer 过滤。
+        return "viewer" if workspace.visibility == "internal_public" else None
     if session is None:
         return "owner" if _is_super_admin(current_user) else None
     membership = session.scalar(

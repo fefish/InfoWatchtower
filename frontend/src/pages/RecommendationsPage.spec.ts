@@ -90,7 +90,13 @@ function mountPage() {
 
   return mount(RecommendationsPage, {
     global: {
-      plugins: [pinia]
+      plugins: [pinia],
+      stubs: {
+        RouterLink: {
+          props: ["to"],
+          template: '<a :href="typeof to === \'string\' ? to : \'#\'"><slot /></a>'
+        }
+      }
     }
   });
 }
@@ -168,6 +174,17 @@ describe("RecommendationsPage", () => {
     expect(wrapper.text()).toContain("topic 40");
     expect(wrapper.text()).toContain("12 条规则");
     expect(wrapper.text()).toContain("commercial_finance");
+  });
+
+  it("links the page header to the label policy card in workspace settings", async () => {
+    // 候选池的“标签策略”心智入口：跳工作台配置中心的标签卡片锚点，不再有第二份编辑面板。
+    const wrapper = mountPage();
+    await flushPromises();
+
+    const link = wrapper.find('a[href="/workspace-settings#labels"]');
+    expect(link.exists()).toBe(true);
+    expect(link.text()).toContain("标签策略");
+    expect(wrapper.find(".policy-panel").exists()).toBe(false);
   });
 
   it("previews a scorer result without creating a recommendation run", async () => {

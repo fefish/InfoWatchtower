@@ -25,6 +25,7 @@ import SetupPage from "../pages/SetupPage.vue";
 import TopicTasksPage from "../pages/TopicTasksPage.vue";
 import UsersPage from "../pages/UsersPage.vue";
 import WeeklyReportsPage from "../pages/WeeklyReportsPage.vue";
+import WorkspaceSettingsPage from "../pages/WorkspaceSettingsPage.vue";
 import { useRuntimeStore } from "../stores/runtime";
 import { useSessionStore } from "../stores/session";
 import { useSetupStore } from "../stores/setup";
@@ -174,6 +175,11 @@ export const routes: RouteRecordRaw[] = [
           path: "sync",
           name: "sync",
           component: SyncRunsPage
+        },
+        {
+          path: "workspace-settings",
+          name: "workspace-settings",
+          component: WorkspaceSettingsPage
         },
         {
           path: "audit-logs",

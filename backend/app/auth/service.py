@@ -58,6 +58,9 @@ WORKSPACE_DEFINITIONS = {
         "default_domain_code": "ai",
         "sort_order": 10,
         "extra_sections": [],
+        # 建台初值：对登录用户开放发现/订阅（含游客只读浏览）。仅首次创建时写入，
+        # 之后由 PATCH /api/workspaces/{code}/visibility 管理，重播种不回滚。
+        "visibility": "internal_public",
     },
     "ai_tools": {
         "name": "AI 工具桌面",
@@ -66,6 +69,7 @@ WORKSPACE_DEFINITIONS = {
         "default_domain_code": "ai",
         "sort_order": 20,
         "extra_sections": [],
+        "visibility": "private",
     },
 }
 
@@ -134,9 +138,17 @@ CORE_WORKSPACE_SECTIONS = [
     ("topic_tasks", "指派任务", "page", "/tasks", 60, "collab"),
     ("sync", "同步", "page", "/sync", 68, "system"),
     ("exports", "SQL导出", "page", "/exports", 70, "system"),
+    ("workspace_settings", "工作台配置", "page", "/workspace-settings", 75, "system"),
     ("users", "用户权限", "page", "/users", 80, "system"),
     ("audit_logs", "审计", "page", "/audit-logs", 90, "system"),
 ]
+
+# 分区可见的最低工作台角色种子（写入 config_json.min_role，读取侧由
+# workspaces 路由 _section_min_role 解析）。工作台配置中心是管理面板，
+# 只对 admin/owner 暴露；其余分区沿用「阅读分区 viewer / 管理分区 member」默认。
+SECTION_MIN_ROLE_SEED = {
+    "workspace_settings": "admin",
+}
 
 
 @dataclass(frozen=True)
@@ -825,6 +837,9 @@ def _ensure_workspaces(session: Session) -> dict[str, Workspace]:
                 workspace_type=definition["workspace_type"],
                 default_domain_code=definition["default_domain_code"],
                 enabled=True,
+                # visibility 只在建台时赋种子初值；已存在的工作台不回滚
+                # 用户通过 visibility API 做出的公开/私有决定。
+                visibility=str(definition.get("visibility") or "private"),
             )
             session.add(workspace)
             existing[code] = workspace
@@ -919,6 +934,10 @@ def _ensure_workspace_sections(
     existing = {section.section_key: section for section in workspace.sections}
     desired_keys = {section_key for section_key, *_ in section_definitions}
     for section_key, name, section_type, route_path, sort_order, group in section_definitions:
+        seeded_config: dict = {"group": group}
+        min_role = SECTION_MIN_ROLE_SEED.get(section_key)
+        if min_role is not None:
+            seeded_config["min_role"] = min_role
         section = existing.get(section_key)
         if section is None:
             section = WorkspaceSection(
@@ -929,7 +948,7 @@ def _ensure_workspace_sections(
                 route_path=route_path,
                 sort_order=sort_order,
                 enabled=True,
-                config_json={"group": group},
+                config_json=seeded_config,
             )
             session.add(section)
         else:
@@ -938,7 +957,7 @@ def _ensure_workspace_sections(
             section.route_path = route_path
             section.sort_order = sort_order
             section.enabled = True
-            section.config_json = {**(section.config_json or {}), "group": group}
+            section.config_json = {**(section.config_json or {}), **seeded_config}
 
     for section_key, section in existing.items():
         if section_key not in desired_keys:

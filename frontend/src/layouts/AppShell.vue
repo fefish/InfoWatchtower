@@ -17,6 +17,7 @@ import {
   Plus,
   Radio,
   Search,
+  Settings,
   ShieldCheck,
   SquareStack,
   GitCompareArrows,
@@ -40,6 +41,7 @@ import {
   updateWorkspaceLabelPolicy,
   type WorkspaceLabelPolicyUpdate
 } from "../api/workspaces";
+import WorkspaceDiscovery from "../components/WorkspaceDiscovery.vue";
 import { useRuntimeStore } from "../stores/runtime";
 import { useSessionStore } from "../stores/session";
 import { useWorkspaceStore } from "../stores/workspace";
@@ -296,6 +298,7 @@ const sectionIcons = {
   topic_tasks: SquareStack,
   sync: GitCompareArrows,
   exports: Database,
+  workspace_settings: Settings,
   users: Users,
   audit_logs: ShieldCheck
 } as const;
@@ -316,6 +319,14 @@ const effectiveWorkspaceRole = computed(() => {
   }
   return workspace.currentRole ?? "viewer";
 });
+
+// 工作台配置中心入口（切换器旁齿轮）：admin/owner 可见，与
+// workspace_settings 分区的 min_role=admin 口径一致。
+const canOpenWorkspaceSettings = computed(
+  () =>
+    Boolean(workspace.currentCode) &&
+    (workspaceRoleRank[effectiveWorkspaceRole.value] ?? 0) >= workspaceRoleRank.admin
+);
 
 const navItems = computed(() =>
   workspace.sections
@@ -601,17 +612,28 @@ async function logout() {
       </div>
 
       <nav class="nav-list" aria-label="主导航">
-        <label class="workspace-switcher">
-          <span>工作台</span>
-          <select
-            :value="workspace.currentCode"
-            @change="workspace.setWorkspace(($event.target as HTMLSelectElement).value)"
+        <div class="workspace-switcher-row">
+          <label class="workspace-switcher">
+            <span>工作台</span>
+            <select
+              :value="workspace.currentCode"
+              @change="workspace.setWorkspace(($event.target as HTMLSelectElement).value)"
+            >
+              <option v-for="item in workspace.options" :key="item.code" :value="item.code">
+                {{ item.name }}
+              </option>
+            </select>
+          </label>
+          <RouterLink
+            v-if="canOpenWorkspaceSettings"
+            class="workspace-settings-link"
+            to="/workspace-settings"
+            aria-label="工作台配置"
+            title="工作台配置"
           >
-            <option v-for="item in workspace.options" :key="item.code" :value="item.code">
-              {{ item.name }}
-            </option>
-          </select>
-        </label>
+            <Settings :size="16" />
+          </RouterLink>
+        </div>
         <button
           v-if="canCreateWorkspace"
           type="button"
@@ -622,6 +644,7 @@ async function logout() {
           <Plus :size="14" />
           <span>新建工作台</span>
         </button>
+        <WorkspaceDiscovery />
 
         <div v-for="group in navGroups" :key="group.key" class="nav-group">
           <p class="nav-group-title">{{ group.label }}</p>

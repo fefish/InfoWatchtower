@@ -14,9 +14,7 @@ const api = vi.hoisted(() => ({
   fetchSource: vi.fn(),
   createSource: vi.fn(),
   updateSourceDefinition: vi.fn(),
-  updateSourceWorkspaceConfig: vi.fn(),
-  fetchWorkspaceLabelPolicy: vi.fn(),
-  updateWorkspaceLabelPolicy: vi.fn()
+  updateSourceWorkspaceConfig: vi.fn()
 }));
 
 vi.mock("../api/sources", () => ({
@@ -29,32 +27,6 @@ vi.mock("../api/sources", () => ({
   updateSourceDefinition: api.updateSourceDefinition,
   updateSourceWorkspaceConfig: api.updateSourceWorkspaceConfig
 }));
-
-vi.mock("../api/workspaces", () => ({
-  fetchWorkspaceLabelPolicy: api.fetchWorkspaceLabelPolicy,
-  updateWorkspaceLabelPolicy: api.updateWorkspaceLabelPolicy
-}));
-
-function labelPolicy() {
-  return {
-    workspace_code: "planning_intel",
-    label_set_code: "ai_sql_categories",
-    news_format_code: "company_sql_v1",
-    export_category_mode: "news_primary",
-    required_content_fields: [
-      "background",
-      "effects",
-      "eventSummary",
-      "technologyAndInnovation",
-      "valueAndImpact"
-    ],
-    allowed_primary_categories: ["AI 应用", "模型"],
-    secondary_labels_by_primary: {},
-    default_category: "AI 应用",
-    fallback_category: "AI 应用",
-    tagging_stages: ["generation"]
-  };
-}
 
 function sourceRecord(overrides: Record<string, unknown> = {}) {
   return {
@@ -135,7 +107,6 @@ function mountPage(
     search: true
   };
 
-  api.fetchWorkspaceLabelPolicy.mockResolvedValue(labelPolicy());
   if (options.sourcesError) {
     api.fetchSources.mockRejectedValue(options.sourcesError);
   } else {
@@ -396,25 +367,20 @@ describe("SourcesPage", () => {
     expect(wrapper.text()).toContain("已创建信息源：Semantic Scholar AI API");
   });
 
-  it("shows an error instead of a success message when label policy save fails", async () => {
-    api.updateWorkspaceLabelPolicy.mockRejectedValue(new Error("permission denied"));
-    const wrapper = mountPage();
+  it("no longer renders the label policy panel and points to the workspace settings center", async () => {
+    // IA 修复：标签策略从数据源管理搬到工作台配置中心，这里只留说明与入口链接。
+    const wrapper = mountPage({ sources: [sourceRecord()] });
     await flushPromises();
 
-    await buttonByText(wrapper, "保存策略").trigger("click");
-    await flushPromises();
+    expect(wrapper.find(".policy-panel").exists()).toBe(false);
+    expect(wrapper.find(".control-rail").exists()).toBe(false);
+    expect(wrapper.findAll("button").some((button) => button.text().includes("保存策略"))).toBe(false);
 
-    expect(api.updateWorkspaceLabelPolicy).toHaveBeenCalledWith(
-      "planning_intel",
-      expect.objectContaining({
-        label_set_code: "ai_sql_categories",
-        news_format_code: "company_sql_v1",
-        allowed_primary_categories: ["AI 应用", "模型"]
-      })
-    );
-    expect(wrapper.find(".form-error").text()).toContain("permission denied");
-    expect(wrapper.find(".form-success").exists()).toBe(false);
-    expect(wrapper.text()).not.toContain("已保存：规划部情报工作台 的统一标签策略");
+    const note = wrapper.find(".sources-policy-note");
+    expect(note.text()).toContain("标签策略与报告格式已移至");
+    const link = note.find('a[href="/workspace-settings#labels"]');
+    expect(link.exists()).toBe(true);
+    expect(link.text()).toContain("工作台配置");
   });
 
   it("shows the membership permission error when the source list request is rejected", async () => {
@@ -432,7 +398,6 @@ describe("SourcesPage", () => {
 
     // 空 workspace 列表（无任何成员身份）：不发起数据请求，首屏保留空态引导而不是白屏。
     expect(api.fetchSources).not.toHaveBeenCalled();
-    expect(api.fetchWorkspaceLabelPolicy).not.toHaveBeenCalled();
     expect(wrapper.find(".empty-state").text()).toContain("暂无数据源");
   });
 });

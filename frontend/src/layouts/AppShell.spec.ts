@@ -19,7 +19,10 @@ const workspaceApi = vi.hoisted(() => ({
   fetchWorkspaces: vi.fn(),
   fetchWorkspaceSections: vi.fn(),
   createWorkspace: vi.fn(),
-  updateWorkspaceLabelPolicy: vi.fn()
+  updateWorkspaceLabelPolicy: vi.fn(),
+  fetchDiscoverableWorkspaces: vi.fn(),
+  subscribeWorkspace: vi.fn(),
+  unsubscribeWorkspace: vi.fn()
 }));
 
 const sourceApi = vi.hoisted(() => ({
@@ -55,7 +58,10 @@ vi.mock("../api/workspaces", () => ({
   createWorkspace: workspaceApi.createWorkspace,
   fetchWorkspaces: workspaceApi.fetchWorkspaces,
   fetchWorkspaceSections: workspaceApi.fetchWorkspaceSections,
-  updateWorkspaceLabelPolicy: workspaceApi.updateWorkspaceLabelPolicy
+  updateWorkspaceLabelPolicy: workspaceApi.updateWorkspaceLabelPolicy,
+  fetchDiscoverableWorkspaces: workspaceApi.fetchDiscoverableWorkspaces,
+  subscribeWorkspace: workspaceApi.subscribeWorkspace,
+  unsubscribeWorkspace: workspaceApi.unsubscribeWorkspace
 }));
 
 vi.mock("../api/sources", () => ({
@@ -374,6 +380,45 @@ describe("AppShell", () => {
     await flushPromises();
 
     expect(wrapper.findAll(".nav-item").map((item) => item.text())).toEqual(["数据源管理", "日报"]);
+  });
+
+  it("shows the workspace settings gear next to the switcher for workspace admins", async () => {
+    const wrapper = mountShell();
+    await flushPromises();
+
+    const gear = wrapper.find(".workspace-switcher-row .workspace-settings-link");
+    expect(gear.exists()).toBe(true);
+    expect(gear.attributes("href")).toBe("/workspace-settings");
+    expect(gear.attributes("aria-label")).toBe("工作台配置");
+  });
+
+  it("hides the workspace settings gear for members and viewers", async () => {
+    for (const role of ["member", "viewer"]) {
+      const wrapper = mountShell({
+        userRoles: ["viewer"],
+        workspaces: [planningWorkspace(role)]
+      });
+      await flushPromises();
+
+      expect(wrapper.find(".workspace-settings-link").exists()).toBe(false);
+    }
+  });
+
+  it("mounts the workspace discovery entry below the workspace switcher", async () => {
+    workspaceApi.fetchDiscoverableWorkspaces.mockResolvedValue([]);
+    const wrapper = mountShell();
+    await flushPromises();
+
+    // 「发现工作台」是独立组件（WorkspaceDiscovery.vue），AppShell 只挂一行；
+    // 抽屉行为详见 components/WorkspaceDiscovery.spec.ts。
+    const entry = wrapper.find(".workspace-discovery-button");
+    expect(entry.exists()).toBe(true);
+    expect(entry.text()).toContain("发现工作台");
+    expect(workspaceApi.fetchDiscoverableWorkspaces).not.toHaveBeenCalled();
+
+    await entry.trigger("click");
+    await flushPromises();
+    expect(workspaceApi.fetchDiscoverableWorkspaces).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the create-workspace entry as first-screen guidance when the user has no workspace", async () => {
