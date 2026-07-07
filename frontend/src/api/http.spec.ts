@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { apiUrl, readCsrfToken, requestJson, requestRaw } from "./http";
+import { apiUrl, onUnauthorized, readCsrfToken, requestJson, requestRaw, requestVoid } from "./http";
 
 const CSRF_COOKIE_NAME = "infowatchtower_csrf";
 const CSRF_HEADER_NAME = "X-CSRF-Token";
@@ -47,6 +47,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
   clearCsrfCookie();
+  onUnauthorized(null);
 });
 
 describe("apiUrl", () => {
@@ -132,6 +133,58 @@ describe("requestJson", () => {
   it("ok 时返回解析后的 JSON", async () => {
     fetchMock.mockResolvedValue(jsonResponse({ value: 1 }));
     await expect(requestJson<{ value: number }>("/api/example")).resolves.toEqual({ value: 1 });
+  });
+});
+
+describe("onUnauthorized 全局 401 联动", () => {
+  it("业务 API 收到 401 时触发回调并仍然抛错", async () => {
+    const handler = vi.fn();
+    onUnauthorized(handler);
+    fetchMock.mockResolvedValue(jsonResponse({ detail: "unauthenticated" }, 401));
+
+    await expect(requestJson("/api/news/items")).rejects.toThrow("unauthenticated");
+    expect(handler).toHaveBeenCalledWith("/api/news/items");
+  });
+
+  it("requestVoid 收到 401 同样触发回调", async () => {
+    const handler = vi.fn();
+    onUnauthorized(handler);
+    fetchMock.mockResolvedValue(jsonResponse({ detail: "unauthenticated" }, 401));
+
+    await expect(requestVoid("/api/notifications/1", { method: "DELETE" })).rejects.toThrow("unauthenticated");
+    expect(handler).toHaveBeenCalledWith("/api/notifications/1");
+  });
+
+  it("登录本身 401（密码错误）不触发全局回调", async () => {
+    const handler = vi.fn();
+    onUnauthorized(handler);
+    fetchMock.mockResolvedValue(jsonResponse({ detail: "invalid_credentials" }, 401));
+
+    await expect(requestJson("/api/auth/login", { method: "POST" })).rejects.toThrow("invalid_credentials");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("/api/auth/me 探活 401（未登录判定）不触发全局回调", async () => {
+    const handler = vi.fn();
+    onUnauthorized(handler);
+    fetchMock.mockResolvedValue(jsonResponse({ detail: "unauthenticated" }, 401));
+
+    await expect(requestJson("/api/auth/me")).rejects.toThrow("unauthenticated");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("非 401 错误不触发回调", async () => {
+    const handler = vi.fn();
+    onUnauthorized(handler);
+    fetchMock.mockResolvedValue(jsonResponse({ detail: "forbidden" }, 403));
+
+    await expect(requestJson("/api/news/items")).rejects.toThrow("forbidden");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("未注册回调时 401 只抛错不崩溃", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ detail: "unauthenticated" }, 401));
+    await expect(requestJson("/api/news/items")).rejects.toThrow("unauthenticated");
   });
 });
 

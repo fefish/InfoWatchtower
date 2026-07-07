@@ -5,6 +5,7 @@ import {
   DownloadCloud,
   FileText,
   Globe2,
+  MessageCircle,
   Monitor,
   Plus,
   RefreshCw,
@@ -273,6 +274,34 @@ function closeImportPreview() {
   importPreview.value = null;
 }
 
+function previewTypeNote(type: string) {
+  if (type === "manual" || type === "internal") {
+    return PUSH_BASED_HINT;
+  }
+  if (type === "wechat") {
+    return "微信公众号源导入后保持待配置（metadata-only），需等待 RSSHub 公众号入口或 wechat 桥就绪后启用抓取";
+  }
+  return "";
+}
+
+// 导入预览样本按 source_type 分组小计：推入式/微信待配置类型附语义提示，
+// 避免导入后把这些源的 0 条抓取误读为失败。
+const importPreviewGroups = computed(() => {
+  const preview = importPreview.value;
+  if (!preview) {
+    return [];
+  }
+  const groups = new Map<string, SourceImportPreview["samples"]>();
+  for (const sample of preview.samples) {
+    const list = groups.get(sample.source_type) ?? [];
+    list.push(sample);
+    groups.set(sample.source_type, list);
+  }
+  return Array.from(groups.entries())
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([type, samples]) => ({ type, samples, note: previewTypeNote(type) }));
+});
+
 async function confirmImport() {
   if (!importPreview.value || !canManageIngestion.value) {
     return;
@@ -353,15 +382,39 @@ function shortExpertRoutes(source: DataSourceRecord) {
   return source.expert_routes.slice(0, 2).join(" / ");
 }
 
+// 推入式源语义（backend-capability-test-matrix §3.1）：manual/internal（未配 api_url）
+// 的条目由手工导入/内部系统写入，定时抓取如实返回 0 条新增是正常行为，不是源坏了。
+const PUSH_BASED_HINT = "推入式源：由手工导入/内部系统写入，定时抓取 0 条是正常行为";
+const WECHAT_PENDING_HINT =
+  "微信公众号源待配置：需就绪 RSSHub 公众号路由（RSSHUB_BASE_URL）或文章 URL 入口后才能抓取";
+
+function isPushBasedSource(source: DataSourceRecord) {
+  if (source.source_type === "manual") {
+    return true;
+  }
+  // internal 配置 fetch_config.api_url 后会升级为拉取器；API 未暴露 fetch_config，
+  // 前端以 url 入口作为「可拉取」代理信号：无 URL 视为纯推入式。
+  return source.source_type === "internal" && !source.url;
+}
+
+function isPendingWechatSource(source: DataSourceRecord) {
+  return source.source_type === "wechat" && (source.needs_entry || source.metadata_only);
+}
+
 function sourceTypeLabel(type: string) {
   const labels: Record<string, string> = {
     rss: "RSS",
     paper_rss: "论文 RSS",
     paper_api: "论文 API",
+    paper_page: "论文页面",
     wiseflow: "Wiseflow",
+    crawler: "自定义爬虫",
     page_manual: "页面手工",
     page_monitor: "页面监控",
-    csv: "CSV"
+    csv: "CSV",
+    manual: "手工导入",
+    internal: "内部系统",
+    wechat: "微信公众号"
   };
   return labels[type] ?? type;
 }
@@ -371,10 +424,15 @@ function sourceIcon(type: string) {
     rss: Rss,
     paper_rss: FileText,
     paper_api: FileText,
+    paper_page: FileText,
     wiseflow: Bot,
+    crawler: Bot,
     page_manual: Globe2,
     page_monitor: Monitor,
-    csv: FileText
+    csv: FileText,
+    manual: DownloadCloud,
+    internal: Monitor,
+    wechat: MessageCircle
   };
   return icons[type as keyof typeof icons] ?? Globe2;
 }
@@ -893,6 +951,20 @@ watch(
 
             <div class="source-meta-line">
               <span class="type-badge">{{ sourceTypeLabel(source.source_type) }}</span>
+              <span
+                v-if="isPushBasedSource(source)"
+                class="meta-chip push-based-chip"
+                :title="PUSH_BASED_HINT"
+              >
+                推入式
+              </span>
+              <span
+                v-else-if="isPendingWechatSource(source)"
+                class="meta-chip needs-entry-chip wechat-pending-chip"
+                :title="WECHAT_PENDING_HINT"
+              >
+                待配置
+              </span>
               <span v-if="source.source_tier" class="meta-chip source-tier-chip">{{ source.source_tier }}</span>
               <span v-if="source.source_channel_type" class="meta-chip">{{ source.source_channel_type }}</span>
               <span v-if="source.source_score" class="meta-chip">质量 {{ source.source_score.toFixed(1) }}</span>
@@ -1282,11 +1354,18 @@ watch(
     </div>
 
     <div class="preview-list">
-      <article v-for="sample in importPreview.samples" :key="`${sample.source_type}-${sample.name}-${sample.url}`">
-        <strong>{{ sample.name }}</strong>
-        <span>{{ sourceTypeLabel(sample.source_type) }}</span>
-        <small>{{ sample.url || "无 URL" }}</small>
-      </article>
+      <section v-for="group in importPreviewGroups" :key="group.type" class="preview-group">
+        <header class="preview-group-head">
+          <span class="type-badge">{{ sourceTypeLabel(group.type) }}</span>
+          <small>样本 {{ group.samples.length }} 条</small>
+        </header>
+        <p v-if="group.note" class="preview-group-note">{{ group.note }}</p>
+        <article v-for="sample in group.samples" :key="`${group.type}-${sample.name}-${sample.url}`">
+          <strong>{{ sample.name }}</strong>
+          <span>{{ sourceTypeLabel(sample.source_type) }}</span>
+          <small>{{ sample.url || "无 URL" }}</small>
+        </article>
+      </section>
     </div>
 
     <button type="button" class="config-save" :disabled="importing" @click="confirmImport">

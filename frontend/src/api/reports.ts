@@ -42,6 +42,10 @@ export interface DailyPipelineRunResult {
   dedupe_groups_updated: number;
   recommendation_run_id: string;
   daily_report_id: string | null;
+  // 自动发布结果：工作台 report_policy.auto_publish_daily 开启时，
+  // 流水线出稿即发布（actor=system），status 直接为 published。
+  daily_report_status?: string | null;
+  auto_published?: boolean;
   candidates_total: number;
   selected_total: number;
   generated_total: number;

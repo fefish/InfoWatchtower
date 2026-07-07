@@ -4702,6 +4702,42 @@ button {
   color: #c2410c;
 }
 
+/* 推入式源（manual/internal 未配 api_url）：定时抓取 0 条是正常语义，非失败 */
+.push-based-chip {
+  border-color: #bae6fd;
+  background: #f0f9ff;
+  color: #0369a1;
+  cursor: help;
+}
+
+.wechat-pending-chip {
+  cursor: help;
+}
+
+.preview-group {
+  display: grid;
+  gap: 6px;
+}
+
+.preview-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.preview-group-head small {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.preview-group-note {
+  margin: 0;
+  color: #92400e;
+  font-size: 12px;
+}
+
 .route-chip {
   max-width: 260px;
   overflow: hidden;

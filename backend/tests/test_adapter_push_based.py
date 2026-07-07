@@ -28,12 +28,17 @@ API_PAYLOAD = {
 }
 
 
-def make_source(source_type: str, fetch_config: dict) -> DataSource:
+def make_source(
+    source_type: str,
+    fetch_config: dict,
+    credential_ref: str | None = None,
+) -> DataSource:
     return DataSource(
         source_type=source_type,
         name=f"{source_type} source",
         url=None,
         fetch_config=fetch_config,
+        credential_ref=credential_ref,
     )
 
 
@@ -91,6 +96,35 @@ async def test_internal_adapter_pulls_json_api_with_default_field_candidates():
     assert first.published_at == datetime(2026, 7, 1, 8, tzinfo=UTC)
     assert first.raw_payload_json["item"]["department"] == "规划部"
     assert first.raw_payload_json["api_url"] == "https://intranet.example.com/api/notices"
+
+
+@pytest.mark.asyncio
+async def test_internal_adapter_credential_ref_file_scheme_wins_over_auth_token(
+    monkeypatch,
+    tmp_path,
+):
+    """token 解析推荐顺序：credential_ref → auth_token_env → auth_token。"""
+    secret_file = tmp_path / "internal-token.txt"
+    secret_file.write_text("file-token\n", encoding="utf-8")
+    calls: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append({"headers": dict(request.headers)})
+        return httpx.Response(200, json=API_PAYLOAD)
+
+    adapter = InternalSourceAdapter(transport=httpx.MockTransport(handler))
+    await adapter.fetch(
+        make_source(
+            "internal",
+            {
+                "api_url": "https://intranet.example.com/api/notices",
+                "auth_token": "inline-token",
+            },
+            credential_ref=f"file:{secret_file}",
+        ),
+    )
+
+    assert calls[0]["headers"]["authorization"] == "Bearer file-token"
 
 
 @pytest.mark.asyncio

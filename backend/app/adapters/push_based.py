@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from hashlib import sha1
 from typing import Any
 
@@ -8,6 +7,7 @@ import httpx
 
 from app.adapters.base import BROWSER_FETCH_HEADERS, RawItemInput
 from app.adapters.rss import _json_safe, _parse_feed_datetime
+from app.core.credentials import resolve_source_token
 from app.models.content import DataSource
 
 DEFAULT_MAX_ITEMS = 200
@@ -46,7 +46,8 @@ class InternalSourceAdapter:
       根列表或 items/data/results/records 键
     - field_map: {title/url/content/published_at/entry_key: 字段点号路径} 覆盖默认字段约定
     - max_items: 单次最多产出条目数，默认 200
-    - auth_token / auth_token_env: Bearer token（待迁移 credential_ref 机制的过渡债务）
+    - Bearer token 推荐用 data_sources.credential_ref（env:VAR / file:/path 指针），
+      解析顺序 credential_ref → auth_token_env → auth_token（后两者为过渡兼容）
     """
 
     source_type = "internal"
@@ -63,7 +64,8 @@ class InternalSourceAdapter:
         max_items = _bounded_int(config.get("max_items"), default=DEFAULT_MAX_ITEMS)
         field_map = dict(config.get("field_map") or {})
         headers = {**BROWSER_FETCH_HEADERS, "Accept": "application/json"}
-        token = _resolve_auth_token(config)
+        # 推荐顺序：credential_ref → auth_token_env → auth_token（core/credentials.py）
+        token = resolve_source_token(data_source, config)
         if token:
             headers["Authorization"] = f"Bearer {token}"
 
@@ -160,16 +162,6 @@ def _text(value: Any) -> str:
     if value is None:
         return ""
     return str(value).strip()
-
-
-def _resolve_auth_token(config: dict[str, Any]) -> str:
-    token = str(config.get("auth_token") or "").strip()
-    if token:
-        return token
-    env_name = str(config.get("auth_token_env") or "").strip()
-    if env_name:
-        return os.environ.get(env_name, "").strip()
-    return ""
 
 
 def _bounded_int(value: object, *, default: int, maximum: int = MAX_ITEMS_CEILING) -> int:

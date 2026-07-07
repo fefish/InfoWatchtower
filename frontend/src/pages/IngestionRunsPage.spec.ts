@@ -443,6 +443,162 @@ describe("IngestionRunsPage", () => {
     expect(wrapper.find(".form-warning").text()).toContain("包含 1 个尚未实现的源类型");
   });
 
+  it("reports type-disabled skipped sources as a grouped info message after submitting a run", async () => {
+    const typeDisabledRun = runRecord({
+      id: "run-type-disabled",
+      run_key: "planning_intel:ingestion:type-disabled",
+      status: "partial",
+      source_total: 2,
+      source_succeeded: 1,
+      source_failed: 0,
+      items_fetched: 3,
+      raw_created: 3,
+      summary_json: {
+        source_skipped_type_disabled: 1,
+        sources: [
+          { data_source_id: "source-ok", source_type: "rss", status: "completed", fetched: 3 },
+          {
+            data_source_id: "source-wiseflow",
+            name: "Wiseflow Legacy",
+            source_type: "wiseflow",
+            status: "skipped_type_disabled",
+            error: "部署级源类型清单未包含 wiseflow",
+            fetched: 0
+          }
+        ]
+      }
+    });
+    api.createIngestionRun.mockResolvedValue(typeDisabledRun);
+    const wrapper = mountPage();
+    await flushPromises();
+    api.fetchIngestionRuns.mockResolvedValue([typeDisabledRun]);
+
+    await buttonByText(wrapper, "运行抓取").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.find(".form-info").text()).toContain("1 个源因部署级源类型允许清单被跳过");
+    // run 详情的语义分组提示条：类型停用小计。
+    expect(wrapper.find(".run-semantics-strip").text()).toContain("类型停用跳过 1 源");
+  });
+
+  it("renders type-disabled coverage sources with the 类型停用 label", async () => {
+    const wrapper = mountPage({
+      runs: [
+        runRecord({
+          status: "partial",
+          source_total: 2,
+          source_succeeded: 1,
+          summary_json: {
+            source_skipped_type_disabled: 1,
+            sources: [
+              {
+                data_source_id: "source-wiseflow",
+                name: "Wiseflow Legacy",
+                source_type: "wiseflow",
+                status: "skipped_type_disabled",
+                error: "部署级源类型清单未包含 wiseflow",
+                fetched: 0
+              }
+            ]
+          }
+        })
+      ],
+      coverage: coverageRecord({
+        run_id: "run-1",
+        run_key: "planning_intel:ingestion:run-1",
+        run_status: "partial",
+        sources: [
+          {
+            data_source_id: "source-wiseflow",
+            name: "Wiseflow Legacy",
+            source_type: "wiseflow",
+            run_status: "skipped_type_disabled",
+            error: "部署级源类型清单未包含 wiseflow",
+            run_fetched: 0,
+            run_created: 0,
+            run_updated: 0,
+            in_target_range: 0,
+            out_of_target_range: 0,
+            missing_published_at: 0,
+            raw_in_target: 0,
+            news_items: 0,
+            dedupe_winners: 0,
+            recommendation_candidates: 0,
+            recommendation_selected: 0,
+            generated_ready: 0,
+            daily_adopted: 0
+          }
+        ]
+      })
+    });
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("类型停用");
+    expect(wrapper.find(".status-on.skipped").exists()).toBe(true);
+    expect(wrapper.find(".source-coverage-row.skipped").exists()).toBe(true);
+  });
+
+  it("marks push-based sources with zero items as normal instead of broken", async () => {
+    const wrapper = mountPage({
+      runs: [
+        runRecord({
+          status: "completed",
+          source_total: 2,
+          source_succeeded: 2,
+          items_fetched: 3,
+          summary_json: {
+            sources: [
+              { data_source_id: "source-rss", source_type: "rss", status: "completed", fetched: 3 },
+              {
+                data_source_id: "source-manual",
+                name: "手工导入源",
+                source_type: "manual",
+                status: "completed",
+                fetched: 0
+              }
+            ]
+          }
+        })
+      ],
+      coverage: coverageRecord({
+        run_id: "run-1",
+        run_key: "planning_intel:ingestion:run-1",
+        run_status: "completed",
+        sources: [
+          {
+            data_source_id: "source-manual",
+            name: "手工导入源",
+            source_type: "manual",
+            run_status: "completed",
+            error: "",
+            run_fetched: 0,
+            run_created: 0,
+            run_updated: 0,
+            in_target_range: 0,
+            out_of_target_range: 0,
+            missing_published_at: 0,
+            raw_in_target: 0,
+            news_items: 0,
+            dedupe_winners: 0,
+            recommendation_candidates: 0,
+            recommendation_selected: 0,
+            generated_ready: 0,
+            daily_adopted: 0
+          }
+        ]
+      })
+    });
+    await flushPromises();
+
+    // run 摘要分组提示：推入式 0 条属正常语义，不是源坏了。
+    expect(wrapper.find(".run-semantics-strip").text()).toContain("推入式 0 条 1 源");
+    // 每源明细里推入式源带徽标 + tooltip。
+    const chip = wrapper.find(".push-based-chip");
+    expect(chip.exists()).toBe(true);
+    expect(chip.text()).toContain("推入式");
+    expect(chip.attributes("title")).toContain("定时抓取 0 条是正常行为");
+  });
+
   it("hides run actions in read-only deployment modes", async () => {
     const wrapper = mountPage({ canIngest: false, sources: [sourceRecord()] });
     await flushPromises();

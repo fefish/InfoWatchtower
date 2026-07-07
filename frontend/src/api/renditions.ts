@@ -123,6 +123,10 @@ export async function deleteReportFormat(formatId: string): Promise<void> {
   });
 }
 
+export async function fetchDailyRenditions(reportId: string): Promise<ReportRenditionRecord[]> {
+  return requestJson<ReportRenditionRecord[]>(`/api/daily-reports/${reportId}/renditions`);
+}
+
 export async function regenerateDailyRendition(
   reportId: string,
   formatCode: string

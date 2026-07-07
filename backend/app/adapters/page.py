@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
+from hashlib import sha1
 from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import urljoin
@@ -12,7 +14,20 @@ from app.models.content import DataSource
 
 
 class PageListingAdapter:
+    """列表页监控（source_type=page_monitor）。
+
+    fetch_config 增量选项 content_hash_diff=true：把条目正文 sha1 编进 entry_key。
+    fetch.py 的幂等行为是按 (data_source_id, entry_key) upsert——同 entry_key 重抓
+    会幂等刷新（同内容刷新无实质变化）；hash 进 key 之后：
+    - 未变更条目 → 同 entry_key → 不新增 raw_item（按既有幂等语义跳过）；
+    - 正文变更   → 新 entry_key → 新 raw_item，首次版本的 raw_payload_json
+      原样保留，不被新版覆盖（raw 不覆盖不变式）。
+    """
+
     source_type = "page_monitor"
+
+    def __init__(self, transport: httpx.AsyncBaseTransport | None = None) -> None:
+        self._transport = transport
 
     async def fetch(self, data_source: DataSource) -> list[RawItemInput]:
         config = data_source.fetch_config or {}
@@ -23,6 +38,7 @@ class PageListingAdapter:
             timeout=15.0,
             follow_redirects=True,
             headers=BROWSER_FETCH_HEADERS,
+            transport=self._transport,
         ) as client:
             response = await client.get(page_url)
             response.raise_for_status()
@@ -33,11 +49,17 @@ class PageListingAdapter:
                 exclude_exact=set(config.get("exclude_exact") or []),
                 max_links=int(config.get("max_links") or 10),
             )
-            return [await _fetch_article(client, url, title_hint=title) for url, title in links]
+            items = [await _fetch_article(client, url, title_hint=title) for url, title in links]
+        if _flag(config.get("content_hash_diff")):
+            items = [_with_content_hash_key(item) for item in items]
+        return items
 
 
 class ManualPageAdapter:
     source_type = "page_manual"
+
+    def __init__(self, transport: httpx.AsyncBaseTransport | None = None) -> None:
+        self._transport = transport
 
     async def fetch(self, data_source: DataSource) -> list[RawItemInput]:
         config = data_source.fetch_config or {}
@@ -48,6 +70,7 @@ class ManualPageAdapter:
             timeout=15.0,
             follow_redirects=True,
             headers=BROWSER_FETCH_HEADERS,
+            transport=self._transport,
         ) as client:
             return [
                 await _fetch_article(
@@ -71,7 +94,15 @@ async def _fetch_article(
     response.raise_for_status()
     parsed = _parse_html(response.text)
     title = parsed["title"] or title_hint or str(response.url)
-    text = parsed["text"] or parsed["description"] or title
+    # 正文兜底链：结构化标签正文 → meta description → og:description →
+    # 首个成段文本块（div/span 排版页的"首段落"）→ 标题。
+    text = (
+        parsed["text"]
+        or parsed["description"]
+        or parsed["og_description"]
+        or parsed["first_block"]
+        or title
+    )
     return RawItemInput(
         entry_key=str(response.url),
         source_title=title.strip(),
@@ -83,9 +114,31 @@ async def _fetch_article(
             "final_url": str(response.url),
             "title": title,
             "description": parsed["description"],
+            "og_description": parsed["og_description"],
+            "first_block": parsed["first_block"],
             "text": text,
         },
     )
+
+
+def _with_content_hash_key(item: RawItemInput) -> RawItemInput:
+    """content_hash_diff=true：正文 sha1 编进 entry_key（增量语义见类 docstring）。
+
+    hash 同步写入 raw_payload_json.content_hash 方便排查；entry_key 超长由
+    fetch.normalize_raw_entry_key 统一截断。
+    """
+    digest = sha1(item.raw_content.encode("utf-8")).hexdigest()[:16]
+    return replace(
+        item,
+        entry_key=f"{item.entry_key}#body:{digest}",
+        raw_payload_json={**item.raw_payload_json, "content_hash": digest},
+    )
+
+
+def _flag(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _extract_links(
@@ -118,6 +171,8 @@ def _parse_html(html: str) -> dict[str, str]:
     return {
         "title": parser.title.strip(),
         "description": parser.description.strip(),
+        "og_description": parser.og_description.strip(),
+        "first_block": " ".join(parser.first_block.split())[:2000],
         "text": " ".join(text.split())[:8000],
     }
 
@@ -165,11 +220,17 @@ class LinkExtractor(HTMLParser):
 
 class ArticleTextExtractor(HTMLParser):
     TEXT_TAGS = {"h1", "h2", "h3", "p", "li"}
+    # 兜底"首段落"排除的非正文标签（script/style 等内嵌代码文本不是段落）
+    NON_CONTENT_TAGS = {"script", "style", "title", "noscript", "template", "head"}
+    # 首段落兜底的最小长度：过滤导航/按钮等零碎短文本
+    FIRST_BLOCK_MIN_LENGTH = 20
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.title = ""
         self.description = ""
+        self.og_description = ""
+        self.first_block = ""
         self.text_parts: list[str] = []
         self._tag_stack: list[str] = []
 
@@ -177,8 +238,13 @@ class ArticleTextExtractor(HTMLParser):
         tag = tag.lower()
         self._tag_stack.append(tag)
         attr_dict: dict[str, Any] = dict(attrs)
-        if tag == "meta" and attr_dict.get("name") == "description":
-            self.description = str(attr_dict.get("content") or "")
+        if tag == "meta":
+            meta_key = attr_dict.get("name") or attr_dict.get("property") or ""
+            content = str(attr_dict.get("content") or "")
+            if meta_key == "description" and not self.description:
+                self.description = content
+            elif meta_key == "og:description" and not self.og_description:
+                self.og_description = content
 
     def handle_data(self, data: str) -> None:
         text = data.strip()
@@ -189,6 +255,13 @@ class ArticleTextExtractor(HTMLParser):
             self.title = text
         elif current in self.TEXT_TAGS:
             self.text_parts.append(text)
+        elif (
+            not self.first_block
+            and current not in self.NON_CONTENT_TAGS
+            and len(text) >= self.FIRST_BLOCK_MIN_LENGTH
+        ):
+            # 兜底"首段落"：div/span 排版页没有 h*/p/li 时取首个成段文本块
+            self.first_block = text
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()

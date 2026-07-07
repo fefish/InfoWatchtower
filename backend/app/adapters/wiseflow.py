@@ -9,6 +9,7 @@ import httpx
 
 from app.adapters.base import BROWSER_FETCH_HEADERS, RawItemInput, SourceFetchContext
 from app.adapters.rss import _json_safe
+from app.core.credentials import resolve_source_token
 from app.models.content import DataSource
 
 # wiseflow 4.x backend（references/private/wiseflow-4x/core/backend/app.py）：
@@ -36,7 +37,8 @@ class WiseflowReadInfoAdapter:
     - focus_ids: 只拉取指定 wiseflow focus id 列表（可选）
     - start_time: 固定增量起点（ISO 8601 UTC，可选）
     - lookback_days / lookback_seconds: 相对增量窗口（回落 lookback_seconds_env）
-    - auth_token / auth_token_env: Bearer token（待迁移 credential_ref 机制的过渡债务）
+    - Bearer token 推荐用 data_sources.credential_ref（env:VAR / file:/path 指针），
+      解析顺序 credential_ref → auth_token_env → auth_token（后两者为过渡兼容）
 
     历史回补（fetch_with_context）时按 target day 窗口传 start_time/end_time。
     """
@@ -81,7 +83,8 @@ class WiseflowReadInfoAdapter:
         start_time, end_time = _time_window(config, context)
         focus_ids = _focus_ids(config)
         headers = {**BROWSER_FETCH_HEADERS, "Accept": "application/json"}
-        token = _resolve_auth_token(config)
+        # 推荐顺序：credential_ref → auth_token_env → auth_token（core/credentials.py）
+        token = resolve_source_token(data_source, config)
         if token:
             headers["Authorization"] = f"Bearer {token}"
 
@@ -200,16 +203,6 @@ def _focus_ids(config: dict[str, Any]) -> list[int]:
         except (TypeError, ValueError):
             continue
     return focus_ids
-
-
-def _resolve_auth_token(config: dict[str, Any]) -> str:
-    token = str(config.get("auth_token") or "").strip()
-    if token:
-        return token
-    env_name = str(config.get("auth_token_env") or "").strip()
-    if env_name:
-        return os.environ.get(env_name, "").strip()
-    return ""
 
 
 def _env_value(name: object) -> str:

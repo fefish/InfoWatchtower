@@ -51,3 +51,5 @@ jobs:
       - name: Build frontend
         working-directory: frontend
         run: npm run build
+      # Playwright e2e（frontend/e2e/*.e2e.ts）不进 CI 门禁：chromium 每次需
+      # ~100MB 浏览器下载，显著拖慢并偶发抖动。本地或发版前用 `make e2e` 手动跑。

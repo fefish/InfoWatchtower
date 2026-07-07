@@ -45,8 +45,18 @@ RECORDS = [
 ]
 
 
-def make_source(fetch_config: dict, url: str | None = None) -> DataSource:
-    return DataSource(source_type="wiseflow", name="Wiseflow", url=url, fetch_config=fetch_config)
+def make_source(
+    fetch_config: dict,
+    url: str | None = None,
+    credential_ref: str | None = None,
+) -> DataSource:
+    return DataSource(
+        source_type="wiseflow",
+        name="Wiseflow",
+        url=url,
+        fetch_config=fetch_config,
+        credential_ref=credential_ref,
+    )
 
 
 def paging_transport(records: list[dict], calls: list[dict]) -> httpx.MockTransport:
@@ -150,6 +160,57 @@ async def test_wiseflow_uses_url_as_endpoint_and_sends_bearer_token():
     # url 已指向 read-info 端点时直接使用，不再拼接 /read_info
     assert calls[0]["url"] == "https://example.com/read-info"
     assert calls[0]["headers"]["authorization"] == "Bearer secret-token"
+
+
+@pytest.mark.asyncio
+async def test_wiseflow_credential_ref_wins_over_legacy_token_config(monkeypatch):
+    """token 解析推荐顺序：credential_ref → auth_token_env → auth_token。"""
+    monkeypatch.setenv("WISEFLOW_REF_TOKEN", "ref-token")
+    monkeypatch.setenv("WISEFLOW_ENV_TOKEN", "env-token")
+    calls: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append({"headers": dict(request.headers)})
+        return httpx.Response(200, json={"success": True, "msg": "", "data": []})
+
+    adapter = WiseflowReadInfoAdapter(transport=httpx.MockTransport(handler))
+    await adapter.fetch(
+        make_source(
+            {
+                "base_url": "http://wiseflow.internal:8077",
+                "auth_token_env": "WISEFLOW_ENV_TOKEN",
+                "auth_token": "inline-token",
+            },
+            credential_ref="env:WISEFLOW_REF_TOKEN",
+        ),
+    )
+
+    assert calls[0]["headers"]["authorization"] == "Bearer ref-token"
+
+
+@pytest.mark.asyncio
+async def test_wiseflow_broken_credential_ref_falls_back_to_auth_token_env(monkeypatch):
+    monkeypatch.delenv("WISEFLOW_REF_TOKEN", raising=False)
+    monkeypatch.setenv("WISEFLOW_ENV_TOKEN", "env-token")
+    calls: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append({"headers": dict(request.headers)})
+        return httpx.Response(200, json={"success": True, "msg": "", "data": []})
+
+    adapter = WiseflowReadInfoAdapter(transport=httpx.MockTransport(handler))
+    await adapter.fetch(
+        make_source(
+            {
+                "base_url": "http://wiseflow.internal:8077",
+                "auth_token_env": "WISEFLOW_ENV_TOKEN",
+                "auth_token": "inline-token",
+            },
+            credential_ref="env:WISEFLOW_REF_TOKEN",
+        ),
+    )
+
+    assert calls[0]["headers"]["authorization"] == "Bearer env-token"
 
 
 @pytest.mark.asyncio

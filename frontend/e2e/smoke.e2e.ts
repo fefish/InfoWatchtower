@@ -111,6 +111,11 @@ async function stubApi(page: Page, options: StubOptions = {}) {
 
   await page.route("**/api/**", async (route) => {
     const pathname = new URL(route.request().url()).pathname;
+    // glob **/api/** 也会命中 vite dev server 的源码模块 URL（如 /src/api/http.ts），
+    // 这些必须放行给 dev server，否则 JSON stub 会顶掉 JS 模块直接白屏。
+    if (!pathname.startsWith("/api/")) {
+      return route.fallback();
+    }
     const fulfillJson = (body: unknown, status = 200) =>
       route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
 

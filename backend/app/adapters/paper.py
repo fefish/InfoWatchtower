@@ -20,12 +20,19 @@ DEFAULT_SEMANTIC_SCHOLAR_QUERY = "artificial intelligence"
 SEMANTIC_SCHOLAR_FIELDS = (
     "paperId,title,abstract,year,publicationDate,authors,url,venue,externalIds,openAccessPdf"
 )
+# OpenReview API v2（api2.openreview.net）：GET /notes?content.venueid=<venue>
+# 返回 {"notes": [note...], "count": N}；note.content 字段为 {"value": ...} 信封。
+OPENREVIEW_NOTES_URL = "https://api2.openreview.net/notes"
+OPENREVIEW_SITE_URL = "https://openreview.net"
 ATOM_NS = "{http://www.w3.org/2005/Atom}"
 ARXIV_NS = "{http://arxiv.org/schemas/atom}"
 
 
 class PaperApiAdapter:
     source_type = "paper_api"
+
+    def __init__(self, transport: httpx.AsyncBaseTransport | None = None) -> None:
+        self._transport = transport
 
     async def fetch(self, data_source: DataSource) -> list[RawItemInput]:
         return await self._fetch_by_provider(data_source, None)
@@ -49,6 +56,8 @@ class PaperApiAdapter:
             return await self._fetch_openalex(data_source, context)
         if provider == "semantic_scholar":
             return await self._fetch_semantic_scholar(data_source, context)
+        if provider == "openreview":
+            return await self._fetch_openreview(data_source, context)
         raise ValueError(f"paper_api provider is not implemented: {provider}")
 
     async def _fetch_arxiv(
@@ -66,6 +75,7 @@ class PaperApiAdapter:
             follow_redirects=True,
             headers=headers,
             trust_env=False,
+            transport=self._transport,
         ) as client:
             response = await client.get(endpoint, params=params)
             response.raise_for_status()
@@ -86,6 +96,7 @@ class PaperApiAdapter:
             follow_redirects=True,
             headers=headers,
             trust_env=False,
+            transport=self._transport,
         ) as client:
             response = await client.get(endpoint, params=params)
             response.raise_for_status()
@@ -109,10 +120,35 @@ class PaperApiAdapter:
             follow_redirects=True,
             headers=headers,
             trust_env=False,
+            transport=self._transport,
         ) as client:
             response = await client.get(endpoint, params=params)
             response.raise_for_status()
         return parse_semantic_scholar_papers(response.json())
+
+    async def _fetch_openreview(
+        self,
+        data_source: DataSource,
+        context: SourceFetchContext | None,
+    ) -> list[RawItemInput]:
+        endpoint, params = build_openreview_request(data_source, context)
+        headers = {
+            **BROWSER_FETCH_HEADERS,
+            "Accept": "application/json",
+        }
+        async with httpx.AsyncClient(
+            timeout=20.0,
+            follow_redirects=True,
+            headers=headers,
+            trust_env=False,
+            transport=self._transport,
+        ) as client:
+            response = await client.get(endpoint, params=params)
+            response.raise_for_status()
+        items = parse_openreview_notes(response.json())
+        # notes API 没有发布日期过滤参数，历史回补窗口只能在解析后按
+        # pdate/cdate 客户端过滤（无日期的 note 保留，避免静默漏采）。
+        return _filter_by_target_window(items, context)
 
 
 def detect_paper_provider(data_source: DataSource) -> str:
@@ -127,6 +163,8 @@ def detect_paper_provider(data_source: DataSource) -> str:
         return "openalex"
     if host.endswith("api.semanticscholar.org") or host.endswith("semanticscholar.org"):
         return "semantic_scholar"
+    if host.endswith("openreview.net"):
+        return "openreview"
     if host.endswith("export.arxiv.org") or host.endswith("arxiv.org"):
         return "arxiv"
     return "arxiv"
@@ -235,6 +273,126 @@ def build_semantic_scholar_request(
     if sort:
         params["sort"] = sort
     return endpoint, params
+
+
+def build_openreview_request(
+    data_source: DataSource,
+    context: SourceFetchContext | None = None,
+) -> tuple[str, dict[str, str]]:
+    """OpenReview provider：venue 查询 → notes 列表。
+
+    fetch_config 字段：
+    - venue / venueid: 会议 venue id（如 "ICLR.cc/2026/Conference"），映射到
+      notes API 的 content.venueid 过滤参数；
+    - invitation: 备选过滤方式（如 "ICLR.cc/2026/Conference/-/Submission"）；
+    - api_url: notes 端点覆盖（默认 https://api2.openreview.net/notes）；
+    - limit / max_results: 单次条数上限（默认 50，上限 200）；
+    - sort: 排序（默认 cdate:desc）。
+    """
+    config = _paper_config(data_source)
+    parsed = urlparse(str(data_source.url or ""))
+    url_params = {key: values[-1] for key, values in parse_qs(parsed.query).items() if values}
+    endpoint = str(
+        config.get("api_url")
+        or _url_without_query(data_source.url)
+        or OPENREVIEW_NOTES_URL,
+    )
+    params = dict(url_params)
+    params.pop("provider", None)
+    venue = str(
+        config.get("venueid")
+        or config.get("venue")
+        or params.pop("venueid", "")
+        or params.pop("venue", "")
+        or params.get("content.venueid")
+        or "",
+    ).strip()
+    if venue:
+        params["content.venueid"] = venue
+    invitation = str(config.get("invitation") or params.get("invitation") or "").strip()
+    if invitation:
+        params["invitation"] = invitation
+    if not params.get("content.venueid") and not params.get("invitation"):
+        raise ValueError(
+            "paper_api openreview requires fetch_config.venue/venueid "
+            "(e.g. ICLR.cc/2026/Conference) or invitation",
+        )
+    params["limit"] = str(
+        _bounded_int(config.get("limit") or config.get("max_results") or params.get("limit"), default=50),
+    )
+    params["sort"] = str(config.get("sort") or params.get("sort") or "cdate:desc")
+    return endpoint, params
+
+
+def parse_openreview_notes(payload: dict[str, Any]) -> list[RawItemInput]:
+    notes = payload.get("notes")
+    if not isinstance(notes, list):
+        return []
+    raw_items: list[RawItemInput] = []
+    for note in notes:
+        if not isinstance(note, dict):
+            continue
+        content = note.get("content") if isinstance(note.get("content"), dict) else {}
+        note_id = str(note.get("id") or "").strip()
+        forum = str(note.get("forum") or "").strip() or note_id
+        title = _squash(_openreview_field(content, "title"))
+        abstract = _squash(_openreview_field(content, "abstract"))
+        venue = _openreview_field(content, "venue")
+        venueid = _openreview_field(content, "venueid")
+        authors = _openreview_authors(content)
+        pdf_url = _openreview_pdf_url(content)
+        source_url = f"{OPENREVIEW_SITE_URL}/forum?id={forum}" if forum else None
+        published_at = _parse_epoch_millis(note.get("pdate")) or _parse_epoch_millis(
+            note.get("cdate"),
+        )
+        raw_payload = {
+            "provider": "openreview",
+            "note_id": note_id,
+            "forum": forum,
+            "title": title,
+            "abstract": abstract,
+            "authors": authors,
+            "venue": venue,
+            "venueid": venueid,
+            "source_url": source_url,
+            "pdf_url": pdf_url,
+            "cdate": note.get("cdate"),
+            "pdate": note.get("pdate"),
+            "payload": note,
+        }
+        raw_items.append(
+            RawItemInput(
+                entry_key=f"openreview:{note_id}" if note_id else title,
+                source_title=title or note_id,
+                source_url=source_url,
+                raw_content=abstract or title,
+                published_at=published_at,
+                raw_payload_json=raw_payload,
+                source_specific_json={
+                    "provider": "openreview",
+                    "note_id": note_id,
+                    "forum": forum,
+                    "venue": venue,
+                    "venueid": venueid,
+                    "pdf_url": pdf_url,
+                },
+            ),
+        )
+    return raw_items
+
+
+def _filter_by_target_window(
+    items: list[RawItemInput],
+    context: SourceFetchContext | None,
+) -> list[RawItemInput]:
+    if not context or context.target_day_start is None or context.target_day_end is None:
+        return items
+    return [
+        item
+        for item in items
+        if item.published_at is None
+        or context.target_day_start <= item.published_at.date() <= context.target_day_end
+    ]
 
 
 def parse_arxiv_atom(xml_text: str) -> list[RawItemInput]:
@@ -622,6 +780,52 @@ def _openalex_source_url(work: dict[str, Any], doi: str, openalex_id: str) -> st
     if openalex_id:
         return f"https://openalex.org/{openalex_id}"
     return None
+
+
+def _openreview_field(content: dict[str, Any] | Any, key: str) -> str:
+    """OpenReview API v2 的 content 字段是 {"value": ...} 信封；v1 为裸值，两者都兼容。"""
+    if not isinstance(content, dict):
+        return ""
+    value = content.get(key)
+    if isinstance(value, dict):
+        value = value.get("value")
+    if value is None or isinstance(value, (list, dict)):
+        return ""
+    return str(value).strip()
+
+
+def _openreview_authors(content: dict[str, Any] | Any) -> list[str]:
+    if not isinstance(content, dict):
+        return []
+    value = content.get("authors")
+    if isinstance(value, dict):
+        value = value.get("value")
+    if not isinstance(value, list):
+        return []
+    return [_squash(str(author)) for author in value if _squash(str(author))]
+
+
+def _openreview_pdf_url(content: dict[str, Any] | Any) -> str:
+    pdf = _openreview_field(content, "pdf")
+    if not pdf:
+        return ""
+    if pdf.startswith(("http://", "https://")):
+        return pdf
+    # v2 的 pdf 是站内相对路径（如 /pdf/xxx.pdf）
+    return f"{OPENREVIEW_SITE_URL}/{pdf.lstrip('/')}"
+
+
+def _parse_epoch_millis(value: Any) -> datetime | None:
+    try:
+        millis = int(value)
+    except (TypeError, ValueError):
+        return None
+    if millis <= 0:
+        return None
+    try:
+        return datetime.fromtimestamp(millis / 1000, tz=UTC)
+    except (OverflowError, OSError, ValueError):
+        return None
 
 
 def _semantic_scholar_entry_key(paper_id: str, doi: str, arxiv_id: str, title: str) -> str:

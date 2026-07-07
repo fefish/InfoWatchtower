@@ -1044,3 +1044,69 @@ def test_intranet_header_applies_stored_department_membership_mapping(monkeypatc
             ("ai_tools", "member"),
             ("planning_intel", "viewer"),
         ]
+
+
+# ---- AUTH_SESSION_SECRETS 多版本轮换（第一个签名、全部可验签） ----
+
+
+def test_verify_session_token_accepts_any_secret_in_rotation_list():
+    from app.auth.sessions import create_session_token, verify_session_token
+
+    token = create_session_token("user-1", "old-secret", ttl_seconds=600)
+
+    # 轮换后：新 secret 排第一（签名用），旧 secret 保留可验签 → 不掉线
+    assert verify_session_token(token, ["new-secret", "old-secret"])["sub"] == "user-1"
+    # 旧 secret 移出列表 → 旧 cookie 失效
+    assert verify_session_token(token, ["new-secret"]) is None
+    # 单值字符串入参保持兼容
+    assert verify_session_token(token, "old-secret")["sub"] == "user-1"
+    assert verify_session_token(token, "") is None
+    assert verify_session_token(token, []) is None
+
+
+def test_settings_session_secrets_first_signs_all_verify(monkeypatch):
+    from app.core.config import Settings
+
+    settings = Settings(AUTH_SESSION_SECRETS="new-secret, old-secret", AUTH_SESSION_SECRET="legacy")
+
+    # 列表第一个是签名 secret（回写单值字段，签发/自检共用口径）
+    assert settings.auth_session_secret == "new-secret"
+    assert settings.auth_session_secret_list == ["new-secret", "old-secret"]
+
+    # 未配置列表时回退单值 AUTH_SESSION_SECRET
+    fallback = Settings(AUTH_SESSION_SECRETS="", AUTH_SESSION_SECRET="only-secret")
+    assert fallback.auth_session_secret == "only-secret"
+    assert fallback.auth_session_secret_list == ["only-secret"]
+
+
+def test_session_cookie_survives_secret_rotation_until_old_secret_removed(monkeypatch, tmp_path):
+    client, _ = make_client(
+        monkeypatch,
+        tmp_path,
+        AUTH_MODE="public_password",
+        AUTH_SESSION_SECRETS="old-secret",
+    )
+    login = client.post("/api/auth/login", json={"username": "admin", "password": "password"})
+    assert login.status_code == 200
+    old_cookie = client.cookies.get("infowatchtower_session")
+    assert old_cookie
+
+    # 轮换：新 secret 上位签名，旧 secret 保留验签 → 旧 cookie 仍有效
+    rotated, _ = make_client(
+        monkeypatch,
+        tmp_path,
+        AUTH_MODE="public_password",
+        AUTH_SESSION_SECRETS="new-secret,old-secret",
+    )
+    rotated.cookies.set("infowatchtower_session", old_cookie)
+    assert rotated.get("/api/auth/me").status_code == 200
+
+    # 旧 secret 移出列表 → 旧 cookie 失效
+    retired, _ = make_client(
+        monkeypatch,
+        tmp_path,
+        AUTH_MODE="public_password",
+        AUTH_SESSION_SECRETS="new-secret",
+    )
+    retired.cookies.set("infowatchtower_session", old_cookie)
+    assert retired.get("/api/auth/me").status_code == 401

@@ -4,12 +4,38 @@
  * - same-origin cookie + JSON + !ok 抛 Error(detail)，行为对齐原各模块私有 requestJson；
  * - unsafe 方法（POST/PUT/PATCH/DELETE）自动读取 infowatchtower_csrf cookie 附 X-CSRF-Token 头
  *   （双提交 CSRF，配合后端 AUTH_CSRF_ENABLED）；
- * - API 前缀统一从 import.meta.env.BASE_URL 拼接，支撑子路径部署（如 /watchtower/）。
+ * - API 前缀统一从 import.meta.env.BASE_URL 拼接，支撑子路径部署（如 /watchtower/）；
+ * - 运行中收到 401（session 过期/被吊销）时触发 onUnauthorized 注册的回调，
+ *   由 main.ts 装配「清 session store + 跳 /login?redirect=当前路由」——
+ *   本模块只暴露注册点，不 import store/router，避免循环依赖。
  */
 
 const CSRF_COOKIE_NAME = "infowatchtower_csrf";
 const CSRF_HEADER_NAME = "X-CSRF-Token";
 const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+/**
+ * 401 不触发全局回调的路径：登录本身的 401 是「密码错误」业务反馈，
+ * /api/auth/me 是 session 探测（router 守卫用 401 判定未登录并自带重定向）。
+ */
+const UNAUTHORIZED_EXEMPT_PATHS = new Set(["/api/auth/login", "/api/auth/me"]);
+
+type UnauthorizedHandler = (path: string) => void;
+
+let unauthorizedHandler: UnauthorizedHandler | null = null;
+
+/** 注册全局 401 回调（传 null 注销）。装配点在 main.ts，测试可自行替换。 */
+export function onUnauthorized(handler: UnauthorizedHandler | null): void {
+  unauthorizedHandler = handler;
+}
+
+function notifyUnauthorized(path: string): void {
+  const pathname = path.split("?")[0];
+  if (UNAUTHORIZED_EXEMPT_PATHS.has(pathname)) {
+    return;
+  }
+  unauthorizedHandler?.(path);
+}
 
 export function readCsrfToken(): string {
   if (typeof document === "undefined") {
@@ -63,9 +89,12 @@ export class HttpError extends Error {
   }
 }
 
-async function raiseForStatus(response: Response): Promise<void> {
+async function raiseForStatus(response: Response, path: string): Promise<void> {
   if (response.ok) {
     return;
+  }
+  if (response.status === 401) {
+    notifyUnauthorized(path);
   }
   const body: { detail?: unknown } = await response.json().catch(() => ({}));
   const detail = typeof body.detail === "string" ? body.detail : `HTTP ${response.status}`;
@@ -79,17 +108,17 @@ export async function requestRaw(path: string, init?: RequestInit): Promise<Resp
 
 export async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await requestRaw(path, init);
-  await raiseForStatus(response);
+  await raiseForStatus(response, path);
   return response.json() as Promise<T>;
 }
 
 export async function requestVoid(path: string, init?: RequestInit): Promise<void> {
   const response = await requestRaw(path, init);
-  await raiseForStatus(response);
+  await raiseForStatus(response, path);
 }
 
 export async function requestBlob(path: string, init?: RequestInit): Promise<Blob> {
   const response = await requestRaw(path, init);
-  await raiseForStatus(response);
+  await raiseForStatus(response, path);
   return response.blob();
 }

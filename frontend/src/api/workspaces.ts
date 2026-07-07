@@ -17,6 +17,14 @@ export interface WorkspaceSectionRecord {
   route_path: string;
   sort_order: number;
   group: string;
+  // 分区可见的最低工作台角色（viewer/member/admin/owner）：
+  // 阅读分区（日报/周报/历史报告/实体大事记）为 viewer，管理分区默认 member。
+  min_role: string;
+}
+
+export interface WorkspaceReportPolicy {
+  workspace_code: string;
+  auto_publish_daily: boolean;
 }
 
 export interface WorkspaceLabelPolicy {
@@ -184,6 +192,20 @@ export async function updateWorkspaceLabelPolicy(
   payload: WorkspaceLabelPolicyUpdate
 ): Promise<WorkspaceLabelPolicy> {
   return requestJson<WorkspaceLabelPolicy>(`/api/workspaces/${workspaceCode}/label-policy`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function fetchWorkspaceReportPolicy(workspaceCode: string): Promise<WorkspaceReportPolicy> {
+  return requestJson<WorkspaceReportPolicy>(`/api/workspaces/${workspaceCode}/report-policy`);
+}
+
+export async function updateWorkspaceReportPolicy(
+  workspaceCode: string,
+  payload: { auto_publish_daily: boolean }
+): Promise<WorkspaceReportPolicy> {
+  return requestJson<WorkspaceReportPolicy>(`/api/workspaces/${workspaceCode}/report-policy`, {
     method: "PATCH",
     body: JSON.stringify(payload)
   });

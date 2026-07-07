@@ -111,6 +111,36 @@ const latestRun = computed(() => runs.value[0] ?? null);
 const selectedSources = computed(() => (selectedRun.value ? sourceSummaries(selectedRun.value) : []));
 const sourceFilter = ref<"all" | "failed" | "productive">("all");
 
+// 推入式源语义（backend-capability-test-matrix §3.1）：manual/internal 定时抓取
+// 如实返回 0 条新增是正常行为（run 里计成功源），不要被误读成源坏了。
+const PUSH_BASED_HINT = "推入式源：由手工导入/内部系统写入，定时抓取 0 条是正常行为";
+
+function isPushBasedType(type?: string) {
+  return type === "manual" || type === "internal";
+}
+
+// run 摘要分组小计：部署级源类型清单跳过（skipped_type_disabled）与推入式 0 条源。
+const selectedRunSkippedTypeDisabled = computed(() => {
+  const run = selectedRun.value;
+  if (!run) {
+    return 0;
+  }
+  const total = summaryNumber(run, "source_skipped_type_disabled");
+  if (total > 0) {
+    return total;
+  }
+  return selectedSources.value.filter((source) => source.status === "skipped_type_disabled").length;
+});
+
+const selectedRunPushBasedZero = computed(() =>
+  selectedSources.value.filter(
+    (source) =>
+      isPushBasedType(source.source_type) &&
+      source.status !== "failed" &&
+      sourceNumber(source, "fetched") === 0
+  ).length
+);
+
 const topCoverageSources = computed(() => {
   const all = coverage.value?.sources ?? [];
   if (sourceFilter.value === "failed") {
@@ -526,6 +556,12 @@ function setRunMessage(run: IngestionRunRecord, prefix: string) {
     message.value = `${prefix}包含 ${skipped || run.source_total} 个尚未实现的源类型：这些源未计入成功或失败，请查看每源明细。`;
     return;
   }
+  const typeDisabled = summaryNumber(run, "source_skipped_type_disabled");
+  if (typeDisabled > 0) {
+    messageTone.value = "info";
+    message.value = `${prefix}已完成：${typeDisabled} 个源因部署级源类型允许清单被跳过（类型停用），成功 ${run.source_succeeded}，失败 ${run.source_failed}，请查看每源明细。`;
+    return;
+  }
   if (run.items_fetched === 0) {
     messageTone.value = "info";
     message.value = `${prefix}已完成但未返回条目：尝试 ${run.source_total} 个源，成功 ${run.source_succeeded}，失败 ${run.source_failed}。请查看每源明细和 RSS 窗口。`;
@@ -639,6 +675,9 @@ function sourceStatusLabel(status?: string) {
   }
   if (status === "skipped_unimplemented") {
     return "尚未实现";
+  }
+  if (status === "skipped_type_disabled") {
+    return "类型停用";
   }
   if (status === "not_run") {
     return "未运行";
@@ -1091,6 +1130,19 @@ onMounted(() => {
             <span>缺日期 {{ summaryNumber(selectedRun, "items_missing_published_at") }}</span>
           </div>
 
+          <div
+            v-if="selectedRunSkippedTypeDisabled > 0 || selectedRunPushBasedZero > 0"
+            class="coverage-strip run-semantics-strip"
+            aria-label="run 语义分组提示"
+          >
+            <span v-if="selectedRunSkippedTypeDisabled > 0">
+              类型停用跳过 {{ selectedRunSkippedTypeDisabled }} 源：部署级源类型允许清单未包含，未计成功或失败
+            </span>
+            <span v-if="selectedRunPushBasedZero > 0" :title="PUSH_BASED_HINT">
+              推入式 0 条 {{ selectedRunPushBasedZero }} 源：由手工导入/内部系统写入，定时抓取不产出属正常
+            </span>
+          </div>
+
           <div class="coverage-filter" role="tablist" aria-label="源明细筛选">
             <button type="button" :class="{ active: sourceFilter === 'all' }" @click="sourceFilter = 'all'">全部</button>
             <button type="button" :class="{ active: sourceFilter === 'productive' }" @click="sourceFilter = 'productive'">
@@ -1108,7 +1160,9 @@ onMounted(() => {
               class="source-coverage-row"
               :class="{
                 failed: source.run_status === 'failed',
-                skipped: source.run_status === 'skipped_unimplemented'
+                skipped:
+                  source.run_status === 'skipped_unimplemented' ||
+                  source.run_status === 'skipped_type_disabled'
               }"
             >
               <div class="feed-icon" :class="{ indigo: source.run_status === 'succeeded' || source.run_status === 'completed' }">
@@ -1122,10 +1176,19 @@ onMounted(() => {
                     <p class="muted-line">{{ source.source_type || "unknown" }}</p>
                   </div>
                   <span
+                    v-if="isPushBasedType(source.source_type)"
+                    class="meta-chip push-based-chip"
+                    :title="PUSH_BASED_HINT"
+                  >
+                    推入式
+                  </span>
+                  <span
                     class="status-on"
                     :class="{
                       failed: source.run_status === 'failed',
-                      skipped: source.run_status === 'skipped_unimplemented'
+                      skipped:
+                        source.run_status === 'skipped_unimplemented' ||
+                        source.run_status === 'skipped_type_disabled'
                     }"
                   >
                     {{ sourceStatusLabel(source.run_status) }}

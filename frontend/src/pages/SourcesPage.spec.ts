@@ -253,6 +253,90 @@ describe("SourcesPage", () => {
     expect(buttonTexts.some((text) => text.includes("抓取"))).toBe(false);
   });
 
+  it("marks manual and unconfigured internal sources as push-based with the semantic tooltip", async () => {
+    const wrapper = mountPage({
+      sources: [
+        sourceRecord({ id: "source-manual", source_type: "manual", url: null, name: "手工导入源" }),
+        sourceRecord({ id: "source-internal", source_type: "internal", url: null, name: "内部系统源" }),
+        sourceRecord({
+          id: "source-internal-pull",
+          source_type: "internal",
+          url: "https://intranet.example.com/api/items",
+          name: "内部拉取源"
+        }),
+        sourceRecord()
+      ]
+    });
+    await flushPromises();
+
+    // manual 恒为推入式；internal 未配入口视为推入式；配了入口的 internal 与 rss 不打标。
+    const chips = wrapper.findAll(".push-based-chip");
+    expect(chips).toHaveLength(2);
+    expect(chips[0].text()).toContain("推入式");
+    expect(chips[0].attributes("title")).toContain("定时抓取 0 条是正常行为");
+    expect(wrapper.text()).toContain("手工导入");
+    expect(wrapper.text()).toContain("内部系统");
+  });
+
+  it("marks unconfigured wechat sources as 待配置 instead of a broken source", async () => {
+    const wrapper = mountPage({
+      sources: [
+        sourceRecord({
+          id: "source-wx",
+          source_type: "wechat",
+          url: null,
+          enabled: false,
+          needs_entry: true,
+          metadata_only: true,
+          fetch_entry_status: "needs_entry",
+          workspace_link_enabled: false,
+          name: "机器之心公众号"
+        })
+      ]
+    });
+    await flushPromises();
+
+    const chip = wrapper.find(".wechat-pending-chip");
+    expect(chip.exists()).toBe(true);
+    expect(chip.text()).toContain("待配置");
+    expect(chip.attributes("title")).toContain("RSSHub");
+    expect(wrapper.text()).toContain("微信公众号");
+    expect(wrapper.find(".push-based-chip").exists()).toBe(false);
+  });
+
+  it("groups the import preview by source_type with push-based and wechat semantics", async () => {
+    const wrapper = mountPage();
+    await flushPromises();
+    api.previewSourceImport.mockResolvedValue({
+      catalog: "tech",
+      total: 5,
+      would_create: 5,
+      would_update: 0,
+      samples: [
+        { name: "OpenAI Blog", source_type: "rss", url: "https://openai.com/blog/rss.xml" },
+        { name: "内部快讯 API", source_type: "internal", url: null },
+        { name: "机器之心公众号", source_type: "wechat", url: null },
+        { name: "新智元公众号", source_type: "wechat", url: null }
+      ]
+    });
+
+    await buttonByText(wrapper, "导入 Tech 源").trigger("click");
+    await flushPromises();
+
+    const panel = wrapper.find('[aria-label="数据源导入预览"]');
+    const groups = panel.findAll(".preview-group");
+    expect(groups).toHaveLength(3);
+    // 分组按 source_type 排序：internal / rss / wechat，各组给出样本小计。
+    expect(groups[0].text()).toContain("内部系统");
+    expect(groups[0].text()).toContain("样本 1 条");
+    expect(groups[0].find(".preview-group-note").text()).toContain("推入式源");
+    expect(groups[1].text()).toContain("RSS");
+    expect(groups[1].find(".preview-group-note").exists()).toBe(false);
+    expect(groups[2].text()).toContain("微信公众号");
+    expect(groups[2].text()).toContain("样本 2 条");
+    expect(groups[2].find(".preview-group-note").text()).toContain("待配置");
+  });
+
   it("links every source row to the source detail page", async () => {
     const wrapper = mountPage({ sources: [sourceRecord()] });
     await flushPromises();
