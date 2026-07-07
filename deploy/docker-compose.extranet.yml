@@ -1,3 +1,9 @@
+# extranet（外网发布者）形态 compose：DEPLOY_MODE=extranet，采集开、sync publisher。
+# 与 docker-compose.prod.yml 的差异：
+# - env 模板换成 deploy/env.extranet.example -> /srv/infowatchtower/.env.extranet，
+#   其中 feed 相关 env（SYNC_SERVICE_TOKENS，为空启动失败）与 OIDC 全套经 env_file
+#   注入 backend/worker/scheduler；feed 端点只认 Bearer token，不走登录 cookie。
+# - TLS 收口同 prod：可选 caddy profile（feed 面向内网消费者，必须走 443）。
 services:
   postgres:
     image: postgres:16-alpine
@@ -25,7 +31,9 @@ services:
       context: ../backend
     restart: unless-stopped
     env_file:
-      - ${INFOWATCHTOWER_ENV_FILE:-/srv/infowatchtower/.env.production}
+      # feed 发布与 OIDC 登录所需 env（SYNC_SERVICE_TOKENS、OIDC_*）都在该文件，
+      # 见 deploy/env.extranet.example；SYNC_SERVICE_TOKENS 为空会 fail-fast。
+      - ${INFOWATCHTOWER_ENV_FILE:-/srv/infowatchtower/.env.extranet}
     environment:
       RUN_MIGRATIONS: "true"
     volumes:
@@ -47,7 +55,7 @@ services:
     restart: unless-stopped
     command: ["python", "-m", "app.workers.worker"]
     env_file:
-      - ${INFOWATCHTOWER_ENV_FILE:-/srv/infowatchtower/.env.production}
+      - ${INFOWATCHTOWER_ENV_FILE:-/srv/infowatchtower/.env.extranet}
     environment:
       RUN_MIGRATIONS: "false"
     volumes:
@@ -64,7 +72,7 @@ services:
     restart: unless-stopped
     command: ["python", "-m", "app.workers.scheduler"]
     env_file:
-      - ${INFOWATCHTOWER_ENV_FILE:-/srv/infowatchtower/.env.production}
+      - ${INFOWATCHTOWER_ENV_FILE:-/srv/infowatchtower/.env.extranet}
     environment:
       RUN_MIGRATIONS: "false"
     volumes:
@@ -80,7 +88,6 @@ services:
       context: ../frontend
     restart: unless-stopped
     environment:
-      # CSP frame-ancestors 白名单，透传给前端 nginx 的 envsubst 模板（默认仅同源）。
       EMBED_FRAME_ANCESTORS: ${EMBED_FRAME_ANCESTORS:-'self'}
     ports:
       # 启用 tls profile 时把 80 让给 caddy 并只绑回环，例如 FRONTEND_HTTP_PORT=127.0.0.1:8080。
@@ -89,10 +96,7 @@ services:
       backend:
         condition: service_healthy
 
-  # 可选 TLS 收口（C-6）：docker compose --profile tls up -d 启用。
-  # caddy 监听 80/443，按 CADDY_DOMAIN 自动完成 ACME 证书签发与续期，
-  # 并把流量透传给前端 nginx（reverse_proxy 服务）。
-  # 启用前必须在 env 设置：CADDY_DOMAIN=your-domain.example、FRONTEND_HTTP_PORT=127.0.0.1:8080。
+  # 可选 TLS 收口（C-6）：docker compose --profile tls up -d 启用，配置同 prod。
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped

@@ -54,6 +54,9 @@ if [ "$MODE" = "local" ]; then
   APP_BASE_URL="http://localhost:$FRONTEND_PORT"
   CORS_ORIGINS="http://localhost:$FRONTEND_PORT"
   PUBLIC_URL="http://localhost:$FRONTEND_PORT"
+  # 本地一键起对应 standalone 形态：CSRF 默认关，方便调试。
+  DEPLOY_MODE_VALUE="standalone"
+  AUTH_CSRF_ENABLED_VALUE="false"
 else
   if [ -z "$DOMAIN" ]; then
     echo "--domain is required unless --local is used" >&2
@@ -68,6 +71,11 @@ else
   CORS_ORIGINS="https://$DOMAIN"
   PUBLIC_URL="https://$DOMAIN"
   AUTH_SESSION_COOKIE_SECURE="${AUTH_SESSION_COOKIE_SECURE:-true}"
+  # --domain 官方安装路径对应 cloud 形态：安全基线要求 CSRF 开启。
+  # intranet / extranet 形态不走本脚本默认路径，请按 deploy/env.intranet.example
+  # 或 deploy/env.extranet.example 手工准备 env 后使用对应 compose 文件。
+  DEPLOY_MODE_VALUE="cloud"
+  AUTH_CSRF_ENABLED_VALUE="true"
 fi
 
 random_hex() {
@@ -84,6 +92,25 @@ APP_VERSION=0.1.0
 APP_BASE_URL=$APP_BASE_URL
 ENABLE_DOCS=false
 CORS_ORIGINS=$CORS_ORIGINS
+
+# 部署拓扑（四形态 env 矩阵见 docs/deployment/deployment-ops.md §1.1）。
+DEPLOY_MODE=$DEPLOY_MODE_VALUE
+INSTANCE_ID=$DEPLOY_MODE_VALUE-main
+AUTH_CSRF_ENABLED=$AUTH_CSRF_ENABLED_VALUE
+# CSP frame-ancestors 白名单，默认仅允许同源 iframe。
+EMBED_FRAME_ANCESTORS="'self'"
+AUTH_TRUSTED_PROXY_CIDRS=
+# 同步链路仅 intranet/extranet 使用（样例见 deploy/env.intranet.example / env.extranet.example）：
+# SYNC_SERVICE_TOKENS=
+# SYNC_REMOTE_BASE_URL=
+# SYNC_REMOTE_TOKEN=
+# SYNC_PULL_ENABLED=true
+# SYNC_PULL_INTERVAL_SECONDS=900
+# OIDC 登录（AUTH_MODE=oidc 时启用）：
+# OIDC_ISSUER=
+# OIDC_CLIENT_ID=
+# OIDC_CLIENT_SECRET=
+# OIDC_REDIRECT_URL=$APP_BASE_URL/api/auth/oidc/callback
 
 DATABASE_URL=postgresql+psycopg://infowatchtower:$POSTGRES_PASSWORD@postgres:5432/infowatchtower
 REDIS_URL=redis://redis:6379/0

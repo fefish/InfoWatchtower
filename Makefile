@@ -1,6 +1,6 @@
 COMPOSE = docker compose -p infowatchtower -f deploy/docker-compose.local.yml
 
-.PHONY: up down restart ps logs backend-logs frontend-logs test build migrate migration-check
+.PHONY: up down restart ps logs backend-logs frontend-logs test build migrate migration-check docs-check frontend-controls-check
 
 up:
 	$(COMPOSE) up -d
@@ -27,8 +27,17 @@ frontend-logs:
 	$(COMPOSE) logs -f --tail=100 frontend
 
 test:
+	python3 scripts/validate_docs_governance.py
+	python3 scripts/validate_frontend_controls.py
 	cd backend && . .venv/bin/activate && DATABASE_URL="" pytest
+	cd frontend && npx vitest run
 	cd frontend && npm run build
+
+docs-check:
+	python3 scripts/validate_docs_governance.py
+
+frontend-controls-check:
+	python3 scripts/validate_frontend_controls.py
 
 migrate:
 	$(COMPOSE) build backend
