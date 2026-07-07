@@ -99,7 +99,7 @@ async function signOut() {
   </section>
 
   <section v-if="canChangeLocalPassword" class="data-table-wrap">
-    <form class="form-grid-two" @submit.prevent="submitPassword">
+    <form class="form-grid-two ops-form account-password-form" @submit.prevent="submitPassword">
       <label>
         <span>当前密码</span>
         <input v-model="form.currentPassword" type="password" autocomplete="current-password" />

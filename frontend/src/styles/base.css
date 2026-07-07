@@ -240,8 +240,10 @@ button {
 
 .sidebar-user {
   display: grid;
-  grid-template-columns: 30px minmax(0, 1fr) 32px;
-  gap: 10px;
+  /* 四列：头像 / 姓名角色 / 账号入口 / 退出登录。列数必须与 AppShell 模板子元素一致，
+     少一列会把退出按钮挤到第二行造成错位。 */
+  grid-template-columns: 30px minmax(0, 1fr) 32px 32px;
+  gap: 8px;
   align-items: center;
   margin-top: auto;
   border-top: 1px solid var(--color-border);
@@ -6918,4 +6920,22 @@ button:focus-visible {
   .sync-conflict-preview {
     grid-template-columns: 1fr;
   }
+}
+
+/* --- 账号页改密表单：沿用 ops-form 输入基线，消息与按钮独占整行、按钮右对齐不拉伸 --- */
+.account-password-form {
+  padding: 6px 4px;
+}
+
+.account-password-form .form-error,
+.account-password-form .empty-state {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.account-password-form button[type="submit"] {
+  grid-column: 1 / -1;
+  justify-self: end;
+  width: auto;
+  min-width: 140px;
 }
