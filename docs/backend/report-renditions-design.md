@@ -6,7 +6,7 @@
 状态：P1-P4 已实施（2026-07-02）。机器契约见 `config/contracts/report_renditions.json`。
 P4 的模型产出（insight prompt v2）已随生成链路接入，配置 MiniMax key 后自动生效；
 未配 key 时成稿走规则降级并在条目上标注「规则降级稿」。
-§10 模板驱动生成（generation_template）为 2026-07-07 设计已定稿待实现。
+§10 模板驱动生成（generation_template）2026-07-07 设计定稿、2026-07-08 已实现（`backend/tests/test_generation_template.py` 看护）。
 
 ## 1. 背景与目标
 
@@ -63,7 +63,7 @@ report_renditions                     某报告按某格式渲染出的成稿（
 | item_fields | 有序字段清单，可选值：`tag_line`（标签行）、`bullet_points`（📋要点）、`takeaway`（📌总结）、`five_fields`（五段正文）、`summary`、`source_link`、`score` |
 | export_targets | `[]` \| `["md"]` \| `["md","html"]`（SQL 导出不在此配置，仍走原出口） |
 | enabled / sort_order | 启用与排序 |
-| generation_template / generation_template_source | 自定义格式的生成模板（规范形 + 上传原文，nullable；内置格式恒 null）——设计已定稿待实现，见 §10 |
+| generation_template / generation_template_source | 自定义格式的生成模板（规范形 + 上传原文，nullable；内置格式恒 null）——已实现，见 §10 |
 
 内置种子（每个工作台自动注册）：
 
@@ -171,7 +171,7 @@ PATCH  /api/daily-report-items/{id}             （增加 is_headline）
 | 格式注册表被配坏 | company_sql_v1 locked；导出目标只影响 MD/HTML，SQL 出口硬编码走原链路 |
 | 双版信息不同步 | rendition 是投影不是副本；重生成幂等，publish 时统一定稿 |
 
-## 10. generation_template 模板驱动生成（设计已定稿待实现，2026-07-07）
+## 10. generation_template 模板驱动生成（2026-07-07 定稿，2026-07-08 已实现）
 
 事实源级规则（数据流位点、投影/生成判定、company_sql_v1 不变式）见
 `docs/backend/reports-editorial-design.md` §8.1；本节是实现级细节。契约：

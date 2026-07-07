@@ -138,7 +138,10 @@
     "AUTH_MODE=oidc and OIDC_CLIENT_ID empty",
     "AUTH_MODE=oidc and neither OIDC_ISSUER nor explicit OIDC_AUTHORIZATION_ENDPOINT/OIDC_TOKEN_ENDPOINT is configured",
     "sync_consumer enabled with SYNC_PULL_ENABLED=true but SYNC_REMOTE_BASE_URL or SYNC_REMOTE_TOKEN missing",
-    "INGESTION_SOURCE_TYPES contains values outside the 12 known source types (source_fields.json source_types incl. wechat); a typo in the allowlist would silently drop coverage, so it must fail startup"
+    "INGESTION_SOURCE_TYPES contains values outside the 12 known source types (source_fields.json source_types incl. wechat); a typo in the allowlist would silently drop coverage, so it must fail startup",
+    "GENERATION_PROVIDER not in [openai_compatible, minimax]",
+    "GENERATION_ENABLED=true and resolved api key empty (GENERATION_API_KEY empty and GENERATION_API_KEY_REF missing/unresolvable, after legacy MINIMAX_API_KEY per-field fallback)",
+    "GENERATION_PROVIDER=openai_compatible and GENERATION_BASE_URL empty (only the minimax preset carries a builtin default base URL)"
   ],
   "install_presets": {
     "description": "deploy/install.sh --preset generated env combinations (default full). Presets are env combinations on top of DEPLOY_MODE, not new modes; mirror is the standalone/cloud + consumer-override combination and must stay legal under startup_failfast_rules (checked by scripts/check_prod_deploy.py).",
@@ -149,14 +152,6 @@
   "startup_warnings": [
     "AUTH_MODE=intranet_header without AUTH_TRUSTED_PROXY_CIDRS: identity headers are trusted from any peer; the trusted gateway must be the only ingress (logged as a warning, not fail-fast, to keep existing gateway-only deployments bootable)"
   ],
-  "planned_startup_failfast_rules": {
-    "status": "design_final_pending_implementation (2026-07-07); move entries into startup_failfast_rules when backend/app/core/deploy_checks.py implements them (the list above stays 1:1 with implemented checks)",
-    "rules": [
-      "GENERATION_ENABLED=true and resolved api key empty (GENERATION_API_KEY empty and GENERATION_API_KEY_REF missing/unresolvable, after legacy MINIMAX_* fallback)",
-      "GENERATION_PROVIDER=openai_compatible and GENERATION_BASE_URL empty",
-      "GENERATION_PROVIDER not in [openai_compatible, minimax]"
-    ]
-  },
   "related_env": [
     "INSTANCE_ID",
     "INGESTION_SOURCE_TYPES",

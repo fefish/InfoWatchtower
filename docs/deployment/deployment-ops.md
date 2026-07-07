@@ -138,15 +138,18 @@ DAILY_PIPELINE_CREATE_DAILY_DRAFT=true
 DAILY_PIPELINE_RECOMMENDATION_LIMIT=15
 DAILY_PIPELINE_SOURCE_DAILY_LIMIT=2
 DAILY_PIPELINE_DAY_OFFSET_DAYS=-1
-MINIMAX_GENERATION_ENABLED=false
-# MINIMAX_BASE_URL=https://api.minimaxi.com/v1
+# scheduler 停摆后错过触发点的补跑窗口（秒，默认 3600；超窗跳过、管理员手动补跑）
+SCHEDULER_MISSED_WINDOW_SECONDS=3600
+GENERATION_ENABLED=false
+# GENERATION_PROVIDER=minimax
+# GENERATION_BASE_URL=https://api.minimaxi.com/v1
 ```
 
 `INGESTION_SCHEDULER_DAILY_TIME` 显式置空时，scheduler 回退旧的 interval 模式：启动后立即入队一次，然后按 `INGESTION_SCHEDULER_INTERVAL_SECONDS` 间隔重复。固定生产任务优先使用 `INGESTION_SCHEDULER_DAILY_TIME`（缺省即 12:00），减少容器重启导致的时间漂移。
 
 如果要限制单次调度处理源数量，可设置 `INGESTION_SCHEDULER_LIMIT=10`。
 
-若生产环境希望日报结构化稿调用 MiniMax，设置 `MINIMAX_GENERATION_ENABLED=true`、`MINIMAX_API_KEY`，并使用旧参考脚本已验证的中国区 OpenAI-compatible 地址 `MINIMAX_BASE_URL=https://api.minimaxi.com/v1`；未显式设置 `MINIMAX_BASE_URL` 时也会默认走该地址。旧 `.env` 中可能残留的 `MINIMAX_ANTHROPIC_BASE_URL` 只保留兼容读取，不会覆盖主链路。单条生成默认 45 秒超时；未启用、超时或调用失败时会使用规则 fallback，不阻塞日报流水线；但 fallback 会标记为 `fallback_needs_review`，标准公司 SQL 导出会拒绝，必须通过日报草稿重跑 MiniMax 或人工编辑后再导出。
+若生产环境希望日报结构化稿调用模型生成，使用 `GENERATION_*` env 族（2026-07-08 起为首选口径）：`GENERATION_ENABLED=true`、`GENERATION_PROVIDER=minimax|openai_compatible`、`GENERATION_API_KEY`（或 `GENERATION_API_KEY_REF=env:VAR|file:/abs/path`）、`GENERATION_MODEL`；minimax preset 未显式设置 `GENERATION_BASE_URL` 时默认走中国区 OpenAI-compatible 地址 `https://api.minimaxi.com/v1`，`openai_compatible` 则必须显式配置 base_url（否则启动 fail-fast，契约 `config/contracts/deployment_modes.json` `startup_failfast_rules`）。旧 `MINIMAX_*` 变量在弃用过渡期内保留为逐字段兼容回退（两者都配时 `GENERATION_*` 优先）；旧 `.env` 中可能残留的 `MINIMAX_ANTHROPIC_BASE_URL` 只保留兼容读取，不会覆盖主链路。单条生成默认 45 秒超时；未启用、超时或调用失败时会使用规则 fallback，不阻塞日报流水线；但 fallback 会标记为 `fallback_needs_review`，标准公司 SQL 导出会拒绝，必须通过日报草稿重跑 MiniMax 或人工编辑后再导出。
 
 如果只想执行抓取、不生成日报草稿，可设置 `SCHEDULER_JOB_MODE=ingestion_only`。
 

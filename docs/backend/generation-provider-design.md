@@ -1,6 +1,7 @@
 # Generation Provider 生成模型配置与连通性设计
 
-> 状态：设计已定稿待实现（2026-07-07）。本文是 LLM 生成 provider 配置、
+> 状态：已实现（2026-07-07 设计定稿，2026-07-08 实现落地；验收断言由
+> `backend/tests/test_generation_provider.py` 看护）。本文是 LLM 生成 provider 配置、
 > 工作台生成策略（`generation_policy`）和连通性自检的后端模块事实源。
 > 生成 prompt/字段结构仍以 `docs/backend/report-renditions-design.md` 与
 > `config/contracts/report_renditions.json` 为准；模板驱动生成见
@@ -71,10 +72,11 @@
   切到 `GENERATION_*`。
 - 启动自检：`GENERATION_ENABLED=true` 且 key（含 REF 解析后）为空 →
   启动失败并给修复指引；`GENERATION_PROVIDER=openai_compatible` 且
-  `GENERATION_BASE_URL` 为空 → 启动失败。规则已登记在
-  `config/contracts/deployment_modes.json` `planned_startup_failfast_rules`；
-  实现落地 `backend/app/core/deploy_checks.py` 时移入 `startup_failfast_rules`
-  （该清单与已实现自检保持 1:1）。
+  `GENERATION_BASE_URL` 为空 → 启动失败。已实现于
+  `backend/app/core/deploy_checks.py`，规则登记在
+  `config/contracts/deployment_modes.json` `startup_failfast_rules`
+  （该清单与已实现自检保持 1:1；2026-07-08 已从
+  `planned_startup_failfast_rules` 迁入）。
 
 ### 3.2 工作台 `generation_policy` 字段规格
 

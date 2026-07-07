@@ -159,7 +159,7 @@ scripts/   SQL 校验、历史导入、数据回填等工具
 
 周报第一版不自动生成长文，只管理采信项版本。周报草稿从已发布日报中 `adoption_status = 2` 的条目生成，按成品新闻一级标签形成板块。
 
-2026-07-07 设计已定稿待实现的两项增量（本节只收敛口径，实现级规格见对应事实源）：
+2026-07-07 定稿、2026-07-08 已实现的两项增量（本节只收敛口径，实现级规格见对应事实源）：
 
 - **分层调度**：每日流水线的触发时刻、day_offset、run 级失败自动重试
   （backoff、重试链 `retry_of_run_id` 可追溯、`partial` 永不触发）和周报草稿节拍
@@ -266,7 +266,7 @@ full；契约：`config/contracts/deployment_modes.json` `install_presets`）：
   让登录用户自助订阅公开工作台为 viewer 成员（幂等、不降级已有角色）；private
   工作台对非成员不泄露存在。契约：`config/contracts/workspace_model.json`
   `discovery_and_subscription`。
-- **工作台加入码与公开形态矩阵（2026-07-07 设计已定稿待实现）**：公开的上限是
+- **工作台加入码与公开形态矩阵（2026-07-07 定稿，2026-07-08 已实现）**：公开的上限是
   「`internal_public` + 游客只读」，不提供匿名公开写入；`private` 工作台的团队
   自助入口是工作台加入码（`workspace_join_codes`：每工作台至多一个 active 码、
   只授 viewer/member、可轮换/停用/限期限次；`join-by-code` 幂等不降级、统一失效

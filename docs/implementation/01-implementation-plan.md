@@ -611,9 +611,17 @@ backup restore smoke test
 
 ## 17. 第三轮实施工作包（2026-07-07 设计定稿 → 全量实现）
 
+> 收口状态（2026-07-08）：WP3-A…H 已全部实现，契约状态位已迁移（
+> `deployment_modes.json` `startup_failfast_rules`、`notifications.json`
+> `implemented_event_types_v1`、`workspace_model.json`/`auth_modes.json`/
+> `report_renditions.json` 各 status 改为实现事实），capability-map §4.3 行
+> 已移入 §4.1，page-specs 对应「未做」已改「已做」。遗留两项 UI（格式管理
+> 面板模板上传/校验/预览、`/ingestion-runs` 调度卡心跳升级）记录在
+> capability-map §4.3 与 page-specs §7.3/§10.3。
+
 2026-07-07 设计轮（自动化/生成轨道 + 体验系统轨道）已把三大后端能力和五项体验能力
-按实现级规格定稿（见 `docs/architecture/capability-map.md` §4.3 汇总表），本章把
-它们拆成可并行领取的实施工作包。规则：
+按实现级规格定稿（见 `docs/architecture/capability-map.md` §4.3 汇总表，2026-07-08
+收口后为 §4.1 已闭环行），本章把它们拆成可并行领取的实施工作包。规则：
 
 - 每个 WP 的唯一验收基准是「设计事实源 §号 + 契约键」，不得实现成与设计有出入的
   "看起来可用"版本；实现后把 `api-and-ui-implementation.md` 待实现端点块移入已实现表、

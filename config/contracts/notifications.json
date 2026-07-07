@@ -134,16 +134,10 @@
         ],
         "ingestion_operations": [
             "ingestion.failed_source_retry_due",
-            "ingestion.failed_source_retry_blocked"
+            "ingestion.failed_source_retry_blocked",
+            "ingestion.pipeline_retry_exhausted"
         ]
     },
-  "planned_event_types": {
-    "status": "design_final_pending_implementation (2026-07-07); move into implemented_event_types_v1.ingestion_operations, notification_generation_rules_v1 and preference_filtering_v1 when pipeline run-level auto-retry ships (docs/backend/pipeline-jobs-design.md section 6.2)",
-    "ingestion_operations": [
-      "ingestion.pipeline_retry_exhausted"
-    ],
-    "rule": "Emitted once per daily pipeline retry chain when run-level auto-retry attempts are exhausted (the final allowed attempt still ends failed). Recipients, priority and channel mirror ingestion.failed_source_retry_blocked: active super_admin users plus workspace owner/admin members, priority important, in_app, anchor /ingestion-runs?run_id=<last failed run>. Metadata: run id chain, workspace_code, day_key, attempt, error_code."
-  },
   "notification_generation_rules_v1": [
     {
       "event_types": [
@@ -221,6 +215,28 @@
                 "alert_state"
             ],
             "idempotency_rule": "One event is emitted per base ingestion run, event type and attempt_count. A blocked alert is emitted once when max attempts are reached."
+        },
+        {
+            "event_types": [
+                "ingestion.pipeline_retry_exhausted"
+            ],
+            "creates_notification": true,
+            "recipients": [
+                "active super_admin users",
+                "workspace owner/admin members for the exhausted pipeline run workspace"
+            ],
+            "priority": "important",
+            "delivery_channel": "in_app",
+            "metadata": [
+                "pipeline_run_id",
+                "run_id_chain",
+                "workspace_code",
+                "day_key",
+                "attempt",
+                "error_code"
+            ],
+            "frontend_anchor": "/ingestion-runs?run_id=<last failed pipeline run>",
+            "idempotency_rule": "Emitted once per daily pipeline retry chain (deduplicated on the last failed run id) when run-level auto-retry attempts are exhausted, i.e. the final allowed attempt still ends failed. Implementation: backend/app/collaboration/notifications.py record_pipeline_retry_exhausted_activity, called from backend/app/pipeline/runs.py; covered by backend/tests/test_pipeline_retry.py."
         },
         {
             "event_types": [
@@ -314,6 +330,7 @@
             "sync_conflict.created",
             "ingestion.failed_source_retry_due",
             "ingestion.failed_source_retry_blocked",
+            "ingestion.pipeline_retry_exhausted",
             "daily_report.published",
       "weekly_report.published",
       "weekly_report_item.updated",

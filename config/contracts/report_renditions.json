@@ -42,11 +42,11 @@
   "column_additions": {
     "generated_news.insight_json": "Model-generated auxiliary fields for tech-insight renditions: board (from config/taxonomy/business_boards.json), bullet_points[], takeaway, tag_line[]. Strictly separate from content_json; company SQL export never reads it.",
     "daily_report_items.is_headline": "Editor-adjustable headline flag. Auto-initialized to recommendation-score top-N on first headline-enabled rendition build; never auto-overwritten afterwards.",
-    "generated_news.template_extras_json": "design_final_pending_implementation (2026-07-07): per-format_code bucket of template-generated extra fields ({values, generated_by, generated_at, template_version}). Never merged into content_json/insight_json/category, never exported to SQL, never fed into dedupe or recommendation. Spec: docs/backend/report-renditions-design.md section 10.",
-    "report_formats.generation_template + generation_template_source": "design_final_pending_implementation (2026-07-07): canonical template (JSON) plus uploaded source text (JSON or XML carrier). Always null for builtin formats (company_sql_v1/tech_insight_v1)."
+    "generated_news.template_extras_json": "implemented (2026-07-08, backend/app/models/content.py; covered by backend/tests/test_generation_template.py): per-format_code bucket of template-generated extra fields ({values, generated_by, generated_at, template_version}). Never merged into content_json/insight_json/category, never exported to SQL, never fed into dedupe or recommendation. Spec: docs/backend/report-renditions-design.md section 10.",
+    "report_formats.generation_template + generation_template_source": "implemented (2026-07-08, backend/app/models/reports.py): canonical template (JSON) plus uploaded source text (JSON or XML carrier). Always null for builtin formats (company_sql_v1/tech_insight_v1)."
   },
   "generation_template": {
-    "status": "design_final_pending_implementation (2026-07-07)",
+    "status": "implemented (2026-07-08): parsing/projection/incremental generation in backend/app/reports/ + generation chain, validate-template API in backend/app/api/routes/reports.py; covered by backend/tests/test_generation_template.py (incl. the negative assertion that company SQL stays byte-identical under any template config)",
     "spec": "docs/backend/reports-editorial-design.md section 8.1 (fact source: data-flow position and projection-vs-generation decision) + docs/backend/report-renditions-design.md section 10 (implementation-level detail)",
     "carriers": ["json", "xml"],
     "canonical_form": "XML uploads are parsed with a DTD/external-entity-free parser and stored as the same canonical JSON template; runtime reads canonical form only.",

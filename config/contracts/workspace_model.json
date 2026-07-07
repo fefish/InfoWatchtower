@@ -117,7 +117,7 @@
     ],
     "rules": [
       "GET /api/workspaces/discover lists enabled internal_public workspaces for any logged-in user with name/description/member_count/joined/workspace_role; private workspaces never appear (no existence leak).",
-      "GET /api/workspaces/discover accepts an optional q parameter (design_final_pending_implementation, 2026-07): case-insensitive contains filter on name and description; the filter scope stays strictly enabled internal_public workspaces, so no keyword can surface a private workspace.",
+      "GET /api/workspaces/discover accepts an optional q parameter (implemented 2026-07-08; backend/app/api/routes/workspaces.py, covered by backend/tests/test_workspace_join_codes.py): case-insensitive contains filter on name and description; the filter scope stays strictly enabled internal_public workspaces, so no keyword can surface a private workspace.",
       "POST /api/workspaces/{code}/subscribe lets a logged-in user self-join an internal_public workspace as a viewer member, idempotently: an existing enabled membership keeps its role, a disabled membership is re-enabled as viewer. Private or unknown workspaces answer 404 with the same body. Audited as workspace.member.subscribe with before/after snapshots.",
       "DELETE /api/workspaces/{code}/subscribe disables the caller own viewer membership idempotently (204 even when not subscribed); roles above viewer answer 400 and stay managed through the member-management endpoints (protects the last-owner rule). Audited as workspace.member.unsubscribe.",
       "Guest sessions (AUTH_GUEST_ENABLED, see auth_modes.json guest_access) never hold memberships: they browse enabled internal_public workspaces through an implicit viewer perspective and every write, including subscribe, is rejected 403 by the central guest gate with a register-first hint.",
@@ -140,7 +140,7 @@
     }
   },
   "join_code": {
-    "status": "design_final_pending_implementation (2026-07); fact source docs/backend/workspace-configuration-design.md section 14",
+    "status": "implemented (2026-07-08): backend/app/api/routes/workspace_access.py + workspace_join_codes table/migration; covered by backend/tests/test_workspace_join_codes.py (incl. anti-enumeration and rate-limit cases). Fact source docs/backend/workspace-configuration-design.md section 14",
     "purpose": "Lightweight self-service team entry for already-registered users; complements user_invites (which target unregistered individuals, create accounts and bind global roles). Join codes never create accounts and never change global roles.",
     "table": {
       "workspace_join_codes": [
@@ -319,7 +319,7 @@
     ]
   },
   "schedule_policy": {
-    "status": "design_final_pending_implementation (2026-07-07); spec: docs/backend/pipeline-jobs-design.md sections 6.1-6.2 and 8",
+    "status": "implemented (2026-07-08): read/write API in backend/app/api/routes/workspaces.py, per-workspace scheduler tick + run-level auto-retry in backend/app/workers/scheduler.py + backend/app/pipeline/runs.py, heartbeat via GET /api/pipeline/scheduler/status; covered by backend/tests/test_scheduler_policy.py and test_pipeline_retry.py. Spec: docs/backend/pipeline-jobs-design.md sections 6.1-6.2 and 8",
     "endpoint_read": "GET /api/workspaces/{workspace_code}/schedule-policy (workspace viewer+; returns policy + resolved effective values + next_run_at preview)",
     "endpoint_update": "PATCH /api/workspaces/{workspace_code}/schedule-policy (workspace admin+ or super_admin)",
     "stored_at": "workspaces.config_json.schedule_policy (same level as label_policy/feedback_policy/report_policy)",
@@ -343,7 +343,7 @@
     ]
   },
   "generation_policy": {
-    "status": "design_final_pending_implementation (2026-07-07); spec: docs/backend/generation-provider-design.md",
+    "status": "implemented (2026-07-08): policy read/write + POST /api/generation/ping in backend/app/api/routes/generation.py, GENERATION_* env family with MINIMAX_* per-field fallback in backend/app/core/config.py, startup fail-fast in backend/app/core/deploy_checks.py; covered by backend/tests/test_generation_provider.py. Spec: docs/backend/generation-provider-design.md",
     "endpoint_read": "GET /api/workspaces/{workspace_code}/generation-policy (workspace viewer+; response adds resolved provider/model/base_url_host/key_configured, never the key itself)",
     "endpoint_update": "PATCH /api/workspaces/{workspace_code}/generation-policy (workspace admin+ or super_admin)",
     "ping_endpoint": "POST /api/generation/ping (super_admin or editor_admin; minimal live probe, audited as generation.ping, no secrets in detail)",

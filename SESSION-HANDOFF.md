@@ -334,6 +334,73 @@ api-and-ui-implementation 待实现端点块补齐两轨道全部端点。
 实施待启动状态：**下一轮直接按 §17 的 WP3-A…WP3-H 领任务全量实现**；
 WP3-D/E/F 完全独立可先行，WP3-H 依赖 A/B 的 API。实现时同步迁移各契约状态位
 （planned_* → 实现态）并把 capability-map §4.3 行移入 §4.1。
+（→ 已在 §3.8 完成收口。）
+
+### 3.8 2026-07-08 第三轮实施（WP3-A…H 全量实现 + 契约/文档收口）
+
+分三波完成：W1/W2 实现波（后端 WP3-A/B/C/F/G + 前端 WP3-D/E/F/G/H），
+W3 收口波（本节，只动 docs/契约/env 样例，零代码）。
+
+实施完成清单（均有 pytest/vitest 看护，逐项经 grep 核实）：
+
+- **WP3-A 调度策略 + run 级自动重试 + 心跳**：`schedule-policy` 读写 API、
+  scheduler per-workspace tick、run 重试链（attempt/retry_of_run_id/next_retry_at）
+  与 backoff、耗尽通知 `ingestion.pipeline_retry_exhausted`、`scheduler_heartbeats`
+  表 + `GET /api/pipeline/scheduler/status`、env `SCHEDULER_MISSED_WINDOW_SECONDS`；
+  `backend/tests/test_scheduler_policy.py`、`test_pipeline_retry.py`。
+- **WP3-B 生成 provider 分层配置**：`GENERATION_*` env 族 + `MINIMAX_*` 逐字段
+  回退、deploy_checks 三条 fail-fast、`generation-policy` 读写 + `POST
+  /api/generation/ping`、预算与 `fallback_behavior=fail`；
+  `backend/tests/test_generation_provider.py`。
+- **WP3-C 模板驱动生成**：`report_formats.generation_template(+_source)`、
+  JSON/XML 规范形解析、投影/增量判定、`POST /api/report-formats/validate-template`
+  （落在 `backend/app/api/routes/renditions.py`）、`template_extras_json`、
+  template_fallback 降级、weekly 同机制、公司 SQL 逐字节不变负向断言；
+  `backend/tests/test_generation_template.py`。
+- **WP3-D 布局模板与间距系统**：spacing tokens、四布局模板逐页收敛、Dashboard
+  主列+固定侧栏重排（源健康折叠）；`frontend/src/pages/layout-templates.spec.ts`、
+  `DashboardPage.spec.ts`。
+- **WP3-E 统一弹窗系统**：`AppModal.vue` 基座、4 处弹层迁移、上下文面板正式化、
+  `validate_frontend_controls.py` modal_rule 扫描；`AppModal.spec.ts`、
+  `AppShell.spec.ts`、`SourcesPage.spec.ts`。
+- **WP3-F 账号资料自助编辑**：`PATCH /api/auth/me` + `/account` 资料卡；
+  `backend/tests/test_auth.py`、`AccountPage.spec.ts`。
+- **WP3-G 发现搜索 + 加入码**：`discover?q=`、`workspace_join_codes` 表、
+  join-code 三端点 + `join-by-code`（统一 400/限流 429，路由
+  `backend/app/api/routes/workspace_access.py`）、发现 Modal 搜索+凭码加入；
+  `backend/tests/test_workspace_join_codes.py`、`WorkspaceDiscovery.spec.ts`。
+- **WP3-H 配置中心三卡 + 心跳卡**：`/workspace-settings` 自动化/生成模型/
+  可见性与加入码卡、`/dashboard` 侧栏第 6 位心跳卡（离线态不渲染绿色）；
+  `WorkspaceSettingsPage.spec.ts`、`DashboardPage.spec.ts`。
+
+W3 收口（2026-07-08 本波）：
+
+- 契约状态位迁移：`deployment_modes.json` `planned_startup_failfast_rules` 三条
+  规则移入 `startup_failfast_rules`（与 `deploy_checks.py` 1:1）；
+  `notifications.json` `planned_event_types` 移入 `implemented_event_types_v1` +
+  `notification_generation_rules_v1` + `preference_filtering_v1`；
+  `workspace_model.json`（schedule_policy/generation_policy/join_code/discover q）、
+  `auth_modes.json`（profile_self_service）、`report_renditions.json`
+  （generation_template/column_additions）的 `design_final_pending_implementation`
+  全部改为实现事实描述（`frontend_control_governance.json` 已在 WP3-E 改为
+  enforced）。
+- 文档闭环：`api-and-ui-implementation.md` 待实现端点块 15 条逐个 grep 核实后
+  移入已实现表；capability-map §4.3 七行移入 §4.1，§4.3 改为收口说明；
+  page-specs §2.3/§3/§3.1/§4/§7.3/§10.3/§19.5/§25 未做→已做；
+  01-implementation-plan §17 头部加收口状态；generation-provider-design §3.1
+  契约引用同步。
+- env 样例：quickstart §2.1/§2.2、deployment-ops、`deploy/env.production.example`、
+  `env.extranet.example`、`env.mirror.example` 切到 `GENERATION_*` 首选口径并补
+  `SCHEDULER_MISSED_WINDOW_SECONDS` 注释样例。
+
+遗留（未实现，如实保留，下一轮可领）：
+
+- 格式管理面板模板上传/校验/预览 UI：后端 validate-template/模板读写已就绪，
+  `/reports` 格式管理面板未接入（page-specs §10.3、capability-map §4.3）。
+- `/ingestion-runs` 调度卡心跳升级：仍读 `GET /api/ingestion/scheduler` env
+  快照，未切 `GET /api/pipeline/scheduler/status`（page-specs §7.3）。
+- 延续项：`install.sh` env 默认时刻 09:00 vs 代码默认 12:00；
+  `GET /api/entity-timeline/summary` 缺 workspace membership 断言。
 
 ## 4. 用户发现的问题与闭环状态
 

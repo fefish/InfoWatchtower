@@ -346,9 +346,9 @@ workspace_source_links  某工作台启用了哪些共享源以及如何配置
 - 每个工作台有自己的配置中心（前端 `/workspace-settings`，admin/owner 可见）：
   基本信息、导航分区启停、标签策略、报告策略（`report_policy.auto_publish_daily`
   自动发布）、成员管理和报告格式都在工作台内配置，不依赖全局管理员；viewer
-  反馈策略仍在 `/users` 策略视图编辑。设计已定稿待实现的配置卡：可见性与加入码
-  （§6 加入码条目）、自动化（`schedule_policy`，§11 调度分层）、生成模型
-  （`generation_policy`，key 只在实例 env、界面永不回显）。
+  反馈策略仍在 `/users` 策略视图编辑。可见性与加入码（§6 加入码条目）、自动化
+  （`schedule_policy`，§11 调度分层）、生成模型（`generation_policy`，key 只在
+  实例 env、界面永不回显）三张配置卡已实现（2026-07-08）。
 - 用户组（`user_groups`）是运营分组，不是第三层权限：只用于按组批量把成员加入
   工作台（`POST /api/workspaces/{code}/members/bulk`）和任务协作视图的组织单位，
   权限仍由全局角色与 workspace membership 决定。
