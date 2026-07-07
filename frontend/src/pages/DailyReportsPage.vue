@@ -19,12 +19,14 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 
 import AppModal from "../components/AppModal.vue";
+import ReportTimeline, { type ReportTimelineNode } from "../components/ReportTimeline.vue";
 
 import {
   createDailyReportItemComment,
   createDailyReportItemEntityMilestone,
   createDailyReportItemInsight,
   createDailyPipelineRun,
+  fetchDailyReport,
   fetchDailyReportItemComments,
   fetchDailyReports,
   publishDailyReport,
@@ -175,6 +177,118 @@ const selectedReport = computed(() => {
 });
 
 const reportItems = computed(() => selectedReport.value?.items ?? []);
+
+// ---- 报告时间轴（ReportTimeline，产品设计 §13.1/§13.2）----
+const timelineLocalReports = computed(() =>
+  reports.value.map((report) => ({
+    id: report.id,
+    key: report.day_key,
+    status: report.status,
+    itemCount: report.items.length
+  }))
+);
+
+async function openTimelineNode(node: ReportTimelineNode) {
+  const existing = reports.value.find((candidate) => candidate.id === node.detailId);
+  if (existing) {
+    selectReport(existing);
+    return;
+  }
+  // 归档索引节点：经 detail_id 直达当前日报 API（只读索引供数，不读归档正文投影）。
+  error.value = "";
+  try {
+    const report = await fetchDailyReport(node.detailId);
+    reports.value = [...reports.value, report];
+    selectReport(report);
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "加载日报失败";
+  }
+}
+
+// ---- 顶部筛选条：纯前端过滤当前报告条目/成稿分组的显示，不发新请求、不改采信状态 ----
+const filterCategories = ref<string[]>([]);
+const filterSection = ref("all");
+const filterKeyword = ref("");
+
+const filtersActive = computed(
+  () =>
+    filterCategories.value.length > 0 ||
+    filterSection.value !== "all" ||
+    filterKeyword.value.trim() !== ""
+);
+
+const categoryOptions = computed(() => {
+  const seen = new Set<string>();
+  const options: string[] = [];
+  for (const item of reportItems.value) {
+    const category = item.generated_news.category;
+    if (category && !seen.has(category)) {
+      seen.add(category);
+      options.push(category);
+    }
+  }
+  return options;
+});
+
+const sectionOptions = computed(() =>
+  activeFormatCode.value === "company_sql_v1" ? [] : renditionGroups.value.map((group) => group.title)
+);
+
+function toggleFilterCategory(category: string) {
+  if (filterCategories.value.includes(category)) {
+    filterCategories.value = filterCategories.value.filter((candidate) => candidate !== category);
+  } else {
+    filterCategories.value = [...filterCategories.value, category];
+  }
+}
+
+function clearFilters() {
+  filterCategories.value = [];
+  filterSection.value = "all";
+  filterKeyword.value = "";
+}
+
+function matchesFilters(category: string, text: string) {
+  if (filterCategories.value.length > 0 && !filterCategories.value.includes(category)) {
+    return false;
+  }
+  const keyword = filterKeyword.value.trim().toLowerCase();
+  if (keyword && !text.toLowerCase().includes(keyword)) {
+    return false;
+  }
+  return true;
+}
+
+const visibleReportItems = computed(() =>
+  reportItems.value.filter((item) =>
+    matchesFilters(item.generated_news.category, `${displayTitle(item)} ${displaySummary(item)}`)
+  )
+);
+
+const visibleRenditionGroups = computed(() =>
+  renditionGroups.value
+    .filter((group) => filterSection.value === "all" || group.title === filterSection.value)
+    .map((group) => ({
+      ...group,
+      item_ids: group.item_ids.filter((itemId) => {
+        const snapshot = renditionSnapshots.value[itemId];
+        return Boolean(snapshot) && matchesFilters(snapshot.category, `${snapshot.title} ${snapshot.summary}`);
+      })
+    }))
+    .filter((group) => group.item_ids.length > 0)
+);
+
+const filterTotalCount = computed(() =>
+  activeFormatCode.value === "company_sql_v1"
+    ? reportItems.value.length
+    : renditionGroups.value.reduce((sum, group) => sum + group.item_ids.length, 0)
+);
+
+const filterVisibleCount = computed(() =>
+  activeFormatCode.value === "company_sql_v1"
+    ? visibleReportItems.value.length
+    : visibleRenditionGroups.value.reduce((sum, group) => sum + group.item_ids.length, 0)
+);
 
 const selectedItem = computed(() => {
   return reportItems.value.find((item) => item.id === selectedItemId.value) ?? null;
@@ -422,10 +536,13 @@ async function submitCustomFormat() {
     creatingFormat.value = false;
   }
 }
+// 空指标隐藏（recommendation_ranking.json ordering_consistency empty_metrics，
+// page-specs §10.4）：rating_count=0 无评分样本时返回 null 并隐藏整个
+// 「平均评分」span，不渲染占位「0.0 平均评分」。
 const averageRating = computed(() => {
   const rated = reportItems.value.filter((item) => item.rating_count > 0);
   if (!rated.length) {
-    return "0.0";
+    return null;
   }
   const total = rated.reduce((sum, item) => sum + item.rating_avg, 0);
   return (total / rated.length).toFixed(1);
@@ -685,10 +802,6 @@ function sourceLineage(item: DailyReportItemRecord, key: string) {
 
 function isAnchoredComment(comment: CommentRecord) {
   return pendingCommentAnchorId.value === comment.id;
-}
-
-function statusLabel(status: string) {
-  return status === "published" ? "已发布" : "草稿";
 }
 
 function adoptionLabel(status: number) {
@@ -1015,9 +1128,15 @@ watch(
 );
 
 watch(selectedReportId, () => {
+  clearFilters();
   if (activeFormatCode.value !== "company_sql_v1") {
     void loadRendition();
   }
+});
+
+// 板块选项跟随当前成稿格式的分组：切格式后旧板块选择不再有意义。
+watch(activeFormatCode, () => {
+  filterSection.value = "all";
 });
 
 onMounted(() => {
@@ -1034,7 +1153,7 @@ onMounted(() => {
       <div>
         <p class="eyebrow">Daily Intelligence</p>
         <h2>日报</h2>
-        <p>从推荐链路生成日报草稿，也支持把已校验公司 SQL 预览回填为可查看、可采信、可导出的日报。</p>
+        <p>生成当天的日报草稿，编审、采信并发布正式日报；历史日报从左侧时间轴回溯。</p>
       </div>
       <div class="toolbar-actions">
         <label v-if="canManageReports" class="date-control" title="日报日期">
@@ -1061,21 +1180,45 @@ onMounted(() => {
     <p v-if="error" class="form-error">{{ error }}</p>
     <p v-if="message" class="form-success">{{ message }}</p>
 
-    <section v-if="selectedReport" class="daily-report-layout enhanced">
-      <aside class="report-timeline">
-        <p class="eyebrow">Reports</p>
+    <!-- 顶部筛选条：一级标签胶囊 / 板块 / 关键词，纯前端过滤当前报告条目（产品设计 §13.2） -->
+    <section v-if="selectedReport" class="report-filter-bar" aria-label="条目筛选">
+      <div class="filter-chip-group" role="group" aria-label="一级标签">
         <button
-          v-for="report in reports"
-          :key="report.id"
+          v-for="category in categoryOptions"
+          :key="category"
           type="button"
-          class="report-tab"
-          :class="{ active: report.id === selectedReport.id }"
-          @click="selectReport(report)"
+          class="filter-chip"
+          :class="{ active: filterCategories.includes(category) }"
+          :aria-pressed="filterCategories.includes(category) ? 'true' : 'false'"
+          @click="toggleFilterCategory(category)"
         >
-          <strong>{{ report.day_key }}</strong>
-          <span>{{ statusLabel(report.status) }} · {{ report.items.length }} 条</span>
+          {{ category }}
         </button>
-      </aside>
+      </div>
+      <select v-if="sectionOptions.length" v-model="filterSection" class="filter-section" aria-label="板块">
+        <option value="all">全部板块</option>
+        <option v-for="section in sectionOptions" :key="section" :value="section">{{ section }}</option>
+      </select>
+      <input
+        v-model="filterKeyword"
+        class="filter-keyword"
+        type="search"
+        placeholder="按标题或摘要筛选"
+        aria-label="关键词"
+      />
+      <span class="filter-count">{{ filterVisibleCount }}/{{ filterTotalCount }} 条</span>
+      <button v-if="filtersActive" type="button" class="table-action" @click="clearFilters">清除筛选</button>
+    </section>
+
+    <section v-if="selectedReport" class="daily-report-layout enhanced">
+      <ReportTimeline
+        report-type="daily"
+        :workspace-code="workspace.currentCode"
+        :local-reports="timelineLocalReports"
+        :selected-key="selectedReport.day_key"
+        :can-view-drafts="canManageReports"
+        @select="openTimelineNode"
+      />
 
       <article class="daily-report-card editorial">
         <header class="daily-report-header">
@@ -1111,7 +1254,7 @@ onMounted(() => {
         <div class="report-metrics">
           <span>{{ reportItems.length }} 条入稿</span>
           <span>{{ adoptedCount }} 条采信</span>
-          <span>{{ averageRating }} 平均评分</span>
+          <span v-if="averageRating !== null">{{ averageRating }} 平均评分</span>
         </div>
 
         <div class="rendition-bar">
@@ -1172,7 +1315,7 @@ onMounted(() => {
               </ol>
             </section>
 
-            <section v-for="group in renditionGroups" :key="group.key" class="rendition-group">
+            <section v-for="group in visibleRenditionGroups" :key="group.key" class="rendition-group">
               <h4>
                 {{ group.title }}
                 <small>{{ group.item_ids.length }} 条</small>
@@ -1227,7 +1370,11 @@ onMounted(() => {
               </article>
             </section>
             <p v-if="renditionGroups.length === 0" class="empty-state">
-              本报告暂无采信条目，先在内网版视图完成采信。
+              本报告暂无采信条目，先在编审视图完成采信。
+            </p>
+            <p v-else-if="filtersActive && visibleRenditionGroups.length === 0" class="empty-state filter-empty">
+              没有条目命中当前筛选。
+              <button type="button" class="table-action" @click="clearFilters">清除筛选</button>
             </p>
           </template>
           <p v-else class="empty-state">
@@ -1236,8 +1383,12 @@ onMounted(() => {
         </div>
 
         <div v-if="activeFormatCode === 'company_sql_v1'" class="daily-item-list">
+          <p v-if="filtersActive && visibleReportItems.length === 0" class="empty-state filter-empty">
+            没有条目命中当前筛选。
+            <button type="button" class="table-action" @click="clearFilters">清除筛选</button>
+          </p>
           <article
-            v-for="(item, index) in reportItems"
+            v-for="(item, index) in visibleReportItems"
             :key="item.id"
             class="daily-item story"
             :class="{ active: detailItem?.id === item.id }"

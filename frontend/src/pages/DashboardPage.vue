@@ -121,9 +121,17 @@ const dailyReportStatus = computed(() => {
     : { label: "草稿待编审", tone: "warn" };
 });
 
+// 头条候选集合与排序（recommendation_ranking.json ordering_consistency
+// dashboard_headline_candidates）：只取 day_key=今日 且 admission ∈ {P0,P1,P2}
+// 的候选 top 6，按 final_score 严格降序（并列按 news_item_id 升序）。
+// 非今日候选不进集合（原「今日优先、历史混排」两层排序已按契约废除），
+// 无今日候选渲染空态而非历史候选。
 const topCandidates = computed(() => {
   const qualified = candidates.value.filter((group) => {
     if (!group.recommendation || !group.winner_title) {
+      return false;
+    }
+    if (group.recommendation.day_key !== todayKey) {
       return false;
     }
     const level = (group.recommendation.admission_level || "").toUpperCase();
@@ -131,12 +139,12 @@ const topCandidates = computed(() => {
   });
   return qualified
     .sort((left, right) => {
-      const leftToday = left.recommendation?.day_key === todayKey ? 1 : 0;
-      const rightToday = right.recommendation?.day_key === todayKey ? 1 : 0;
-      if (leftToday !== rightToday) {
-        return rightToday - leftToday;
+      const scoreDelta =
+        (right.recommendation?.final_score ?? 0) - (left.recommendation?.final_score ?? 0);
+      if (scoreDelta !== 0) {
+        return scoreDelta;
       }
-      return (right.recommendation?.final_score ?? 0) - (left.recommendation?.final_score ?? 0);
+      return (left.winner_news_item_id ?? "").localeCompare(right.winner_news_item_id ?? "");
     })
     .slice(0, 6);
 });

@@ -384,6 +384,7 @@ describe("NewsPage", () => {
     await wrapper.find('select[aria-label="推荐状态"]').setValue("recommended");
     await flushPromises();
 
+    // 默认排序为 score_desc（ordering_consistency candidate_pool），筛选变化不改默认排序
     expect(newsApi.fetchDedupeGroups).toHaveBeenLastCalledWith(
       "planning_intel",
       100,
@@ -392,11 +393,12 @@ describe("NewsPage", () => {
         dailyStatus: "all",
         admissionLevel: "",
         sourceType: "",
-        sort: "updated_desc"
+        sort: "score_desc"
       })
     );
 
-    await wrapper.find('select[aria-label="排序方式"]').setValue("score_desc");
+    // 其他排序仅显式选择时生效
+    await wrapper.find('select[aria-label="排序方式"]').setValue("updated_desc");
     await flushPromises();
 
     expect(newsApi.fetchDedupeGroups).toHaveBeenLastCalledWith(
@@ -404,9 +406,30 @@ describe("NewsPage", () => {
       100,
       expect.objectContaining({
         recommendationStatus: "recommended",
-        sort: "score_desc"
+        sort: "updated_desc"
       })
     );
+  });
+
+  it("defaults the candidate pool sort to score_desc and shows 未评分 for unscored candidates", async () => {
+    // ordering_consistency candidate_pool（recommendation_ranking.json）：
+    // 不带显式排序选择时列表以 final_score 降序请求后端。
+    const wrapper = mountPage();
+    await flushPromises();
+
+    expect(newsApi.fetchDedupeGroups).toHaveBeenCalledWith(
+      "planning_intel",
+      100,
+      expect.objectContaining({ sort: "score_desc" })
+    );
+    const sortSelect = wrapper.find('select[aria-label="排序方式"]').element as HTMLSelectElement;
+    expect(sortSelect.value).toBe("score_desc");
+
+    // empty_metrics：final_score 缺失的历史候选显示「未评分」而非 0.0
+    const judge = wrapper.find(".candidate-judge");
+    expect(judge.text()).toContain("未评分");
+    expect(judge.text()).not.toContain("0.0");
+    expect(judge.text()).not.toContain("—");
   });
 
   it("bulk rejects selected recommended candidates into a daily report", async () => {

@@ -536,6 +536,106 @@ describe("DashboardPage", () => {
     expect(wrapper.find(".entry-alert").exists()).toBe(false);
   });
 
+  // ---------- 头条候选排序一致性（recommendation_ranking.json ordering_consistency
+  // dashboard_headline_candidates，page-specs §4.4 看护；契约排序键变更时必须同步） ----------
+
+  it("orders today's headline candidates strictly by final_score desc with news_item_id asc tie-break, top 6", async () => {
+    const rec = candidate().recommendation!;
+    // 乱序 fixture：并列分对 + 最高分在中间 + 超出 top6 的第 7 条
+    newsApi.fetchDedupeGroups.mockResolvedValue([
+      candidate({
+        id: "group-b",
+        winner_news_item_id: "news-b",
+        winner_title: "并列分候选B",
+        recommendation: { ...rec, recommendation_item_id: "rec-b", admission_level: "P1", final_score: 80 }
+      }),
+      candidate({
+        id: "group-top",
+        winner_news_item_id: "news-top",
+        winner_title: "最高分候选",
+        recommendation: { ...rec, recommendation_item_id: "rec-top", admission_level: "P2", final_score: 91.5 }
+      }),
+      candidate({
+        id: "group-a",
+        winner_news_item_id: "news-a",
+        winner_title: "并列分候选A",
+        recommendation: { ...rec, recommendation_item_id: "rec-a", admission_level: "P0", final_score: 80 }
+      }),
+      ...[70, 60, 50, 40].map((score, index) =>
+        candidate({
+          id: `group-fill-${index}`,
+          winner_news_item_id: `news-fill-${index}`,
+          winner_title: `填充候选${score}`,
+          recommendation: { ...rec, recommendation_item_id: `rec-fill-${index}`, final_score: score }
+        })
+      )
+    ]);
+
+    const wrapper = mountPage();
+    await flushPromises();
+
+    const titles = wrapper.findAll(".headline-title").map((node) => node.text());
+    // 严格 final_score 降序；并列（80/80）按 news_item_id 升序；只取 top 6
+    expect(titles).toEqual([
+      "最高分候选",
+      "并列分候选A",
+      "并列分候选B",
+      "填充候选70",
+      "填充候选60",
+      "填充候选50"
+    ]);
+  });
+
+  it("excludes non-today candidates from the headline set even with the highest score", async () => {
+    const rec = candidate().recommendation!;
+    newsApi.fetchDedupeGroups.mockResolvedValue([
+      candidate({
+        id: "group-yesterday",
+        winner_news_item_id: "news-yesterday",
+        winner_title: "昨日高分候选",
+        recommendation: {
+          ...rec,
+          recommendation_item_id: "rec-yesterday",
+          day_key: "2026-07-04",
+          final_score: 99.9
+        }
+      }),
+      candidate()
+    ]);
+
+    const wrapper = mountPage();
+    await flushPromises();
+
+    // 「今日优先、历史混排」已废除：非今日候选不进集合、不渲染
+    const titles = wrapper.findAll(".headline-title").map((node) => node.text());
+    expect(titles).toEqual(["黄仁勋的物理 AI ChatGPT 时刻"]);
+    expect(wrapper.text()).not.toContain("昨日高分候选");
+  });
+
+  it("renders the empty state instead of historic candidates when today has none", async () => {
+    const rec = candidate().recommendation!;
+    newsApi.fetchDedupeGroups.mockResolvedValue([
+      candidate({
+        id: "group-yesterday",
+        winner_news_item_id: "news-yesterday",
+        winner_title: "昨日高分候选",
+        recommendation: {
+          ...rec,
+          recommendation_item_id: "rec-yesterday",
+          day_key: "2026-07-04",
+          final_score: 99.9
+        }
+      })
+    ]);
+
+    const wrapper = mountPage();
+    await flushPromises();
+
+    expect(wrapper.find(".headline-list").exists()).toBe(false);
+    expect(wrapper.text()).not.toContain("昨日高分候选");
+    expect(wrapper.text()).toContain("今天还没有候选。");
+  });
+
   it("shows empty states and hides ingestion actions when ingestion is disabled", async () => {
     healthApi.fetchHealth.mockRejectedValue(new Error("offline"));
     sourcesApi.fetchSources.mockResolvedValue([source({ needs_entry: true, metadata_only: true })]);
@@ -559,6 +659,8 @@ describe("DashboardPage", () => {
     expect(text).not.toContain("新增信息源");
     expect(text).not.toContain("待补入口，去数据源管理处理");
     expect(text).toContain("SQL 导出");
+    // 空指标隐藏（§4.4 / ordering_consistency empty_metrics）：无样本时不渲染占位 0.0
+    expect(text).not.toContain("0.0");
   });
 
   it("keeps a visible recoverable error when a core dashboard API fails", async () => {

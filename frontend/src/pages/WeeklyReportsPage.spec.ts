@@ -26,11 +26,18 @@ const watchersApi = vi.hoisted(() => ({
   updateObjectWatcher: vi.fn()
 }));
 
+const operationsApi = vi.hoisted(() => ({
+  fetchReportArchive: vi.fn(),
+  fetchReportArchiveSummary: vi.fn()
+}));
+
 const routeState = vi.hoisted(() => ({
   query: {} as Record<string, string>
 }));
 
 vi.mock("../api/reports", () => reportsApi);
+
+vi.mock("../api/operations", () => operationsApi);
 
 vi.mock("../api/renditions", () => renditionsApi);
 
@@ -137,6 +144,20 @@ describe("WeeklyReportsPage", () => {
     vi.clearAllMocks();
     routeState.query = {};
     reportsApi.fetchWeeklyReports.mockResolvedValue([weeklyReport()]);
+    reportsApi.fetchWeeklyReport.mockResolvedValue(weeklyReport());
+    operationsApi.fetchReportArchive.mockResolvedValue([]);
+    operationsApi.fetchReportArchiveSummary.mockResolvedValue({
+      workspace_code: "planning_intel",
+      total: 0,
+      published_daily: 0,
+      published_weekly: 0,
+      legacy_reports: 0,
+      total_items: 0,
+      total_adopted: 0,
+      average_adoption_rate: 0,
+      months: [],
+      latest_published_at: null
+    });
     reportsApi.createWeeklyReportItemInsight.mockResolvedValue({
       insight: {
         id: "insight-1",
@@ -254,11 +275,12 @@ describe("WeeklyReportsPage", () => {
       })
     ]);
 
-    const wrapper = mountPage();
+    // 草稿节点在时间轴上仅 member+ 渲染，锚点定位用 member 视角验证。
+    const wrapper = mountPage({ workspaceRole: "member" });
     await flushPromises();
 
     expect(wrapper.find(".weekly-detail h3").text()).toBe("第二份规划部周报");
-    expect(wrapper.find(".run-tab.active strong").text()).toBe("2026-W28");
+    expect(wrapper.find(".report-tab.active strong").text()).toBe("2026-W28");
   });
 
   it("shows the backend weekly summary as a dedicated summary segment", async () => {
@@ -322,11 +344,11 @@ describe("WeeklyReportsPage", () => {
       })
     ]);
 
-    const wrapper = mountPage();
+    const wrapper = mountPage({ workspaceRole: "member" });
     await flushPromises();
 
     expect(wrapper.find(".weekly-detail h3").text()).toBe("第二份规划部周报");
-    expect(wrapper.find(".run-tab.active strong").text()).toBe("2026-W28");
+    expect(wrapper.find(".report-tab.active strong").text()).toBe("2026-W28");
     const anchored = wrapper.find(".weekly-item-row.anchored");
     expect(anchored.exists()).toBe(true);
     expect(anchored.attributes("aria-current")).toBe("true");
@@ -467,5 +489,116 @@ describe("WeeklyReportsPage", () => {
     expect(anchoredLinks[0].attributes("aria-current")).toBe("true");
     expect(anchoredLinks[0].text()).toContain("技术洞察版");
     expect(anchoredLinks[0].attributes("href")).toContain("/weekly-reports/weekly-2/renditions/tech_insight_v1");
+  });
+
+  it("opens an archived weekly report from the timeline via the weekly report API", async () => {
+    operationsApi.fetchReportArchive.mockResolvedValue([
+      {
+        id: "archive-w20",
+        origin: "published",
+        report_type: "weekly",
+        workspace_code: "planning_intel",
+        title: "2026-W20 周报",
+        date_key: "2026-W20",
+        month: "2026-05",
+        status: "published",
+        published_at: "2026-05-17T12:00:00Z",
+        item_count: 12,
+        adopted_count: 9,
+        headline_count: 0,
+        adoption_rate: 0.75,
+        top_sources: [],
+        detail_kind: "weekly_report",
+        detail_id: "weekly-old",
+        content_excerpt: ""
+      }
+    ]);
+    reportsApi.fetchWeeklyReport.mockResolvedValue(
+      weeklyReport({ id: "weekly-old", week_key: "2026-W20", title: "五月第三周周报", status: "published" })
+    );
+
+    const wrapper = mountPage({ workspaceRole: "member" });
+    await flushPromises();
+
+    // 左栏是按月分组时间轴（weekly 变体，节点主标为 ISO 周），替代 run-list 平铺。
+    const timeline = wrapper.find('aside[aria-label="报告时间轴"]');
+    expect(timeline.exists()).toBe(true);
+    expect(operationsApi.fetchReportArchive).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceCode: "planning_intel",
+        reportType: "weekly",
+        origin: "published",
+        offset: 0
+      })
+    );
+
+    const archiveNode = timeline
+      .findAll(".timeline-node")
+      .find((node) => node.text().includes("2026-W20"));
+    expect(archiveNode).toBeTruthy();
+    await archiveNode!.trigger("click");
+    await flushPromises();
+
+    expect(reportsApi.fetchWeeklyReport).toHaveBeenCalledWith("weekly-old");
+    expect(wrapper.find(".weekly-detail h3").text()).toBe("五月第三周周报");
+  });
+
+  it("filters weekly items by board tag chips and keyword as display-only filtering", async () => {
+    const report = weeklyReport();
+    report.items.push({
+      ...weeklyReport().items[0],
+      id: "weekly-item-2",
+      generated_news: {
+        ...weeklyReport().items[0].generated_news!,
+        id: "generated-2",
+        category: "AI Infra",
+        title: "推理集群周报条目",
+        summary: "集群摘要"
+      }
+    });
+    reportsApi.fetchWeeklyReports.mockResolvedValue([report]);
+
+    const wrapper = mountPage({ workspaceRole: "member" });
+    await flushPromises();
+
+    expect(wrapper.findAll(".weekly-item-row")).toHaveLength(2);
+    expect(wrapper.find(".filter-count").text()).toBe("2/2 条");
+
+    // 一级标签胶囊：过滤只影响显示。
+    const chip = wrapper.findAll(".filter-chip").find((button) => button.text() === "模型");
+    expect(chip).toBeTruthy();
+    await chip!.trigger("click");
+    expect(wrapper.findAll(".weekly-item-row")).toHaveLength(1);
+    expect(wrapper.find(".filter-count").text()).toBe("1/2 条");
+
+    // 关键词 0 命中：显示清除入口。
+    await wrapper.find(".filter-keyword").setValue("不存在的关键词");
+    expect(wrapper.findAll(".weekly-item-row")).toHaveLength(0);
+    const filterEmpty = wrapper.find(".filter-empty");
+    expect(filterEmpty.exists()).toBe(true);
+    expect(filterEmpty.text()).toContain("没有条目命中当前筛选");
+
+    await filterEmpty.find("button").trigger("click");
+    expect(wrapper.findAll(".weekly-item-row")).toHaveLength(2);
+
+    // 纯前端过滤：不发写请求。
+    expect(reportsApi.updateWeeklyReportItem).not.toHaveBeenCalled();
+    expect(reportsApi.fetchWeeklyReports).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses reader-facing copy without implementation terms on notes and empty states", async () => {
+    reportsApi.fetchWeeklyReports.mockResolvedValue([weeklyReport({ items: [] })]);
+
+    const wrapper = mountPage({ workspaceRole: "member" });
+    await flushPromises();
+
+    // 文案违例 #3/#4/#5（frontend-product-design §14.2）已替换为业务话术。
+    const pageText = wrapper.text();
+    expect(pageText).toContain("只读取已发布日报中已采信的条目；单次草稿最多 200 条，周报长文自动生成暂不支持");
+    expect(pageText).toContain("请确认该周内有已发布日报，且日报里有已采信条目");
+    expect(pageText).not.toContain("采信状态为 2");
+    expect(pageText).not.toContain("adoption_status");
+    expect(pageText).not.toContain("本阶段");
+    expect(pageText).not.toContain("SQL 预览回填");
   });
 });

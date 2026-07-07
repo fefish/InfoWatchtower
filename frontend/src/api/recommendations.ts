@@ -152,3 +152,166 @@ export async function previewScorer(payload: ScorerPreviewPayload): Promise<Scor
     body: JSON.stringify(payload)
   });
 }
+
+// ---------------------------------------------------------------------------
+// 反馈回哺（WP4-G，feedback-heat-scoring §16.2；契约 feedback_workflow.api）
+// ---------------------------------------------------------------------------
+
+export interface FeedbackRollupMetrics {
+  precision_at_6?: number | null;
+  precision_at_12?: number | null;
+  rerank_uplift?: number | null;
+  source_coverage?: number | null;
+  topic_entropy?: number | null;
+  normalized_adopt_rate?: number | null;
+  edit_rate?: number | null;
+  drift_flag?: boolean;
+  signal_counts?: Record<string, number>;
+  low_data_sources?: { id: string; name: string }[];
+  [key: string]: unknown;
+}
+
+export interface FeedbackRollupRecord {
+  id: string;
+  workspace_code: string;
+  period_type: "weekly" | "monthly";
+  period_key: string;
+  window_start: string | null;
+  window_end: string | null;
+  status: string;
+  proposal_status: string;
+  metrics: FeedbackRollupMetrics;
+  computed_at: string | null;
+}
+
+export interface FeedbackRollupSourceEntry {
+  data_source_id: string;
+  name: string;
+  recommended_count: number;
+  adopted_count: number;
+  rejected_count: number;
+  normalized_adopt_rate: number;
+  reject_rate: number;
+  suggestion: string;
+}
+
+export interface FeedbackRollupDetailRecord extends FeedbackRollupRecord {
+  source_breakdown: {
+    window?: string;
+    sources?: FeedbackRollupSourceEntry[];
+    stale_source_suggestions?: { id: string; name: string; suggestion: string; reason: string }[];
+  };
+  topic_breakdown: Record<string, unknown>;
+  sample_refs: Record<string, unknown>;
+}
+
+export interface FeedbackRollupListResult {
+  items: FeedbackRollupRecord[];
+  total: number;
+}
+
+export interface RubricChangeSummaryEntry {
+  op: string;
+  target_code: string;
+  from: unknown;
+  to: unknown;
+  rationale: string;
+}
+
+export interface RubricRevisionProposalRecord {
+  id: string;
+  workspace_code: string;
+  rollup_id: string;
+  rollup_period_key: string;
+  base_rubric_version: number;
+  prompt_version: string;
+  proposed_rubric: Record<string, unknown>;
+  change_summary: RubricChangeSummaryEntry[];
+  sample_refs: { adopted?: string[]; rejected?: string[] };
+  status: string;
+  review_comment: string;
+  reviewed_at: string | null;
+  compile_fingerprint: string;
+  created_at: string | null;
+}
+
+export interface WorkspaceRecommendationPolicyRecord {
+  workspace_code: string;
+  policy: {
+    rubric_version: number;
+    rubric_status: string;
+    feedback_workflow: {
+      weekly_rollup_enabled: boolean;
+      monthly_review_enabled: boolean;
+      proposal_generation_enabled: boolean;
+      exploration_epsilon: number;
+    };
+    [key: string]: unknown;
+  };
+  resolved: Record<string, unknown>;
+}
+
+export async function fetchWorkspaceRecommendationPolicy(
+  workspaceCode: string
+): Promise<WorkspaceRecommendationPolicyRecord> {
+  return requestJson<WorkspaceRecommendationPolicyRecord>(
+    `/api/workspaces/${workspaceCode}/recommendation-policy`
+  );
+}
+
+export async function fetchFeedbackRollups(
+  workspaceCode: string,
+  periodType: "weekly" | "monthly",
+  limit = 8
+): Promise<FeedbackRollupListResult> {
+  const params = new URLSearchParams({ period_type: periodType, limit: String(limit) });
+  return requestJson<FeedbackRollupListResult>(
+    `/api/workspaces/${workspaceCode}/feedback-rollups?${params.toString()}`
+  );
+}
+
+export async function fetchFeedbackRollupDetail(
+  workspaceCode: string,
+  rollupId: string
+): Promise<FeedbackRollupDetailRecord> {
+  return requestJson<FeedbackRollupDetailRecord>(
+    `/api/workspaces/${workspaceCode}/feedback-rollups/${rollupId}`
+  );
+}
+
+export async function runFeedbackRollup(
+  workspaceCode: string,
+  payload: { period_type: "weekly" | "monthly"; period_key?: string }
+): Promise<FeedbackRollupDetailRecord> {
+  return requestJson<FeedbackRollupDetailRecord>(
+    `/api/workspaces/${workspaceCode}/feedback-rollups/run`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export async function fetchRubricRevisionProposals(
+  workspaceCode: string,
+  status = "pending_review"
+): Promise<{ items: RubricRevisionProposalRecord[] }> {
+  const params = new URLSearchParams({ status });
+  return requestJson<{ items: RubricRevisionProposalRecord[] }>(
+    `/api/workspaces/${workspaceCode}/rubric-revision-proposals?${params.toString()}`
+  );
+}
+
+export async function reviewRubricRevisionProposal(
+  workspaceCode: string,
+  proposalId: string,
+  payload: { action: "accept" | "reject"; comment: string }
+): Promise<RubricRevisionProposalRecord> {
+  return requestJson<RubricRevisionProposalRecord>(
+    `/api/workspaces/${workspaceCode}/rubric-revision-proposals/${proposalId}/review`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }
+  );
+}

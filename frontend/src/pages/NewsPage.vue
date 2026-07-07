@@ -38,7 +38,9 @@ const recommendationStatus = ref("all");
 const dailyStatus = ref("all");
 const admissionLevel = ref("");
 const sourceType = ref("");
-const sortMode = ref("updated_desc");
+// 候选池默认排序（recommendation_ranking.json ordering_consistency candidate_pool）：
+// 默认 score_desc（final_score 降序），其他排序仅显式选择时生效。
+const sortMode = ref("score_desc");
 const activeOnly = ref(true);
 const targetDayKey = ref(todayKey());
 const selectedGroupIds = ref<Set<string>>(new Set());
@@ -78,8 +80,8 @@ const sourceTypeOptions = [
   { value: "page_monitor", label: "页面监控" }
 ];
 const sortOptions = [
-  { value: "updated_desc", label: "最近更新" },
   { value: "score_desc", label: "推荐分高" },
+  { value: "updated_desc", label: "最近更新" },
   { value: "score_asc", label: "推荐分低" },
   { value: "published_desc", label: "发布时间" },
   { value: "source_count_desc", label: "来源数" }
@@ -660,7 +662,8 @@ onMounted(loadCandidatePool);
               </div>
               <aside class="candidate-judge">
                 <span class="score-badge">{{ group.recommendation ? "recommend" : "winner" }}</span>
-                <strong>{{ groupScore(group) !== null ? scoreText(groupScore(group)!) : "—" }}</strong>
+                <!-- 空指标（ordering_consistency empty_metrics）：final_score 缺失显示「未评分」，不渲染占位 0.0 -->
+                <strong>{{ groupScore(group) !== null ? scoreText(groupScore(group)!) : "未评分" }}</strong>
                 <small>{{ group.recommendation ? "推荐分（0-100）" : "待推荐评分" }}</small>
               </aside>
             </div>

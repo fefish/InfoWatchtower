@@ -17,6 +17,8 @@ import {
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 
+import ReportTimeline, { type ReportTimelineNode } from "../components/ReportTimeline.vue";
+
 import {
   createWeeklyReport,
   createWeeklyReportItemEntityMilestone,
@@ -163,6 +165,89 @@ const visibleBoards = computed(() => {
   return weeklyBoards.value.filter((board) => board.name === selectedBoard.value);
 });
 
+// ---- 报告时间轴（ReportTimeline weekly 变体，产品设计 §13.1/§13.2）----
+const timelineLocalReports = computed(() =>
+  reports.value.map((report) => ({
+    id: report.id,
+    key: report.week_key,
+    status: report.status,
+    itemCount: report.items.length
+  }))
+);
+
+async function openTimelineNode(node: ReportTimelineNode) {
+  const existing = reports.value.find((candidate) => candidate.id === node.detailId);
+  if (existing) {
+    await selectReport(existing);
+    return;
+  }
+  // 归档索引节点：经 detail_id 直达当前周报 API（只读索引供数，不读归档正文投影）。
+  error.value = "";
+  try {
+    const report = await fetchWeeklyReport(node.detailId);
+    replaceReport(report);
+    selectedReportId.value = report.id;
+    editingItemId.value = "";
+    selectedBoard.value = "all";
+    filterCategories.value = [];
+    filterKeyword.value = "";
+    await loadWatcherStatuses(report.items);
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "加载周报详情失败";
+  }
+}
+
+// ---- 顶部筛选条：板块/一级标签/关键词，纯前端过滤当前周报条目显示 ----
+const filterCategories = ref<string[]>([]);
+const filterKeyword = ref("");
+
+const filtersActive = computed(
+  () =>
+    filterCategories.value.length > 0 ||
+    filterKeyword.value.trim() !== "" ||
+    selectedBoard.value !== "all"
+);
+
+function toggleFilterCategory(category: string) {
+  if (filterCategories.value.includes(category)) {
+    filterCategories.value = filterCategories.value.filter((candidate) => candidate !== category);
+  } else {
+    filterCategories.value = [...filterCategories.value, category];
+  }
+}
+
+function clearFilters() {
+  filterCategories.value = [];
+  filterKeyword.value = "";
+  selectedBoard.value = "all";
+}
+
+function matchesFilters(category: string, text: string) {
+  if (filterCategories.value.length > 0 && !filterCategories.value.includes(category)) {
+    return false;
+  }
+  const keyword = filterKeyword.value.trim().toLowerCase();
+  if (keyword && !text.toLowerCase().includes(keyword)) {
+    return false;
+  }
+  return true;
+}
+
+const displayedBoards = computed(() =>
+  visibleBoards.value
+    .map((board) => ({
+      ...board,
+      items: board.items.filter((item) =>
+        matchesFilters(boardName(item), `${displayTitle(item)} ${displaySummary(item)}`)
+      )
+    }))
+    .filter((board) => board.items.length > 0)
+);
+
+const filterVisibleCount = computed(() =>
+  displayedBoards.value.reduce((sum, board) => sum + board.items.length, 0)
+);
+
 async function loadReports() {
   if (!workspace.currentCode) {
     return;
@@ -232,6 +317,8 @@ async function selectReport(report: WeeklyReportRecord) {
   selectedReportId.value = report.id;
   editingItemId.value = "";
   selectedBoard.value = "all";
+  filterCategories.value = [];
+  filterKeyword.value = "";
   error.value = "";
   try {
     const updated = await fetchWeeklyReport(report.id);
@@ -535,19 +622,6 @@ function formatScore(value: number) {
   return Number.isFinite(value) ? value.toFixed(1) : "0.0";
 }
 
-function formatDateTime(value: string | null) {
-  if (!value) {
-    return "未发布";
-  }
-  return new Date(value).toLocaleString("zh-CN", {
-    hour12: false,
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit"
-  });
-}
-
 function currentIsoWeekKey() {
   const now = new Date();
   const date = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
@@ -623,7 +697,7 @@ onMounted(() => {
         包含未发布日报
       </label>
       <p class="muted-line">
-        默认只读取已发布日报中采信状态为 2 的条目；单次草稿最多 200 条，周报正文生成暂不在本阶段启用。
+        只读取已发布日报中已采信的条目；单次草稿最多 200 条，周报长文自动生成暂不支持。
       </p>
     </section>
 
@@ -646,33 +720,45 @@ onMounted(() => {
       </article>
     </div>
 
-    <section class="module-split weekly-layout">
-      <aside class="module-card run-list">
-        <div class="card-title-row">
-          <div>
-            <p class="eyebrow">Reports</p>
-            <h3>周报草稿</h3>
-          </div>
-          <span class="metric-pill">{{ reports.length }} reports</span>
-        </div>
+    <!-- 顶部筛选条：一级标签胶囊 / 板块 / 关键词，纯前端过滤当前周报条目（产品设计 §13.2） -->
+    <section v-if="selectedReport && reportItems.length" class="report-filter-bar" aria-label="条目筛选">
+      <div class="filter-chip-group" role="group" aria-label="一级标签">
         <button
-          v-for="report in reports"
-          :key="report.id"
+          v-for="board in weeklyBoards"
+          :key="board.name"
           type="button"
-          class="run-tab"
-          :class="{ active: selectedReport?.id === report.id }"
-          @click="selectReport(report)"
+          class="filter-chip"
+          :class="{ active: filterCategories.includes(board.name) }"
+          :aria-pressed="filterCategories.includes(board.name) ? 'true' : 'false'"
+          @click="toggleFilterCategory(board.name)"
         >
-          <strong>{{ report.week_key }}</strong>
-          <span>{{ statusLabel(report.status) }} · {{ report.items.length }} 条 · {{ formatDateTime(report.published_at) }}</span>
+          {{ board.name }}
         </button>
-        <p v-if="loading && reports.length === 0" class="empty-state">
-          正在加载周报列表。
-        </p>
-        <p v-if="!loading && reports.length === 0" class="empty-state">
-          暂无周报。先发布日报，并把日报条目设为采信，再生成周报草稿；已校验 SQL 预览回填的日报也会进入这里。
-        </p>
-      </aside>
+      </div>
+      <select v-model="selectedBoard" class="filter-section" aria-label="板块">
+        <option value="all">全部板块</option>
+        <option v-for="board in weeklyBoards" :key="board.name" :value="board.name">{{ board.name }}</option>
+      </select>
+      <input
+        v-model="filterKeyword"
+        class="filter-keyword"
+        type="search"
+        placeholder="按标题或摘要筛选"
+        aria-label="关键词"
+      />
+      <span class="filter-count">{{ filterVisibleCount }}/{{ reportItems.length }} 条</span>
+      <button v-if="filtersActive" type="button" class="table-action" @click="clearFilters">清除筛选</button>
+    </section>
+
+    <section class="module-split weekly-layout">
+      <ReportTimeline
+        report-type="weekly"
+        :workspace-code="workspace.currentCode"
+        :local-reports="timelineLocalReports"
+        :selected-key="selectedReport?.week_key ?? ''"
+        :can-view-drafts="canManageReports"
+        @select="openTimelineNode"
+      />
 
       <article class="module-card weekly-detail">
         <div v-if="selectedReport" class="card-title-row">
@@ -710,9 +796,11 @@ onMounted(() => {
         </div>
 
         <div v-if="loading && !selectedReport" class="empty-state">正在加载周报详情。</div>
-        <div v-else-if="!selectedReport" class="empty-state">选择或创建一次周报草稿查看详情。</div>
+        <div v-else-if="!selectedReport" class="empty-state">
+          暂无周报。先发布日报，并把日报条目设为采信，再生成周报草稿。
+        </div>
         <div v-else-if="reportItems.length === 0" class="empty-state">
-          这个周报草稿没有候选条目。请确认该周内存在已发布日报，且日报条目 `adoption_status = 2`。
+          这个周报草稿没有候选条目。请确认该周内有已发布日报，且日报里有已采信条目。
         </div>
         <div v-else class="weekly-board-workspace">
           <section class="weekly-generated-summary" aria-label="周报摘要">
@@ -753,7 +841,11 @@ onMounted(() => {
           </div>
 
           <div class="weekly-section-stack">
-            <section v-for="board in visibleBoards" :key="board.name" class="weekly-section">
+            <p v-if="filtersActive && displayedBoards.length === 0" class="empty-state filter-empty">
+              没有条目命中当前筛选。
+              <button type="button" class="table-action" @click="clearFilters">清除筛选</button>
+            </p>
+            <section v-for="board in displayedBoards" :key="board.name" class="weekly-section">
               <header class="weekly-section-header">
                 <div>
                   <p class="eyebrow">Weekly Section</p>

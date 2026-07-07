@@ -574,6 +574,13 @@ export interface ReportArchiveSummaryRecord {
   average_adoption_rate: number;
   months: ReportArchiveMonthBucket[];
   latest_published_at: string | null;
+  // 已发布报告采信条目的来源 Top（legacy 无来源数据不参与；origin=legacy 时为空）
+  top_sources?: ReportArchiveSourceStat[];
+}
+
+export interface ReportArchiveSummaryFilters {
+  reportType?: string;
+  origin?: string;
 }
 
 export interface ReportArchiveFilters {
@@ -582,6 +589,7 @@ export interface ReportArchiveFilters {
   reportType?: string;
   origin?: string;
   query?: string;
+  offset?: number;
   limit?: number;
 }
 
@@ -1059,11 +1067,17 @@ export async function fetchReportArchive(filters: ReportArchiveFilters = {}): Pr
   if (filters.reportType) params.set("report_type", filters.reportType);
   if (filters.origin) params.set("origin", filters.origin);
   if (filters.query) params.set("q", filters.query);
+  if (filters.offset) params.set("offset", String(filters.offset));
   return requestJson<ReportArchiveListItem[]>(`/api/report-archive?${params.toString()}`);
 }
 
-export async function fetchReportArchiveSummary(workspaceCode: string): Promise<ReportArchiveSummaryRecord> {
+export async function fetchReportArchiveSummary(
+  workspaceCode: string,
+  filters: ReportArchiveSummaryFilters = {}
+): Promise<ReportArchiveSummaryRecord> {
   const params = new URLSearchParams({ workspace_code: workspaceCode });
+  if (filters.reportType) params.set("report_type", filters.reportType);
+  if (filters.origin) params.set("origin", filters.origin);
   return requestJson<ReportArchiveSummaryRecord>(`/api/report-archive/summary?${params.toString()}`);
 }
 

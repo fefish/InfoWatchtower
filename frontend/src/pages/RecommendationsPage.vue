@@ -13,19 +13,25 @@ import { computed, onMounted, ref, watch } from "vue";
 
 import {
   createRecommendationRun,
+  fetchFeedbackRollupDetail,
+  fetchFeedbackRollups,
   fetchRecommendationRun,
   fetchRecommendationRuns,
   fetchScorerPolicy,
   previewScorer,
+  type FeedbackRollupDetailRecord,
+  type FeedbackRollupRecord,
   type RecommendationItemRecord,
   type RecommendationRunRecord,
   type ScorerPreviewRecord,
   type ScorerPolicyRecord
 } from "../api/recommendations";
 import { bulkAdoptDailyReportCandidates, bulkRejectDailyReportCandidates } from "../api/reports";
+import { useSessionStore } from "../stores/session";
 import { useWorkspaceStore } from "../stores/workspace";
 
 const workspace = useWorkspaceStore();
+const session = useSessionStore();
 const runs = ref<RecommendationRunRecord[]>([]);
 const selectedRun = ref<RecommendationRunRecord | null>(null);
 const loading = ref(false);
@@ -62,10 +68,12 @@ const observationItems = computed(() =>
 const selectedReviewItems = computed(() =>
   observationItems.value.filter((item) => selectedReviewItemIds.value.has(item.id))
 );
+// 空指标隐藏（recommendation_ranking.json ordering_consistency empty_metrics）：
+// 无候选样本时返回 null 并隐藏「均分」指标，不渲染占位 0.00。
 const averageScore = computed(() => {
   const items = selectedRun.value?.items ?? [];
   if (!items.length) {
-    return "0.00";
+    return null;
   }
   return (items.reduce((sum, item) => sum + item.final_score, 0) / items.length).toFixed(2);
 });
@@ -288,6 +296,93 @@ function splitTags(value: string) {
     .filter(Boolean);
 }
 
+// ---------------------------------------------------------------------------
+// 反馈评估卡（WP4-G，page-specs §9.3；契约 feedback_workflow.api；admin+ 只读）
+// ---------------------------------------------------------------------------
+
+const workspaceRoleRank: Record<string, number> = { viewer: 0, member: 1, admin: 2, owner: 3 };
+const canViewFeedbackEvaluation = computed(() => {
+  const globalRoles = session.user?.roles ?? [];
+  if (globalRoles.includes("super_admin") || globalRoles.includes("editor_admin")) {
+    return true;
+  }
+  return (workspaceRoleRank[workspace.currentRole ?? "viewer"] ?? 0) >= workspaceRoleRank.admin;
+});
+
+const feedbackPeriod = ref<"weekly" | "monthly">("weekly");
+const feedbackRollups = ref<FeedbackRollupRecord[]>([]);
+const feedbackRollupsError = ref("");
+const feedbackRollupsLoading = ref(false);
+const expandedRollupId = ref("");
+const rollupDetails = ref<Record<string, FeedbackRollupDetailRecord>>({});
+
+async function loadFeedbackRollups() {
+  if (!workspace.currentCode || !canViewFeedbackEvaluation.value) {
+    feedbackRollups.value = [];
+    return;
+  }
+  feedbackRollupsLoading.value = true;
+  feedbackRollupsError.value = "";
+  expandedRollupId.value = "";
+  try {
+    const result = await fetchFeedbackRollups(workspace.currentCode, feedbackPeriod.value, 8);
+    feedbackRollups.value = result.items;
+  } catch (exc) {
+    feedbackRollups.value = [];
+    feedbackRollupsError.value = exc instanceof Error ? exc.message : "加载反馈评估失败";
+  } finally {
+    feedbackRollupsLoading.value = false;
+  }
+}
+
+async function toggleRollupDetail(rollup: FeedbackRollupRecord) {
+  if (expandedRollupId.value === rollup.id) {
+    expandedRollupId.value = "";
+    return;
+  }
+  expandedRollupId.value = rollup.id;
+  if (!rollupDetails.value[rollup.id] && workspace.currentCode) {
+    try {
+      const detail = await fetchFeedbackRollupDetail(workspace.currentCode, rollup.id);
+      rollupDetails.value = { ...rollupDetails.value, [rollup.id]: detail };
+    } catch (exc) {
+      feedbackRollupsError.value = exc instanceof Error ? exc.message : "加载评估详情失败";
+    }
+  }
+}
+
+// 空指标规则（契约 empty_sample_rule）：null 指标整项隐藏，页面不出现 0.0 占位。
+function rollupMetricEntries(rollup: FeedbackRollupRecord): [string, string][] {
+  const metrics = rollup.metrics ?? {};
+  const candidates: [string, unknown][] = [
+    ["precision@6", metrics.precision_at_6],
+    ["precision@12", metrics.precision_at_12],
+    ["rerank uplift", metrics.rerank_uplift],
+    ["来源覆盖", metrics.source_coverage],
+    ["主题熵", metrics.topic_entropy],
+    ["位次去偏采信率", metrics.normalized_adopt_rate],
+    ["edit_rate", metrics.edit_rate]
+  ];
+  return candidates
+    .filter(([, value]) => typeof value === "number")
+    .map(([label, value]) => [label, (value as number).toFixed(4)]);
+}
+
+function rollupSuggestionLabel(suggestion: string) {
+  return (
+    {
+      suggest_promote: "建议升档",
+      suggest_demote: "建议降档",
+      insufficient_data: "低数据",
+      keep: "维持"
+    }[suggestion] ?? suggestion
+  );
+}
+
+watch(feedbackPeriod, () => {
+  void loadFeedbackRollups();
+});
+
 function toggleReviewItem(item: RecommendationItemRecord, event: Event) {
   const checked = event.target instanceof HTMLInputElement && event.target.checked;
   const next = new Set(selectedReviewItemIds.value);
@@ -317,14 +412,17 @@ watch(
   () => {
     runs.value = [];
     selectedRun.value = null;
+    rollupDetails.value = {};
     void loadRuns();
     void loadPolicy();
+    void loadFeedbackRollups();
   }
 );
 
 onMounted(() => {
   void loadRuns();
   void loadPolicy();
+  void loadFeedbackRollups();
 });
 </script>
 
@@ -540,6 +638,101 @@ onMounted(() => {
       </div>
     </section>
 
+    <!-- 反馈评估卡（WP4-G，page-specs §9.3：只读展示，admin+ 可见） -->
+    <section
+      v-if="canViewFeedbackEvaluation"
+      class="module-card compact feedback-evaluation"
+      aria-label="反馈评估"
+    >
+      <div class="card-title-row">
+        <div>
+          <p class="eyebrow">Feedback Evaluation</p>
+          <h3>反馈评估</h3>
+        </div>
+        <div class="feedback-period-toggle" role="group" aria-label="评估周期切换">
+          <button
+            type="button"
+            class="icon-button"
+            :class="feedbackPeriod === 'weekly' ? '' : 'secondary'"
+            @click="feedbackPeriod = 'weekly'"
+          >
+            周
+          </button>
+          <button
+            type="button"
+            class="icon-button"
+            :class="feedbackPeriod === 'monthly' ? '' : 'secondary'"
+            @click="feedbackPeriod = 'monthly'"
+          >
+            月
+          </button>
+        </div>
+      </div>
+      <p v-if="feedbackRollupsError" class="form-error">{{ feedbackRollupsError }}</p>
+      <p
+        v-if="!feedbackRollupsLoading && feedbackRollups.length === 0 && !feedbackRollupsError"
+        class="empty-state"
+      >
+        尚未生成反馈评估。
+      </p>
+      <div v-else class="rollup-list">
+        <article v-for="rollup in feedbackRollups" :key="rollup.id" class="rollup-row">
+          <button type="button" class="rollup-head" @click="toggleRollupDetail(rollup)">
+            <strong>{{ rollup.period_key }}</strong>
+            <span>{{ rollup.status }}</span>
+            <span>提案 {{ rollup.proposal_status }}</span>
+            <span v-if="rollup.metrics.drift_flag" class="status-off">漂移告警</span>
+            <span class="rollup-expand-hint">
+              {{ expandedRollupId === rollup.id ? "收起" : "展开" }}
+            </span>
+          </button>
+          <div v-if="expandedRollupId === rollup.id" class="rollup-detail">
+            <div v-if="rollupMetricEntries(rollup).length" class="policy-grid">
+              <div v-for="[label, value] in rollupMetricEntries(rollup)" :key="label">
+                <span>{{ label }}</span>
+                <strong>{{ value }}</strong>
+              </div>
+            </div>
+            <p v-else class="empty-state">本周期无可用指标（空样本指标不渲染占位值）。</p>
+            <template v-if="rollupDetails[rollup.id]">
+              <div
+                v-if="rollupDetails[rollup.id].source_breakdown.sources?.length"
+                class="rollup-sources"
+              >
+                <h4>源分层建议（advisory，只读）</h4>
+                <ul>
+                  <li
+                    v-for="source in rollupDetails[rollup.id].source_breakdown.sources"
+                    :key="source.data_source_id"
+                  >
+                    <strong>{{ source.name }}</strong>
+                    <span>推荐 {{ source.recommended_count }} / 采信 {{ source.adopted_count }}</span>
+                    <span class="metric-pill">{{ rollupSuggestionLabel(source.suggestion) }}</span>
+                  </li>
+                </ul>
+              </div>
+              <div
+                v-if="rollupDetails[rollup.id].source_breakdown.stale_source_suggestions?.length"
+                class="rollup-sources"
+              >
+                <h4>失效源清理建议（不自动禁用）</h4>
+                <ul>
+                  <li
+                    v-for="stale in rollupDetails[rollup.id].source_breakdown.stale_source_suggestions"
+                    :key="stale.id"
+                  >
+                    <strong>{{ stale.name }}</strong>
+                    <span>{{ stale.reason }}</span>
+                    <span class="metric-pill">{{ stale.suggestion }}</span>
+                  </li>
+                </ul>
+              </div>
+            </template>
+          </div>
+        </article>
+      </div>
+    </section>
+
     <section class="module-split">
       <aside class="module-card run-list">
         <div class="card-title-row">
@@ -572,7 +765,7 @@ onMounted(() => {
           <div class="module-mini-stats">
             <span>{{ selectedRun.items.length }} 候选</span>
             <span>{{ selectedCount }} 已选</span>
-            <span>{{ averageScore }} 均分</span>
+            <span v-if="averageScore !== null">{{ averageScore }} 均分</span>
           </div>
         </div>
         <div v-if="!selectedRun" class="empty-state">选择一次推荐运行查看详情。</div>
@@ -613,3 +806,70 @@ onMounted(() => {
     </section>
   </section>
 </template>
+
+<style scoped>
+/* WP4-G 反馈评估卡：表面材质沿用 base.css module-card / policy-grid / metric-pill，
+   这里只补列表与行展开的排布。 */
+.feedback-period-toggle {
+  display: flex;
+  gap: 6px;
+}
+
+.rollup-list {
+  display: grid;
+  gap: 8px;
+}
+
+.rollup-row {
+  border: 1px solid rgba(100, 116, 139, 0.22);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.rollup-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 14px;
+  border: none;
+  background: rgba(148, 163, 184, 0.08);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+
+.rollup-expand-hint {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-muted, rgba(71, 85, 105, 0.9));
+}
+
+.rollup-detail {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.rollup-sources h4 {
+  margin: 0 0 6px;
+  font-size: 13px;
+}
+
+.rollup-sources ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rollup-sources li {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 13px;
+}
+</style>

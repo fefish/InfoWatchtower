@@ -402,6 +402,16 @@ describe("ExportsPage", () => {
     expect(anchored.text()).toContain("编辑后的导出标题");
   });
 
+  it("describes the export scope in business terms without enum field names", async () => {
+    const wrapper = mountPage();
+    await flushPromises();
+
+    // 文案违例 #6（frontend-product-design §14.2）：页头说明不出现 adoption_status 枚举原值。
+    const hero = wrapper.find(".module-hero");
+    expect(hero.text()).toContain("只导出已发布日报中已采信的条目");
+    expect(hero.text()).not.toContain("adoption_status");
+  });
+
   it("shows preflight summary before company SQL export", async () => {
     const wrapper = mountPage();
     await flushPromises();

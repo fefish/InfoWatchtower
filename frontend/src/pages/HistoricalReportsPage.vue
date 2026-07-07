@@ -39,6 +39,7 @@ const workspace = useWorkspaceStore();
 const session = useSessionStore();
 
 const summary = ref<ReportArchiveSummaryRecord | null>(null);
+const legacyMonths = ref<ReportArchiveSummaryRecord["months"]>([]);
 const entries = ref<ReportArchiveListItem[]>([]);
 const legacySummary = ref<LegacyImportSummaryRecord | null>(null);
 const legacyGaps = ref<LegacyImportGapItemRecord[]>([]);
@@ -60,7 +61,15 @@ const filters = ref({
 });
 
 const pendingArchiveId = computed(() => routeQueryString(route.query.id));
-const months = computed(() => summary.value?.months ?? []);
+// 月份导航降级为 legacy 视图内的旧系统资产筛选（page-specs §13.1）。
+const legacyViewActive = computed(() => filters.value.origin === "legacy");
+const months = computed(() => legacyMonths.value);
+const publishedReportCount = computed(
+  () => (summary.value?.published_daily ?? 0) + (summary.value?.published_weekly ?? 0)
+);
+// 无发布样本时隐藏平均采信率，不渲染 0.0/0% 占位（page-specs §13.4）。
+const hasAdoptionSamples = computed(() => (summary.value?.total_items ?? 0) > 0);
+const currentTopSources = computed(() => summary.value?.top_sources ?? []);
 const showLegacyImportPanel = computed(
   () => (summary.value?.legacy_reports ?? 0) > 0 || legacyGaps.value.length > 0
 );
@@ -88,6 +97,10 @@ async function loadArchive() {
   loading.value = true;
   error.value = "";
   try {
+    if (!legacyViewActive.value) {
+      // 月份筛选只作用于 legacy 视图（page-specs §13.1）
+      activeMonth.value = "";
+    }
     const [nextSummary, nextEntries] = await Promise.all([
       fetchReportArchiveSummary(workspace.currentCode),
       fetchReportArchive({
@@ -100,6 +113,13 @@ async function loadArchive() {
     ]);
     summary.value = nextSummary;
     entries.value = nextEntries;
+    if (legacyViewActive.value) {
+      legacyMonths.value = (
+        await fetchReportArchiveSummary(workspace.currentCode, { origin: "legacy" })
+      ).months;
+    } else {
+      legacyMonths.value = [];
+    }
     if ((nextSummary.legacy_reports ?? 0) > 0) {
       const [nextLegacySummary, nextLegacyGaps] = await Promise.all([
         fetchLegacyImportSummary(workspace.currentCode),
@@ -113,15 +133,19 @@ async function loadArchive() {
     }
     const anchorId = pendingArchiveId.value;
     const anchored = anchorId ? nextEntries.find((item) => item.id === anchorId) : null;
-    if (anchored) {
+    if (anchored && anchored.origin === "legacy") {
       await selectEntry(anchored);
-    } else if (anchorId) {
+    } else if (anchorId && !anchored) {
       await selectLegacyById(anchorId);
-    } else if (nextEntries.length > 0) {
-      await selectEntry(nextEntries[0]);
     } else {
-      selected.value = null;
-      legacyDetail.value = null;
+      // 页内只读 legacy 正文；已发布条目经深链在报告页阅读（page-specs §13.1）
+      const firstLegacy = nextEntries.find((item) => item.origin === "legacy");
+      if (firstLegacy) {
+        await selectEntry(firstLegacy);
+      } else {
+        selected.value = null;
+        legacyDetail.value = null;
+      }
     }
   } catch (exc) {
     error.value = exc instanceof Error ? exc.message : "加载报告归档失败";
@@ -133,6 +157,15 @@ async function loadArchive() {
 async function selectMonth(month: string) {
   activeMonth.value = month;
   await loadArchive();
+}
+
+function handleEntryClick(entry: ReportArchiveListItem) {
+  // 已发布条目点击即深链跳报告页阅读成稿，不在本页渲染当前报告正文（page-specs §13.4）。
+  if (entry.origin === "published") {
+    openReportDetail(entry);
+    return;
+  }
+  void selectEntry(entry);
 }
 
 async function selectEntry(entry: ReportArchiveListItem) {
@@ -185,7 +218,7 @@ async function selectLegacyById(id: string) {
 
 function openReportDetail(entry: ReportArchiveListItem) {
   if (entry.detail_kind === "daily_report") {
-    void router.push(`/daily-reports/${entry.detail_id}`);
+    void router.push({ path: "/daily-reports", query: { report_id: entry.detail_id } });
   } else if (entry.detail_kind === "weekly_report") {
     void router.push({ path: "/weekly-reports", query: { report_id: entry.detail_id } });
   }
@@ -287,13 +320,15 @@ function gapKindLabel(item: LegacyImportGapItemRecord) {
 
 watch(() => workspace.currentCode, loadArchive);
 watch(pendingArchiveId, (id) => {
-  if (id && selected.value?.id !== id) {
-    const entry = entries.value.find((item) => item.id === id);
-    if (entry) {
-      void selectEntry(entry);
-    } else {
-      void selectLegacyById(id);
-    }
+  if (!id || selected.value?.id === id) {
+    return;
+  }
+  const entry = entries.value.find((item) => item.id === id);
+  if (!entry) {
+    void selectLegacyById(id);
+  } else if (entry.origin === "legacy") {
+    // 已发布条目只做锚点高亮，正文经深链在报告页阅读
+    void selectEntry(entry);
   }
 });
 onMounted(loadArchive);
@@ -305,7 +340,7 @@ onMounted(loadArchive);
       <div>
         <p class="eyebrow">Report Library</p>
         <h2>历史报告库</h2>
-        <p>回溯任意一天/一周发过什么、质量如何：已发布的日报/周报自动归档到这里，与旧系统导入的历史报告合并检索，素材可复用、可转需求。</p>
+        <p>跨来源报告资产库：旧系统导入资产的归档、验收与跨来源统计对比；日常按天/周回溯请直接用日报/周报页的时间轴。</p>
       </div>
       <button type="button" class="icon-button secondary" :disabled="loading" @click="loadArchive">
         <RefreshCw :size="17" />
@@ -316,30 +351,46 @@ onMounted(loadArchive);
     <p v-if="error" class="form-error">{{ error }}</p>
     <p v-if="message" class="form-success">{{ message }}</p>
 
-    <section class="archive-summary-grid">
-      <article class="module-card compact">
-        <p class="eyebrow">Archive</p>
-        <strong>{{ summary?.total ?? 0 }}</strong>
-        <span>归档报告（日报 {{ summary?.published_daily ?? 0 }} / 周报 {{ summary?.published_weekly ?? 0 }} / 旧系统 {{ summary?.legacy_reports ?? 0 }}）</span>
-      </article>
-      <article class="module-card compact">
-        <p class="eyebrow">Items</p>
-        <strong>{{ summary?.total_adopted ?? 0 }} / {{ summary?.total_items ?? 0 }}</strong>
-        <span>已发布报告累计采信 / 条目</span>
-      </article>
-      <article class="module-card compact">
-        <p class="eyebrow">Adoption</p>
-        <strong>{{ summary ? `${Math.round(summary.average_adoption_rate * 100)}%` : "—" }}</strong>
-        <span>平均采信率</span>
-      </article>
-      <article class="module-card compact">
-        <p class="eyebrow">Latest</p>
-        <strong>{{ summary?.latest_published_at ? formatDate(summary.latest_published_at).slice(0, 10) : "暂无" }}</strong>
-        <span>最近一次发布归档</span>
-      </article>
+    <section class="module-card archive-compare">
+      <div class="card-title-row">
+        <div>
+          <p class="eyebrow">Cross-source</p>
+          <h3>跨来源统计对比</h3>
+        </div>
+        <span class="metric-pill">
+          最近发布 {{ summary?.latest_published_at ? formatDate(summary.latest_published_at).slice(0, 10) : "暂无" }}
+        </span>
+      </div>
+      <div class="archive-compare-grid">
+        <article class="archive-compare-col">
+          <p class="eyebrow">本系统已发布</p>
+          <strong>{{ publishedReportCount }}</strong>
+          <span>份报告（日报 {{ summary?.published_daily ?? 0 }} · 周报 {{ summary?.published_weekly ?? 0 }}）</span>
+          <p v-if="hasAdoptionSamples" class="archive-compare-adoption">
+            平均采信率 {{ Math.round((summary?.average_adoption_rate ?? 0) * 100) }}% ·
+            采信 {{ summary?.total_adopted ?? 0 }} / {{ summary?.total_items ?? 0 }} 条目
+          </p>
+          <p v-else class="archive-compare-adoption-empty">暂无已发布采信样本</p>
+          <div v-if="currentTopSources.length > 0" class="archive-compare-sources">
+            <span v-for="source in currentTopSources" :key="source.name">
+              <Database :size="13" />{{ source.name }} ×{{ source.count }}
+            </span>
+          </div>
+        </article>
+        <article class="archive-compare-col legacy">
+          <p class="eyebrow">旧系统导入</p>
+          <strong>{{ summary?.legacy_reports ?? 0 }}</strong>
+          <span>份导入报告</span>
+          <p v-if="legacySummary" class="archive-compare-refs">
+            报告引用解析 {{ legacySummary.report_refs.resolved }} / {{ legacySummary.report_refs.total }}
+          </p>
+          <p v-else class="archive-compare-adoption-empty">暂无导入验收数据</p>
+          <p class="archive-compare-note">旧系统未记录来源分布，正文在本页阅读</p>
+        </article>
+      </div>
     </section>
 
-    <nav class="archive-month-nav" aria-label="按月份筛选">
+    <nav v-if="legacyViewActive" class="archive-month-nav" aria-label="按月份筛选旧系统资产">
       <button type="button" :class="{ active: activeMonth === '' }" @click="selectMonth('')">全部月份</button>
       <button
         v-for="bucket in months"
@@ -370,10 +421,10 @@ onMounted(loadArchive);
       </label>
       <label>
         <span>来源</span>
-        <select v-model="filters.origin">
+        <select v-model="filters.origin" class="archive-origin-filter">
           <option value="">全部来源</option>
           <option value="published">本系统发布</option>
-          <option value="legacy">旧系统导入</option>
+          <option value="legacy">旧系统资产（可按月筛选）</option>
         </select>
       </label>
       <button type="button" class="icon-button" :disabled="loading" @click="loadArchive">
@@ -394,7 +445,7 @@ onMounted(loadArchive);
           class="ops-row archive-row"
           :class="{ selected: selected?.id === entry.id, anchored: isAnchoredEntry(entry) }"
           :aria-current="isAnchoredEntry(entry) ? 'true' : undefined"
-          @click="selectEntry(entry)"
+          @click="handleEntryClick(entry)"
         >
           <div class="feed-icon indigo">
             <Newspaper v-if="entry.report_type === 'weekly'" :size="18" />
@@ -404,20 +455,28 @@ onMounted(loadArchive);
             <div class="archive-row-meta">
               <span class="archive-date"><CalendarDays :size="13" />{{ entry.date_key || "未标注日期" }}</span>
               <span class="archive-origin" :class="entry.origin">{{ originLabel(entry) }}</span>
+              <span v-if="entry.origin === 'published'" class="archive-jump-hint">
+                <ExternalLink :size="12" />{{ entry.report_type === "weekly" ? "在周报页阅读" : "在日报页阅读" }}
+              </span>
             </div>
             <h3>{{ entry.title }}</h3>
             <p class="archive-excerpt">{{ entry.content_excerpt || "暂无摘要" }}</p>
             <div class="coverage-metrics">
-              <span>{{ entry.item_count }} 条目</span>
-              <span>采信 {{ entry.adopted_count }} · {{ adoptionRateLabel(entry) }}</span>
-              <span v-if="entry.headline_count > 0"><Crown :size="12" /> 头条 {{ entry.headline_count }}</span>
-              <span v-for="source in entry.top_sources" :key="source.name">{{ source.name }} ×{{ source.count }}</span>
+              <template v-if="entry.origin === 'legacy'">
+                <span>{{ entry.item_count }} 个旧引用</span>
+              </template>
+              <template v-else>
+                <span>{{ entry.item_count }} 条目</span>
+                <span>采信 {{ entry.adopted_count }} · {{ adoptionRateLabel(entry) }}</span>
+                <span v-if="entry.headline_count > 0"><Crown :size="12" /> 头条 {{ entry.headline_count }}</span>
+                <span v-for="source in entry.top_sources" :key="source.name">{{ source.name }} ×{{ source.count }}</span>
+              </template>
             </div>
           </div>
         </article>
         <p v-if="!loading && entries.length === 0" class="empty-state">
-          这里还没有归档报告。发布日报/周报后会自动归档到这里，可按月份和关键词回溯每一天发过什么、
-          采信了多少条、头条是什么；旧系统的历史报告通过导入脚本
+          这里还没有归档资产。发布日报/周报后会自动进入跨来源统计与合并检索（成稿正文在报告页阅读）；
+          旧系统的历史报告通过导入脚本
           （scripts/tech_insight_loop_import_verify.py --execute）进入同一列表。
         </p>
       </section>
@@ -433,27 +492,11 @@ onMounted(loadArchive);
           </div>
 
           <div class="coverage-strip">
-            <span>发布 {{ formatDate(selected.published_at) }}</span>
-            <span>{{ selected.item_count }} 条目</span>
-            <span>采信 {{ selected.adopted_count }} · {{ adoptionRateLabel(selected) }}</span>
-            <span v-if="selected.headline_count > 0">头条 {{ selected.headline_count }}</span>
-          </div>
-
-          <div v-if="selected.top_sources.length > 0" class="archive-source-strip">
-            <p class="eyebrow">Top Sources</p>
-            <div>
-              <span v-for="source in selected.top_sources" :key="source.name">
-                <Database :size="13" />{{ source.name }} ×{{ source.count }}
-              </span>
-            </div>
-          </div>
-
-          <div v-if="selected.origin === 'published'" class="archive-jump">
-            <p>成稿与逐条编辑记录在报告详情页查看：</p>
-            <button type="button" class="mini-action archive-open-detail" @click="openReportDetail(selected)">
-              <ExternalLink :size="15" />
-              <span>{{ selected.report_type === "weekly" ? "打开周报详情" : "打开日报详情 / 成稿" }}</span>
-            </button>
+            <span>期次 {{ formatDate(selected.published_at) }}</span>
+            <span>{{ selected.item_count }} 个旧引用</span>
+            <span v-if="legacyDetail">
+              解析 {{ legacyDetail.resolved_ref_count }} · 未解析 {{ legacyDetail.unresolved_ref_count }}
+            </span>
           </div>
 
           <template v-if="selected.detail_kind === 'historical_report' && legacyDetail">
@@ -499,8 +542,8 @@ onMounted(loadArchive);
         </div>
         <div v-else class="archive-empty-detail">
           <Archive :size="36" />
-          <h3>没有可查看的归档报告</h3>
-          <p>发布日报后这里自动归档；归档是只读视图，不影响当前日报、推荐或公司 SQL 导出。</p>
+          <h3>没有可在本页阅读的旧系统报告</h3>
+          <p>本页只读 legacy 导入正文；已发布日报/周报点击条目即跳转报告页阅读成稿。归档是只读视图，不影响当前日报、推荐或公司 SQL 导出。</p>
         </div>
       </section>
     </section>
@@ -575,23 +618,76 @@ onMounted(loadArchive);
 </template>
 
 <style scoped>
-.archive-summary-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 14px;
+.archive-compare {
   margin-bottom: 16px;
 }
 
-.archive-summary-grid strong {
+.archive-compare-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.archive-compare-col {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  border: 1px solid #dbeafe;
+  border-radius: 12px;
+  padding: 14px;
+  background: #eff6ff;
+}
+
+.archive-compare-col.legacy {
+  border-color: #e2e8f0;
+  background: #f8fafc;
+}
+
+.archive-compare-col strong {
   display: block;
   color: #0f172a;
   font-size: 26px;
   line-height: 1.1;
 }
 
-.archive-summary-grid span {
+.archive-compare-col > span {
   color: #64748b;
   font-size: 13px;
+  font-weight: 700;
+}
+
+.archive-compare-adoption,
+.archive-compare-refs,
+.archive-compare-adoption-empty,
+.archive-compare-note {
+  margin: 0;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.archive-compare-adoption-empty,
+.archive-compare-note {
+  color: #94a3b8;
+}
+
+.archive-compare-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.archive-compare-sources span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: #fff;
+  color: #475569;
+  font-size: 12px;
   font-weight: 700;
 }
 
@@ -725,47 +821,16 @@ onMounted(loadArchive);
   min-height: 420px;
 }
 
-.archive-source-strip {
-  margin: 12px 0;
-}
-
-.archive-source-strip > div {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 6px;
-}
-
-.archive-source-strip span {
+.archive-jump-hint {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  border: 1px solid #e2e8f0;
+  gap: 4px;
   border-radius: 999px;
-  padding: 5px 10px;
-  color: #475569;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.archive-jump {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin: 14px 0;
-  border: 1px solid #dbeafe;
-  border-radius: 12px;
-  padding: 12px;
-  background: #eff6ff;
-}
-
-.archive-jump p {
-  margin: 0;
-  color: #1e40af;
-  font-size: 13px;
-  font-weight: 700;
+  padding: 3px 9px;
+  background: rgba(10, 132, 255, 0.08);
+  color: #0a6ddd;
+  font-size: 11px;
+  font-weight: 800;
 }
 
 .archive-legacy-content {
@@ -973,7 +1038,7 @@ onMounted(loadArchive);
 }
 
 @media (max-width: 1200px) {
-  .archive-summary-grid,
+  .archive-compare-grid,
   .legacy-metric-grid,
   .legacy-ref-grid,
   .archive-layout,

@@ -533,7 +533,7 @@ onMounted(loadExportsPage);
       <div>
         <p class="eyebrow">Company SQL Export</p>
         <h2>SQL 导出</h2>
-        <p>只导出已发布日报中 adoption_status = 2 的采信条目，并保持旧内网 SQL 字段兼容。</p>
+        <p>只导出已发布日报中已采信的条目，并保持旧内网 SQL 字段兼容。</p>
       </div>
       <div class="module-actions">
         <button type="button" class="icon-button secondary" :disabled="loading" @click="loadExportsPage">

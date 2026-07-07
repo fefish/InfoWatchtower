@@ -18,12 +18,27 @@ import {
 import { computed, onMounted, reactive, ref, watch } from "vue";
 
 import {
+  createLlmCredential,
+  fetchGenerationProviders,
+  type LlmCredentialRecord,
+  type ProviderCatalogEntry
+} from "../api/credentials";
+import {
   fetchWorkspaceGenerationPolicy,
   pingGeneration,
   updateWorkspaceGenerationPolicy,
   type GenerationPingRecord,
   type WorkspaceGenerationPolicyRecord
 } from "../api/generation";
+import {
+  fetchFeedbackRollups,
+  fetchRubricRevisionProposals,
+  fetchWorkspaceRecommendationPolicy,
+  reviewRubricRevisionProposal,
+  runFeedbackRollup,
+  type FeedbackRollupRecord,
+  type RubricRevisionProposalRecord
+} from "../api/recommendations";
 import {
   createReportFormat,
   deleteReportFormat,
@@ -848,20 +863,39 @@ async function confirmScheduleSave() {
   }
 }
 
-// ---------- g) 生成模型（generation_policy，generation-provider-design §5） ----------
+// ---------- g) 生成模型（generation_policy + provider 目录 + 凭据落库，
+// generation-provider-design §5 七步流；WP4-B R2 改造） ----------
 const generationPolicy = ref<WorkspaceGenerationPolicyRecord | null>(null);
 const generationError = ref("");
 const savingGeneration = ref(false);
+const providerCatalog = ref<ProviderCatalogEntry[]>([]);
+const CUSTOM_MODEL = "__custom__";
 const generationForm = reactive({
-  model: "",
+  // "" = 跟随实例 env（credential_id=null，恒为凭据下拉首位选项）
+  credentialId: "",
+  // "" = 跟随实例默认模型；CUSTOM_MODEL = 自定义模型名（切文本输入）
+  modelSelect: "",
+  modelCustom: "",
   temperature: "",
   timeoutSeconds: "",
   dailyBudget: "",
   fallbackBehavior: "rule_fallback"
 });
+// 新建凭据表单（仅 super_admin 可见；key 是 write-only，保存成功即清空）
+const credentialForm = reactive({
+  provider: "minimax",
+  baseUrl: "",
+  apiKey: "",
+  label: ""
+});
+const savingCredential = ref(false);
+const credentialError = ref("");
+const lastSavedCredential = ref<LlmCredentialRecord | null>(null);
 const pingResult = ref<GenerationPingRecord | null>(null);
 const pinging = ref(false);
 const pingError = ref("");
+
+const isSuperAdmin = computed(() => (session.user?.roles ?? []).includes("super_admin"));
 
 // 「测试连通」权限门与后端一致：仅 super_admin / editor_admin（其余角色不渲染按钮）
 const canPingGeneration = computed(() => {
@@ -869,9 +903,79 @@ const canPingGeneration = computed(() => {
   return roles.includes("super_admin") || roles.includes("editor_admin");
 });
 
+const credentialOptions = computed(() => generationPolicy.value?.credential_options ?? []);
+
+// 目录按 sort_order 排序（custom 恒在最后，由契约 sort_order 保证）
+const sortedProviderCatalog = computed(() =>
+  [...providerCatalog.value].sort((a, b) => a.sort_order - b.sort_order)
+);
+
+const selectedProviderEntry = computed(() =>
+  providerCatalog.value.find((entry) => entry.code === credentialForm.provider) ?? null
+);
+
+// 模型下拉的 provider 口径：选中凭据的 provider 优先，否则 resolved provider
+const modelProviderCode = computed(() => {
+  if (generationForm.credentialId) {
+    const option = credentialOptions.value.find((item) => item.id === generationForm.credentialId);
+    if (option) {
+      return option.provider;
+    }
+  }
+  return generationPolicy.value?.resolved.provider ?? "";
+});
+const modelOptions = computed(
+  () =>
+    providerCatalog.value.find((entry) => entry.code === modelProviderCode.value)?.common_models ??
+    []
+);
+
+// 无任何配置：key 未配置且无可选凭据 → 卡片顶部三步引导（§5 第 7 步）
+const showGenerationGuide = computed(() => {
+  const record = generationPolicy.value;
+  if (!record) {
+    return false;
+  }
+  return !record.resolved.key_configured && credentialOptions.value.length === 0;
+});
+
+// provider 切换即预填目录默认 base_url（custom 无预填、必填；§5 第 2 步）
+watch(
+  () => credentialForm.provider,
+  (code) => {
+    const entry = providerCatalog.value.find((item) => item.code === code);
+    credentialForm.baseUrl = entry?.default_base_url ?? "";
+  }
+);
+
+async function loadProviderCatalog() {
+  try {
+    const response = await fetchGenerationProviders();
+    providerCatalog.value = response.catalog;
+    const entry = providerCatalog.value.find((item) => item.code === credentialForm.provider);
+    if (entry && !credentialForm.baseUrl) {
+      credentialForm.baseUrl = entry.default_base_url ?? "";
+    }
+  } catch (exc) {
+    // 目录拉取失败只降级 provider 下拉，不拖垮生成模型卡
+    credentialError.value = exc instanceof Error ? exc.message : "加载 provider 目录失败";
+  }
+}
+
 function fillGenerationForm(record: WorkspaceGenerationPolicyRecord) {
   const policy = record.policy;
-  generationForm.model = policy.model ?? "";
+  generationForm.credentialId = policy.credential_id ?? "";
+  const model = policy.model ?? "";
+  if (!model) {
+    generationForm.modelSelect = "";
+    generationForm.modelCustom = "";
+  } else if (modelOptions.value.includes(model)) {
+    generationForm.modelSelect = model;
+    generationForm.modelCustom = "";
+  } else {
+    generationForm.modelSelect = CUSTOM_MODEL;
+    generationForm.modelCustom = model;
+  }
   generationForm.temperature = policy.temperature === null ? "" : String(policy.temperature);
   generationForm.timeoutSeconds = policy.timeout_seconds === null ? "" : String(policy.timeout_seconds);
   generationForm.dailyBudget =
@@ -893,6 +997,13 @@ async function loadGenerationPolicy() {
   }
 }
 
+function generationModelValue(): string | null {
+  if (generationForm.modelSelect === CUSTOM_MODEL) {
+    return generationForm.modelCustom.trim() || null;
+  }
+  return generationForm.modelSelect || null;
+}
+
 async function saveGenerationPolicy() {
   if (!workspace.currentCode) {
     return;
@@ -902,7 +1013,8 @@ async function saveGenerationPolicy() {
   message.value = "";
   try {
     generationPolicy.value = await updateWorkspaceGenerationPolicy(workspace.currentCode, {
-      model: generationForm.model.trim() || null,
+      credential_id: generationForm.credentialId || null,
+      model: generationModelValue(),
       temperature: generationForm.temperature === "" ? null : Number(generationForm.temperature),
       timeout_seconds:
         generationForm.timeoutSeconds === "" ? null : Number(generationForm.timeoutSeconds),
@@ -919,7 +1031,49 @@ async function saveGenerationPolicy() {
   }
 }
 
-async function runGenerationPing() {
+// §5 第 3 步：key write-only 落库；保存成功输入框即清空、只回显 masked。
+// §5 第 6 步：保存后自动触发一次按凭据的连通测试。
+async function saveCredential() {
+  const entry = selectedProviderEntry.value;
+  const baseUrl = credentialForm.baseUrl.trim();
+  const apiKey = credentialForm.apiKey;
+  if (credentialForm.provider === "custom" && !baseUrl) {
+    credentialError.value = "自定义 provider 必须填写 base_url";
+    return;
+  }
+  if ((entry?.key_required ?? true) && !apiKey.trim()) {
+    credentialError.value = "该 provider 需要填写 API key";
+    return;
+  }
+  savingCredential.value = true;
+  credentialError.value = "";
+  message.value = "";
+  try {
+    const created = await createLlmCredential({
+      provider: credentialForm.provider,
+      base_url: baseUrl || null,
+      api_key: apiKey || null,
+      label: credentialForm.label.trim() || null
+    });
+    // write-only：明文离手即弃，前端状态不再持有
+    credentialForm.apiKey = "";
+    credentialForm.label = "";
+    lastSavedCredential.value = created;
+    message.value = `已保存凭据：${created.label}（${created.key_masked}）`;
+    await loadGenerationPolicy();
+    // 自动选中新凭据（仍需「保存生成模型策略」才写入工作台 policy）
+    generationForm.credentialId = created.id;
+    if (canPingGeneration.value) {
+      await runGenerationPing(created.id);
+    }
+  } catch (exc) {
+    credentialError.value = exc instanceof Error ? exc.message : "保存凭据失败";
+  } finally {
+    savingCredential.value = false;
+  }
+}
+
+async function runGenerationPing(credentialId?: string) {
   if (!workspace.currentCode) {
     return;
   }
@@ -927,7 +1081,12 @@ async function runGenerationPing() {
   pingError.value = "";
   pingResult.value = null;
   try {
-    pingResult.value = await pingGeneration(workspace.currentCode);
+    // 手动点击按当前选择测试：选了凭据则按凭据测（credential_id 优先），
+    // 否则按工作台 resolved 配置测。
+    const effectiveCredentialId = credentialId || generationForm.credentialId;
+    pingResult.value = effectiveCredentialId
+      ? await pingGeneration(workspace.currentCode, effectiveCredentialId)
+      : await pingGeneration(workspace.currentCode);
   } catch (exc) {
     // 请求本身失败（403/网络）也不得渲染成成功
     pingError.value = exc instanceof Error ? exc.message : "连通性测试失败";
@@ -1083,6 +1242,117 @@ function formatExpiresAt(value: string | null) {
   return `${value.slice(0, 16).replace("T", " ")} 到期`;
 }
 
+// ---------- i) 推荐设置 · 反馈回哺（WP4-G，feedback-heat-scoring §16.3） ----------
+const feedbackRollup = ref<FeedbackRollupRecord | null>(null);
+const feedbackProposals = ref<RubricRevisionProposalRecord[]>([]);
+const feedbackRubricVersion = ref<number | null>(null);
+const feedbackError = ref("");
+const feedbackRerunLoading = ref(false);
+const proposalModalOpen = ref(false);
+const activeProposal = ref<RubricRevisionProposalRecord | null>(null);
+const proposalComment = ref("");
+const proposalReviewError = ref("");
+const proposalSubmitting = ref(false);
+const acceptConfirmOpen = ref(false);
+
+async function loadFeedbackWorkflow() {
+  if (!workspace.currentCode) {
+    return;
+  }
+  feedbackError.value = "";
+  try {
+    const [rollups, proposals, policy] = await Promise.all([
+      fetchFeedbackRollups(workspace.currentCode, "weekly", 1),
+      fetchRubricRevisionProposals(workspace.currentCode, "pending_review"),
+      fetchWorkspaceRecommendationPolicy(workspace.currentCode)
+    ]);
+    feedbackRollup.value = rollups.items[0] ?? null;
+    feedbackProposals.value = proposals.items;
+    feedbackRubricVersion.value = policy.policy.rubric_version;
+  } catch (exc) {
+    feedbackRollup.value = null;
+    feedbackProposals.value = [];
+    feedbackError.value = exc instanceof Error ? exc.message : "加载反馈回哺状态失败";
+  }
+}
+
+// 空指标规则（契约 empty_sample_rule）：null 指标整项隐藏，不渲染 0.0 占位。
+const feedbackMetricEntries = computed(() => {
+  const metrics = feedbackRollup.value?.metrics ?? {};
+  const candidates: [string, unknown][] = [
+    ["precision@6", metrics.precision_at_6],
+    ["rerank uplift", metrics.rerank_uplift],
+    ["位次去偏采信率", metrics.normalized_adopt_rate]
+  ];
+  return candidates
+    .filter(([, value]) => typeof value === "number")
+    .map(([label, value]) => [label, (value as number).toFixed(4)] as const);
+});
+const feedbackLowDataCount = computed(
+  () => feedbackRollup.value?.metrics.low_data_sources?.length ?? 0
+);
+
+async function runManualFeedbackRollup() {
+  if (!workspace.currentCode || feedbackRerunLoading.value) {
+    return;
+  }
+  feedbackRerunLoading.value = true;
+  feedbackError.value = "";
+  message.value = "";
+  try {
+    const result = await runFeedbackRollup(workspace.currentCode, { period_type: "weekly" });
+    message.value = `反馈重估完成：${result.period_key}（${result.status}，提案 ${result.proposal_status}）`;
+    await loadFeedbackWorkflow();
+  } catch (exc) {
+    // 失败显示真实错误，不渲染成功（page-specs §19.5.3 假成功回归）。
+    feedbackError.value = exc instanceof Error ? exc.message : "手动重估失败";
+  } finally {
+    feedbackRerunLoading.value = false;
+  }
+}
+
+function openProposalModal(proposal: RubricRevisionProposalRecord) {
+  activeProposal.value = proposal;
+  proposalComment.value = "";
+  proposalReviewError.value = "";
+  proposalModalOpen.value = true;
+}
+
+function closeProposalModal() {
+  proposalModalOpen.value = false;
+  acceptConfirmOpen.value = false;
+  activeProposal.value = null;
+}
+
+async function submitProposalReview(action: "accept" | "reject") {
+  if (!workspace.currentCode || !activeProposal.value || proposalSubmitting.value) {
+    return;
+  }
+  if (action === "reject" && !proposalComment.value.trim()) {
+    proposalReviewError.value = "驳回必须填写理由";
+    return;
+  }
+  proposalSubmitting.value = true;
+  proposalReviewError.value = "";
+  try {
+    await reviewRubricRevisionProposal(workspace.currentCode, activeProposal.value.id, {
+      action,
+      comment: proposalComment.value.trim()
+    });
+    message.value =
+      action === "accept"
+        ? "提案已采纳并生效：rubric 版本 +1，每日再估计将基于新导向重估"
+        : "提案已驳回，现行 rubric 不变";
+    closeProposalModal();
+    await loadFeedbackWorkflow();
+  } catch (exc) {
+    proposalReviewError.value = exc instanceof Error ? exc.message : "提案审阅失败";
+    acceptConfirmOpen.value = false;
+  } finally {
+    proposalSubmitting.value = false;
+  }
+}
+
 // ---------- 加载调度 ----------
 let loadedForCode = "";
 
@@ -1102,7 +1372,9 @@ async function loadAll() {
       // 新三卡各自持有 card 级错误态：单卡后端不可用不拖垮整页
       loadSchedulePolicy(),
       loadGenerationPolicy(),
-      loadJoinCode()
+      loadProviderCatalog(),
+      loadJoinCode(),
+      loadFeedbackWorkflow()
     ]);
   } catch (exc) {
     error.value = exc instanceof Error ? exc.message : "加载工作台配置失败";
@@ -1144,6 +1416,7 @@ onMounted(() => {
         <a href="#automation">自动化</a>
         <a href="#generation">生成模型</a>
         <a href="#visibility">可见性与加入码</a>
+        <a href="#feedback-loop">反馈回哺</a>
       </nav>
     </header>
 
@@ -1735,7 +2008,8 @@ onMounted(() => {
         <p v-else-if="!scheduleError" class="empty-state">正在加载自动化策略。</p>
       </section>
 
-      <!-- g) 生成模型（generation_policy，generation-provider-design §5） -->
+      <!-- g) 生成模型（generation_policy + provider 目录 + 凭据落库，
+           generation-provider-design §5 七步流） -->
       <section id="generation" class="module-card compact settings-card" aria-label="生成模型">
         <div class="card-title-row">
           <div>
@@ -1753,6 +2027,25 @@ onMounted(() => {
         <p v-if="generationError" class="form-error">{{ generationError }}</p>
 
         <template v-if="generationPolicy">
+          <!-- §5 第 7 步：无任何配置时的三步引导（非 super_admin 换联系管理员文案） -->
+          <div v-if="showGenerationGuide" class="form-info generation-setup-guide">
+            <template v-if="isSuperAdmin">
+              <strong>还没有可用的生成模型配置</strong>
+              <p>① 选择 provider → ② 填入 API key 并保存 → ③ 测试连通。</p>
+            </template>
+            <template v-else>
+              <strong>还没有可用的生成模型配置</strong>
+              <p>
+                请联系平台管理员在此配置生成模型，或由运维在实例环境配置——
+                见部署手册 §2.2（docs/deployment/development-quickstart.md）。
+              </p>
+            </template>
+            <p>
+              未配置期间生成链路走规则降级稿（进入待审队列、不进公司 SQL 导出）——
+              这是预期行为，不是故障。
+            </p>
+          </div>
+
           <div class="schedule-resolved-line generation-status-line">
             <span class="metric-pill">provider：{{ generationPolicy.resolved.provider }}</span>
             <span class="metric-pill">生效模型：{{ generationPolicy.resolved.model }}</span>
@@ -1760,17 +2053,110 @@ onMounted(() => {
             <span class="metric-pill" :data-tone="generationPolicy.resolved.enabled ? 'ok' : 'warn'">
               {{ generationPolicy.resolved.enabled ? "生成已启用" : "生成未启用" }}
             </span>
+            <span
+              v-if="generationPolicy.resolved.key_source === 'credential'"
+              class="metric-pill"
+              data-tone="ok"
+            >
+              凭据：{{ generationPolicy.resolved.credential_label || "已选凭据" }}
+            </span>
           </div>
-          <p v-if="!generationPolicy.resolved.key_configured" class="form-info generation-key-hint">
-            实例尚未配置生成 API key：由运维在部署 env 配置 GENERATION_API_KEY（或兼容的
-            MINIMAX_API_KEY），配置方法见 docs/deployment/development-quickstart.md §2.2。
-            key 只存部署环境，不进本页面、数据库或审计。
+          <p
+            v-if="generationPolicy.resolved.key_source === 'credential_missing'"
+            class="form-error generation-key-hint"
+          >
+            所选凭据已不可用（被禁用、删除或密钥无法解密）：请重新录入 key 或改选其他凭据。
+            在此期间生成走规则降级稿，不会静默改用实例环境的 key。
           </p>
 
+          <!-- §5 第 1-3 步：新建凭据（仅 super_admin；key write-only，保存即清空） -->
+          <template v-if="isSuperAdmin">
+            <div class="label-section-title">
+              <span>新增 provider 凭据</span>
+              <small>key 加密落库、只回显后 4 位；市面常用 provider 可选，最后是自定义兜底</small>
+            </div>
+            <p v-if="credentialError" class="form-error">{{ credentialError }}</p>
+            <div class="config-grid" role="group" aria-label="新增 provider 凭据">
+              <label>
+                <span>provider</span>
+                <select v-model="credentialForm.provider" aria-label="provider 选择">
+                  <option v-for="entry in sortedProviderCatalog" :key="entry.code" :value="entry.code">
+                    {{ entry.name }}
+                  </option>
+                </select>
+                <small v-if="selectedProviderEntry && !selectedProviderEntry.key_required">
+                  该 provider 无需 key，可留空。
+                </small>
+              </label>
+              <label>
+                <span>base_url（{{ credentialForm.provider === "custom" ? "必填" : "已按目录预填，可改" }}）</span>
+                <input
+                  v-model="credentialForm.baseUrl"
+                  placeholder="https://…/v1"
+                  aria-label="provider base_url"
+                />
+              </label>
+              <label>
+                <span>API key（write-only，保存后只显示后 4 位）</span>
+                <input
+                  v-model="credentialForm.apiKey"
+                  type="password"
+                  autocomplete="new-password"
+                  placeholder="粘贴 provider 的 API key"
+                  aria-label="API key"
+                />
+              </label>
+              <label>
+                <span>备注名（可选）</span>
+                <input
+                  v-model="credentialForm.label"
+                  placeholder="例如 规划部共享 MiniMax"
+                  aria-label="凭据备注名"
+                />
+              </label>
+            </div>
+            <div class="settings-card-actions">
+              <button
+                type="button"
+                class="config-save"
+                :disabled="savingCredential"
+                @click="saveCredential"
+              >
+                {{ savingCredential ? "保存中" : "保存凭据并测试" }}
+              </button>
+            </div>
+            <p v-if="lastSavedCredential" class="form-success generation-credential-saved">
+              已录入：{{ lastSavedCredential.label }}（{{ lastSavedCredential.key_masked }} ·
+              {{ lastSavedCredential.base_url_host }}）
+            </p>
+          </template>
+
+          <!-- §5 第 4-5 步：凭据选择 + 模型下拉/自定义 -->
           <div class="config-grid">
+            <label v-if="generationPolicy.credential_options !== null">
+              <span>凭据（本工作台用哪份 key）</span>
+              <select v-model="generationForm.credentialId" aria-label="凭据选择">
+                <option value="">跟随实例 env（不引用落库凭据）</option>
+                <option v-for="option in credentialOptions" :key="option.id" :value="option.id">
+                  {{ option.label }}（{{ option.provider }} · {{ option.key_masked }}）
+                </option>
+              </select>
+            </label>
             <label>
-              <span>模型名（留空跟随实例）</span>
-              <input v-model="generationForm.model" placeholder="例如 MiniMax-M2.5" aria-label="生成模型名" />
+              <span>模型</span>
+              <select v-model="generationForm.modelSelect" aria-label="生成模型选择">
+                <option value="">跟随实例默认（{{ generationPolicy.resolved.model }}）</option>
+                <option v-for="model in modelOptions" :key="model" :value="model">{{ model }}</option>
+                <option value="__custom__">自定义模型名…</option>
+              </select>
+            </label>
+            <label v-if="generationForm.modelSelect === '__custom__'">
+              <span>自定义模型名</span>
+              <input
+                v-model="generationForm.modelCustom"
+                placeholder="例如 MiniMax-M2.5"
+                aria-label="生成模型名"
+              />
             </label>
             <label>
               <span>温度（0-2，留空跟随实例）</span>
@@ -1806,19 +2192,20 @@ onMounted(() => {
             <label>
               <span>降级行为</span>
               <select v-model="generationForm.fallbackBehavior" aria-label="生成降级行为">
-                <option value="rule_fallback">规则降级稿（fallback_needs_review，不进公司 SQL）</option>
+                <option value="rule_fallback">规则降级稿（进入待审队列，不进公司 SQL）</option>
                 <option value="fail">直接失败，留待重跑</option>
               </select>
             </label>
           </div>
 
+          <!-- §5 第 6 步：测试连通（super_admin/editor_admin；按当前选择测试） -->
           <div class="settings-card-actions">
             <button
               v-if="canPingGeneration"
               type="button"
               class="icon-button secondary"
               :disabled="pinging"
-              @click="runGenerationPing"
+              @click="runGenerationPing()"
             >
               <RefreshCw :size="14" />
               <span>{{ pinging ? "测试中" : "测试连通" }}</span>
@@ -1931,6 +2318,60 @@ onMounted(() => {
           </button>
         </div>
       </section>
+
+      <!-- i) 推荐设置 · 反馈回哺（WP4-G，feedback-heat-scoring §16.3；admin+ 专属区） -->
+      <section id="feedback-loop" class="module-card compact settings-card" aria-label="反馈回哺">
+        <div class="card-title-row">
+          <div>
+            <p class="eyebrow">Feedback Loop</p>
+            <h3><RefreshCw :size="18" /> 推荐设置 · 反馈回哺</h3>
+          </div>
+          <div class="module-mini-stats">
+            <span v-if="feedbackRubricVersion !== null">rubric v{{ feedbackRubricVersion }}</span>
+            <span class="metric-pill">{{ feedbackProposals.length }} 条待审提案</span>
+          </div>
+        </div>
+        <p v-if="feedbackError" class="form-error">{{ feedbackError }}</p>
+        <p v-if="!feedbackRollup && !feedbackError" class="empty-state">
+          尚未生成反馈评估：每周一 03:00 自动生成上一完整周的评估快照，或点击「手动重估」立即生成。
+        </p>
+        <div v-else-if="feedbackRollup" class="policy-grid feedback-summary">
+          <div>
+            <span>最近周期</span>
+            <strong>{{ feedbackRollup.period_key }}</strong>
+            <small>{{ feedbackRollup.status }} · 提案 {{ feedbackRollup.proposal_status }}</small>
+          </div>
+          <div v-for="[label, value] in feedbackMetricEntries" :key="label">
+            <span>{{ label }}</span>
+            <strong>{{ value }}</strong>
+          </div>
+          <div>
+            <span>低数据源</span>
+            <strong>{{ feedbackLowDataCount }} 个</strong>
+            <small>探索位候选池（ε 默认关闭）</small>
+          </div>
+        </div>
+        <div class="module-actions">
+          <button
+            type="button"
+            class="icon-button secondary"
+            :disabled="feedbackProposals.length === 0"
+            @click="openProposalModal(feedbackProposals[0])"
+          >
+            <FileText :size="16" />
+            <span>审阅提案</span>
+          </button>
+          <button
+            type="button"
+            class="icon-button"
+            :disabled="feedbackRerunLoading"
+            @click="runManualFeedbackRollup"
+          >
+            <RefreshCw :size="16" />
+            <span>{{ feedbackRerunLoading ? "重估中" : "手动重估" }}</span>
+          </button>
+        </div>
+      </section>
     </template>
 
     <!-- 确认弹层（AppModal sm，产品设计 §10.3：新增确认交互一律 Modal sm） -->
@@ -1981,6 +2422,85 @@ onMounted(() => {
         <button type="button" class="icon-button" @click="confirmRotateJoinCode">确认轮换</button>
       </template>
     </AppModal>
+
+    <!-- 提案审阅 Modal（md 档，page-specs §19.5.3：逐条 change_summary diff + 人审硬门） -->
+    <AppModal
+      :open="proposalModalOpen"
+      size="md"
+      :title="`rubric 修订提案（基于 v${activeProposal?.base_rubric_version ?? '?'}）`"
+      @close="closeProposalModal"
+    >
+      <div v-if="activeProposal" class="proposal-review-body">
+        <p class="workspace-form-hint">
+          来源周期 {{ activeProposal.rollup_period_key || "未知" }} ·
+          {{ activeProposal.prompt_version }} · 提案未生效前对现行 rubric 零影响。
+        </p>
+        <ul class="proposal-diff-list">
+          <li v-for="(change, index) in activeProposal.change_summary" :key="index">
+            <code>{{ change.op }}</code>
+            <strong>{{ change.target_code }}</strong>
+            <span v-if="change.from !== null && change.from !== undefined">
+              {{ change.from }} → {{ change.to }}
+            </span>
+            <small>{{ change.rationale }}</small>
+          </li>
+        </ul>
+        <p class="workspace-form-hint">
+          代表样本：采信 {{ activeProposal.sample_refs.adopted?.length ?? 0 }} 条 /
+          驳回 {{ activeProposal.sample_refs.rejected?.length ?? 0 }} 条，
+          <RouterLink to="/recommendations">在推荐运行页查看条目明细</RouterLink>。
+        </p>
+        <label class="proposal-comment-field">
+          审阅意见（驳回必填）
+          <textarea v-model="proposalComment" rows="2" placeholder="驳回时请说明理由"></textarea>
+        </label>
+        <p v-if="proposalReviewError" class="form-error">{{ proposalReviewError }}</p>
+      </div>
+      <template #footer>
+        <button
+          type="button"
+          class="icon-button secondary"
+          :disabled="proposalSubmitting"
+          @click="submitProposalReview('reject')"
+        >
+          驳回
+        </button>
+        <button
+          type="button"
+          class="icon-button"
+          :disabled="proposalSubmitting"
+          @click="acceptConfirmOpen = true"
+        >
+          采纳并生效
+        </button>
+      </template>
+    </AppModal>
+
+    <!-- 采纳二次确认（sm）：提示 rubric_version 将 +1（page-specs §19.5.4 看护） -->
+    <AppModal
+      :open="acceptConfirmOpen"
+      size="sm"
+      title="确认采纳该提案？"
+      @close="acceptConfirmOpen = false"
+    >
+      <p class="workspace-form-hint">
+        采纳后将登记编译记录并走既有生效链：rubric 版本将从
+        v{{ activeProposal?.base_rubric_version ?? "?" }} 升级为
+        v{{ (activeProposal?.base_rubric_version ?? 0) + 1 }}，
+        每日再估计从下个周期起基于新导向重估。该动作会写入审计。
+      </p>
+      <template #footer>
+        <button type="button" class="icon-button secondary" @click="acceptConfirmOpen = false">取消</button>
+        <button
+          type="button"
+          class="icon-button"
+          :disabled="proposalSubmitting"
+          @click="submitProposalReview('accept')"
+        >
+          确认采纳
+        </button>
+      </template>
+    </AppModal>
   </section>
 </template>
 
@@ -2008,6 +2528,25 @@ onMounted(() => {
   margin-top: 8px;
 }
 
+.generation-setup-guide {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(100, 116, 139, 0.24);
+  background: rgba(148, 163, 184, 0.1);
+}
+
+.generation-setup-guide p {
+  margin: 0;
+  font-size: 13px;
+}
+
+.generation-credential-saved {
+  margin-top: 4px;
+}
+
 .join-code-row {
   display: flex;
   align-items: center;
@@ -2029,5 +2568,52 @@ onMounted(() => {
 
 .join-code-copy-feedback {
   font-size: 12px;
+}
+
+/* WP4-G 反馈回哺区：沿用 policy-grid / module-actions 基线，只补提案 diff 列表。 */
+.proposal-review-body {
+  display: grid;
+  gap: 10px;
+}
+
+.proposal-diff-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.proposal-diff-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(100, 116, 139, 0.22);
+  background: rgba(148, 163, 184, 0.08);
+}
+
+.proposal-diff-list code {
+  font-size: 12px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: rgba(59, 130, 246, 0.12);
+}
+
+.proposal-diff-list small {
+  flex-basis: 100%;
+  color: var(--text-muted, rgba(71, 85, 105, 0.9));
+}
+
+.proposal-comment-field {
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.proposal-comment-field textarea {
+  resize: vertical;
 }
 </style>
