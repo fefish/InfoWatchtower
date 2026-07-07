@@ -20,6 +20,7 @@ class WorkspaceRead(BaseModel):
     workspace_type: str
     default_domain_code: str
     enabled: bool = True
+    current_user_workspace_role: str | None = None
 
 
 class WorkspaceCreate(BaseModel):
@@ -40,6 +41,7 @@ class WorkspaceUpdate(BaseModel):
 class WorkspaceMemberUpsert(BaseModel):
     user_id: str = Field(min_length=1)
     workspace_role: str = Field(default="member", pattern=r"^(viewer|member|admin|owner)$")
+    confirm_dangerous_change: bool = False
 
 
 class WorkspaceMemberRead(BaseModel):
@@ -81,3 +83,36 @@ class WorkspaceLabelPolicyUpdate(BaseModel):
     secondary_labels_by_primary: dict[str, list[str]] = Field(default_factory=dict)
     default_category: str = "AI 应用"
     fallback_category: str = "AI 应用"
+
+
+class WorkspaceFeedbackPolicyRead(BaseModel):
+    workspace_code: str
+    viewer_can_react: bool = True
+    viewer_can_rate: bool = True
+    viewer_can_comment: bool = True
+    viewer_can_edit: bool = False
+    notify_on_comment: bool = True
+    notify_on_publish: bool = False
+
+
+class WorkspaceFeedbackPolicyUpdate(BaseModel):
+    viewer_can_react: bool = True
+    viewer_can_rate: bool = True
+    viewer_can_comment: bool = True
+    viewer_can_edit: bool = False
+    notify_on_comment: bool = True
+    notify_on_publish: bool = False
+
+
+class WorkspaceDepartmentMembershipTarget(BaseModel):
+    department: str = Field(min_length=1, max_length=128)
+    workspace_role: str = Field(default="viewer", pattern=r"^(viewer|member|admin|owner)$")
+
+
+class WorkspaceAuthMembershipMappingRead(BaseModel):
+    workspace_code: str
+    department_workspaces: list[WorkspaceDepartmentMembershipTarget] = Field(default_factory=list)
+
+
+class WorkspaceAuthMembershipMappingUpdate(BaseModel):
+    department_workspaces: list[WorkspaceDepartmentMembershipTarget] = Field(default_factory=list, max_length=100)

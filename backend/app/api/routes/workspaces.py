@@ -3,18 +3,31 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.routes.auth import assert_workspace_member, get_current_user, require_super_admin
-from app.auth.service import provision_workspace, user_to_read, write_audit
+from app.auth.service import (
+    CORE_WORKSPACE_SECTIONS,
+    DEFAULT_WORKSPACE_FEEDBACK_POLICY,
+    WORKSPACE_DEFINITIONS,
+    provision_workspace,
+    user_to_read,
+    write_audit,
+)
 from app.core.database import get_db_session
 from app.models.identity import User
 from app.models.workspace import Workspace, WorkspaceMembership, WorkspaceSection
 from app.schemas.workspaces import (
     DEFAULT_REQUIRED_CONTENT_FIELDS,
+    WorkspaceAuthMembershipMappingRead,
+    WorkspaceAuthMembershipMappingUpdate,
     WorkspaceCreate,
+    WorkspaceDepartmentMembershipTarget,
+    WorkspaceFeedbackPolicyRead,
+    WorkspaceFeedbackPolicyUpdate,
     WorkspaceLabelPolicyRead,
     WorkspaceLabelPolicyUpdate,
     WorkspaceMemberRead,
@@ -27,6 +40,16 @@ from app.schemas.workspaces import (
 router = APIRouter(prefix="/api/workspaces", tags=["workspaces"])
 REPO_ROOT = Path(__file__).resolve().parents[4]
 WORKSPACE_CREATOR_ROLES = {"super_admin", "editor_admin"}
+
+
+class WorkspaceSectionUpdate(BaseModel):
+    enabled: bool
+
+
+class WorkspaceSectionManageRead(BaseModel):
+    section_key: str
+    name: str
+    enabled: bool
 
 
 def _global_role_codes(user: User) -> set[str]:
@@ -86,7 +109,7 @@ def list_workspaces(
             workspace.code,
         ),
     )
-    return [_workspace_to_read(workspace) for workspace in workspaces]
+    return [_workspace_to_read(workspace, current_user=current_user, session=session) for workspace in workspaces]
 
 
 @router.post("", response_model=WorkspaceRead, status_code=status.HTTP_201_CREATED)
@@ -126,7 +149,7 @@ def create_workspace(
     )
     session.commit()
     session.refresh(workspace)
-    return _workspace_to_read(workspace)
+    return _workspace_to_read(workspace, current_user=current_user, session=session)
 
 
 @router.patch("/{workspace_code}", response_model=WorkspaceRead)
@@ -172,7 +195,7 @@ def update_workspace(
     )
     session.commit()
     session.refresh(workspace)
-    return _workspace_to_read(workspace)
+    return _workspace_to_read(workspace, current_user=current_user, session=session)
 
 
 @router.get("/{workspace_code}/members", response_model=list[WorkspaceMemberRead])
@@ -220,6 +243,7 @@ def upsert_workspace_member(
             WorkspaceMembership.user_id == target_user.id,
         ),
     )
+    before_membership = _membership_snapshot(membership)
     if membership is None:
         membership = WorkspaceMembership(
             workspace=workspace,
@@ -229,6 +253,18 @@ def upsert_workspace_member(
         )
         session.add(membership)
     else:
+        if membership.workspace_role == "owner" and payload.workspace_role != "owner":
+            owner_count = _workspace_owner_count(session, workspace)
+            if owner_count <= 1:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Cannot downgrade the last workspace owner",
+                )
+            if not payload.confirm_dangerous_change:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Dangerous owner role change requires confirmation",
+                )
         membership.workspace_role = payload.workspace_role
         membership.enabled = True
     write_audit(
@@ -240,7 +276,8 @@ def upsert_workspace_member(
         detail={
             "workspace_code": workspace.code,
             "user_id": target_user.id,
-            "workspace_role": membership.workspace_role,
+            "before": before_membership,
+            "after": _membership_snapshot(membership),
         },
     )
     session.commit()
@@ -257,6 +294,7 @@ def upsert_workspace_member(
 def remove_workspace_member(
     workspace_code: str,
     user_id: str,
+    confirm_dangerous_change: bool = Query(default=False),
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> Response:
@@ -272,20 +310,18 @@ def remove_workspace_member(
     if membership is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace member not found")
     if membership.workspace_role == "owner":
-        owner_count = session.scalar(
-            select(func.count())
-            .select_from(WorkspaceMembership)
-            .where(
-                WorkspaceMembership.workspace_id == workspace.id,
-                WorkspaceMembership.workspace_role == "owner",
-                WorkspaceMembership.enabled.is_(True),
-            ),
-        )
-        if int(owner_count or 0) <= 1:
+        owner_count = _workspace_owner_count(session, workspace)
+        if owner_count <= 1:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Cannot remove the last workspace owner",
             )
+        if not confirm_dangerous_change:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Dangerous owner removal requires confirmation",
+            )
+    before_membership = _membership_snapshot(membership)
     membership.enabled = False
     write_audit(
         session,
@@ -293,10 +329,55 @@ def remove_workspace_member(
         action="workspace.member.remove",
         object_type="workspace",
         object_id=workspace.id,
-        detail={"workspace_code": workspace.code, "user_id": user_id},
+        detail={
+            "workspace_code": workspace.code,
+            "user_id": user_id,
+            "before": before_membership,
+            "after": _membership_snapshot(membership),
+        },
     )
     session.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/{workspace_code}/auth-membership-mapping", response_model=WorkspaceAuthMembershipMappingRead)
+def get_workspace_auth_membership_mapping(
+    workspace_code: str,
+    _: User = Depends(require_super_admin),
+    session: Session = Depends(get_db_session),
+) -> WorkspaceAuthMembershipMappingRead:
+    workspace = _get_enabled_workspace(session, workspace_code)
+    return _workspace_auth_membership_mapping_to_read(workspace)
+
+
+@router.patch("/{workspace_code}/auth-membership-mapping", response_model=WorkspaceAuthMembershipMappingRead)
+def update_workspace_auth_membership_mapping(
+    workspace_code: str,
+    payload: WorkspaceAuthMembershipMappingUpdate,
+    current_user: User = Depends(require_super_admin),
+    session: Session = Depends(get_db_session),
+) -> WorkspaceAuthMembershipMappingRead:
+    workspace = _get_enabled_workspace(session, workspace_code)
+    rows = _normalize_auth_membership_mapping(payload.department_workspaces)
+    config = dict(workspace.config_json or {})
+    before = dict(config.get("auth_membership_mapping") or {})
+    config["auth_membership_mapping"] = {"department_workspaces": [row.model_dump() for row in rows]}
+    workspace.config_json = config
+    write_audit(
+        session,
+        current_user,
+        action="workspace.auth_membership_mapping.update",
+        object_type="workspace",
+        object_id=workspace.id,
+        detail={
+            "workspace_code": workspace.code,
+            "before": before,
+            "after": config["auth_membership_mapping"],
+        },
+    )
+    session.commit()
+    session.refresh(workspace)
+    return _workspace_auth_membership_mapping_to_read(workspace)
 
 
 @router.get("/{workspace_code}/sections", response_model=list[WorkspaceSectionRead])
@@ -317,13 +398,71 @@ def list_workspace_sections(
 
     sections = session.scalars(
         select(WorkspaceSection)
-        .where(
-            WorkspaceSection.workspace_id == workspace.id,
-            WorkspaceSection.enabled.is_(True),
-        )
+        .where(WorkspaceSection.workspace_id == workspace.id)
         .order_by(WorkspaceSection.sort_order, WorkspaceSection.section_key),
     ).all()
-    return [_section_to_read(section) for section in sections]
+    return [
+        _section_to_read(section)
+        for section in sections
+        if _section_effective_enabled(section)
+    ]
+
+
+@router.patch("/{workspace_code}/sections/{section_key}", response_model=WorkspaceSectionManageRead)
+def update_workspace_section(
+    workspace_code: str,
+    section_key: str,
+    payload: WorkspaceSectionUpdate,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> WorkspaceSectionManageRead:
+    """启停工作台分区（owner/admin 或 super_admin）。
+
+    可选模块（数据库注册、默认关闭，如 tool_catalog）可自由启停；
+    核心分区（数据源/日报等默认分区）承载主链路导航，禁止停用。
+    """
+    workspace = _get_enabled_workspace(session, workspace_code)
+    assert_workspace_member(session, current_user, workspace.code, min_role="admin")
+    section = session.scalar(
+        select(WorkspaceSection).where(
+            WorkspaceSection.workspace_id == workspace.id,
+            WorkspaceSection.section_key == section_key,
+        ),
+    )
+    if section is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace section not found")
+    if not payload.enabled and section_key in _core_section_keys(workspace.code):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Core workspace sections cannot be disabled",
+        )
+
+    before_enabled = _section_effective_enabled(section)
+    section.enabled = payload.enabled
+    # bootstrap 播种（auth/service._ensure_workspace_sections）会重置 enabled 列：
+    # 核心分区强制开、定义外分区强制关。用户的启停决定持久化在 config_json.user_enabled，
+    # 读取侧以它为准，重启/重播种后不回滚。
+    section.config_json = {**(section.config_json or {}), "user_enabled": payload.enabled}
+    write_audit(
+        session,
+        current_user,
+        action="workspace.section.update",
+        object_type="workspace_section",
+        object_id=section.id,
+        detail={
+            "workspace_code": workspace.code,
+            "section_key": section.section_key,
+            "before": {"enabled": before_enabled},
+            "after": {"enabled": payload.enabled},
+        },
+    )
+    session.commit()
+    session.refresh(section)
+    return WorkspaceSectionManageRead(
+        section_key=section.section_key,
+        name=section.name,
+        enabled=_section_effective_enabled(section),
+    )
 
 
 @router.get("/{workspace_code}/label-policy", response_model=WorkspaceLabelPolicyRead)
@@ -394,6 +533,48 @@ def update_workspace_label_policy(
     return _workspace_label_policy_to_read(workspace)
 
 
+@router.get("/{workspace_code}/feedback-policy", response_model=WorkspaceFeedbackPolicyRead)
+def get_workspace_feedback_policy(
+    workspace_code: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> WorkspaceFeedbackPolicyRead:
+    assert_workspace_member(session, current_user, workspace_code, min_role="viewer")
+    workspace = _get_enabled_workspace(session, workspace_code)
+    return _workspace_feedback_policy_to_read(workspace)
+
+
+@router.patch("/{workspace_code}/feedback-policy", response_model=WorkspaceFeedbackPolicyRead)
+def update_workspace_feedback_policy(
+    workspace_code: str,
+    payload: WorkspaceFeedbackPolicyUpdate,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> WorkspaceFeedbackPolicyRead:
+    assert_workspace_member(session, current_user, workspace_code, min_role="admin")
+    workspace = _get_enabled_workspace(session, workspace_code)
+    policy = _normalize_feedback_policy(payload.model_dump())
+    config = dict(workspace.config_json or {})
+    before = dict(config.get("feedback_policy") or {})
+    config["feedback_policy"] = policy
+    workspace.config_json = config
+    write_audit(
+        session,
+        current_user,
+        action="workspace.feedback_policy.update",
+        object_type="workspace",
+        object_id=workspace.id,
+        detail={
+            "workspace_code": workspace.code,
+            "before": before,
+            "after": policy,
+        },
+    )
+    session.commit()
+    session.refresh(workspace)
+    return _workspace_feedback_policy_to_read(workspace)
+
+
 def _get_enabled_workspace(session: Session, workspace_code: str) -> Workspace:
     workspace = session.scalar(
         select(Workspace).where(
@@ -406,7 +587,65 @@ def _get_enabled_workspace(session: Session, workspace_code: str) -> Workspace:
     return workspace
 
 
-def _workspace_to_read(workspace: Workspace) -> WorkspaceRead:
+def _workspace_owner_count(session: Session, workspace: Workspace) -> int:
+    value = session.scalar(
+        select(func.count())
+        .select_from(WorkspaceMembership)
+        .where(
+            WorkspaceMembership.workspace_id == workspace.id,
+            WorkspaceMembership.workspace_role == "owner",
+            WorkspaceMembership.enabled.is_(True),
+        ),
+    )
+    return int(value or 0)
+
+
+def _membership_snapshot(membership: WorkspaceMembership | None) -> dict | None:
+    if membership is None:
+        return None
+    return {"workspace_role": membership.workspace_role, "enabled": membership.enabled}
+
+
+def _workspace_auth_membership_mapping_to_read(workspace: Workspace) -> WorkspaceAuthMembershipMappingRead:
+    raw_rows = ((workspace.config_json or {}).get("auth_membership_mapping") or {}).get("department_workspaces") or []
+    rows = _normalize_auth_membership_mapping(
+        [
+            WorkspaceDepartmentMembershipTarget(
+                department=str(row.get("department") or ""),
+                workspace_role=str(row.get("workspace_role") or "viewer"),
+            )
+            for row in raw_rows
+            if isinstance(row, dict)
+        ],
+    )
+    return WorkspaceAuthMembershipMappingRead(workspace_code=workspace.code, department_workspaces=rows)
+
+
+def _normalize_auth_membership_mapping(
+    rows: list[WorkspaceDepartmentMembershipTarget],
+) -> list[WorkspaceDepartmentMembershipTarget]:
+    normalized: dict[str, WorkspaceDepartmentMembershipTarget] = {}
+    role_rank = {"viewer": 0, "member": 1, "admin": 2, "owner": 3}
+    for row in rows:
+        department = " ".join(row.department.split())
+        if not department:
+            continue
+        candidate = WorkspaceDepartmentMembershipTarget(
+            department=department,
+            workspace_role=row.workspace_role,
+        )
+        existing = normalized.get(department)
+        if existing is None or role_rank[candidate.workspace_role] > role_rank[existing.workspace_role]:
+            normalized[department] = candidate
+    return sorted(normalized.values(), key=lambda item: (item.department, item.workspace_role))
+
+
+def _workspace_to_read(
+    workspace: Workspace,
+    *,
+    current_user: User | None = None,
+    session: Session | None = None,
+) -> WorkspaceRead:
     return WorkspaceRead(
         code=workspace.code,
         name=workspace.name,
@@ -414,7 +653,51 @@ def _workspace_to_read(workspace: Workspace) -> WorkspaceRead:
         workspace_type=workspace.workspace_type,
         default_domain_code=workspace.default_domain_code,
         enabled=workspace.enabled,
+        current_user_workspace_role=_current_workspace_role(session, workspace, current_user),
     )
+
+
+def _current_workspace_role(
+    session: Session | None,
+    workspace: Workspace,
+    current_user: User | None,
+) -> str | None:
+    if current_user is None:
+        return None
+    if session is None:
+        return "owner" if _is_super_admin(current_user) else None
+    membership = session.scalar(
+        select(WorkspaceMembership).where(
+            WorkspaceMembership.workspace_id == workspace.id,
+            WorkspaceMembership.user_id == current_user.id,
+            WorkspaceMembership.enabled.is_(True),
+        ),
+    )
+    if membership is not None:
+        return membership.workspace_role
+    if _is_super_admin(current_user):
+        return "owner"
+    return None
+
+
+def _core_section_keys(workspace_code: str) -> set[str]:
+    """核心分区键：全局核心分区 + 该工作台定义内的附加分区（bootstrap 会强制启用）。"""
+    keys = {section_key for section_key, *_ in CORE_WORKSPACE_SECTIONS}
+    definition = WORKSPACE_DEFINITIONS.get(workspace_code) or {}
+    keys.update(section_key for section_key, *_ in definition.get("extra_sections", []))
+    return keys
+
+
+def _section_effective_enabled(section: WorkspaceSection) -> bool:
+    """分区的生效启停：config_json.user_enabled（管理 API 写入）优先于 enabled 列。
+
+    enabled 列每次 bootstrap 播种都会被重置（核心分区强制 True、定义外分区强制
+    False），单看它无法保留用户决定；user_enabled 存在 config_json 里不会被播种覆盖。
+    """
+    override = (section.config_json or {}).get("user_enabled")
+    if isinstance(override, bool):
+        return override
+    return section.enabled
 
 
 def _section_to_read(section: WorkspaceSection) -> WorkspaceSectionRead:
@@ -526,3 +809,24 @@ def _workspace_label_policy_to_read(workspace: Workspace) -> WorkspaceLabelPolic
             policy.get("tagging_stages") or ["news_generation", "post_dedupe_labeling"],
         ),
     )
+
+
+def _normalize_feedback_policy(policy: dict) -> dict:
+    normalized = {
+        **DEFAULT_WORKSPACE_FEEDBACK_POLICY,
+        **dict(policy or {}),
+    }
+    return {
+        "viewer_can_react": bool(normalized.get("viewer_can_react")),
+        "viewer_can_rate": bool(normalized.get("viewer_can_rate")),
+        "viewer_can_comment": bool(normalized.get("viewer_can_comment")),
+        "viewer_can_edit": bool(normalized.get("viewer_can_edit")),
+        "notify_on_comment": bool(normalized.get("notify_on_comment")),
+        "notify_on_publish": bool(normalized.get("notify_on_publish")),
+    }
+
+
+def _workspace_feedback_policy_to_read(workspace: Workspace) -> WorkspaceFeedbackPolicyRead:
+    config = workspace.config_json or {}
+    policy = _normalize_feedback_policy(dict(config.get("feedback_policy") or {}))
+    return WorkspaceFeedbackPolicyRead(workspace_code=workspace.code, **policy)

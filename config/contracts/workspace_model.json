@@ -15,7 +15,8 @@
         "workspace memberships",
         "source enablement through workspace_source_links",
         "default domain visibility",
-        "isolated unified label policy for model tagging"
+        "isolated unified label policy for model tagging",
+        "feedback policy for viewer collaboration permissions"
       ]
     },
     "section": {
@@ -56,6 +57,7 @@
     "provisioning": [
       "All core_sections are registered and enabled for the new workspace.",
       "config_json.label_policy starts from the default ai_sql_categories policy and is then edited per workspace via PATCH /api/workspaces/{code}/label-policy.",
+      "config_json.feedback_policy starts from the default viewer feedback policy and is then edited per workspace via PATCH /api/workspaces/{code}/feedback-policy.",
       "Existing super admins receive owner memberships.",
       "The creator receives an owner membership even when the creator is editor_admin rather than super_admin.",
       "sort_order is appended after existing workspaces."
@@ -97,7 +99,9 @@
     "rules": [
       "GET /api/workspaces filters to enabled memberships for non-super_admin users.",
       "Member removal disables the membership row instead of deleting history.",
-      "The last enabled owner in a workspace cannot be removed."
+      "The last enabled owner in a workspace cannot be removed.",
+      "workspace.member.upsert and workspace.member.remove audit logs must include before/after membership snapshots so /api/identity/permission-changes can explain the diff and /api/identity/permission-rollbacks can restore the previous state.",
+      "The frontend member-management view must explain role impact and disable the remove action for the last owner."
     ]
   },
   "core_sections": [
@@ -183,12 +187,51 @@
     "Source-side tags use planning_source_tags from config/taxonomy/source_tags.json and are only data-source metadata/hints; they must not become generated_news.category.",
     "First-level and second-level labels are the directory for clustering and recommendation; do not add a separate tool management page for that.",
     "Data APIs that list reusable sources may filter by workspace_code through workspace_source_links.",
-    "Workspace membership controls access to a desktop, while global roles still control privileged actions."
+    "Workspace membership controls access to a desktop, while global roles still control privileged actions.",
+    "Daily report item reactions, ratings and comments use workspaces.config_json.feedback_policy: viewer can write only when viewer_can_react/viewer_can_rate/viewer_can_comment is true; member and above can still collaborate when viewer feedback is closed."
   ],
+  "feedback_policy": {
+    "endpoint_read": "GET /api/workspaces/{workspace_code}/feedback-policy (workspace viewer+)",
+    "endpoint_update": "PATCH /api/workspaces/{workspace_code}/feedback-policy (workspace admin+ or super_admin)",
+    "stored_at": "workspaces.config_json.feedback_policy",
+    "default": {
+      "viewer_can_react": true,
+      "viewer_can_rate": true,
+      "viewer_can_comment": true,
+      "viewer_can_edit": false,
+      "notify_on_comment": true,
+      "notify_on_publish": false
+    },
+    "rules": [
+      "viewer_can_edit remains false in v1; report item editing still requires workspace member+.",
+      "notify_on_comment is active for daily report comments; notify_on_publish is active for daily_report.published and weekly_report.published notifications and is still off by default.",
+      "Changing feedback_policy writes audit_logs with action workspace.feedback_policy.update.",
+      "The /users policy view provides a visual editor for viewer_can_react/viewer_can_rate/viewer_can_comment/notify_on_comment/notify_on_publish and requires an explicit impact confirmation before PATCH.",
+      "The /users policy view must show feedback_policy before/after diffs from GET /api/identity/permission-changes and may rollback selected changes via POST /api/identity/permission-rollbacks.",
+      "The frontend must always send viewer_can_edit=false even if a stale response contains another value."
+    ]
+  },
+  "content_policy_resolution": {
+    "resolver": "backend/app/workspaces/policy.py resolve_workspace_content_policy/policy_for_workspace",
+    "resolution_order": [
+      "1. workspace label policy (workspaces.config_json.label_policy in DB)",
+      "2. associated domain pack (config/domain_packs/*.json, matched through workspaces.default_domain_code)",
+      "3. built-in AI default (identical to the planning_intel rules; keeps existing AI workspaces byte-for-byte unchanged)"
+    ],
+    "resolved_fields": [
+      "scoring mode and prior keywords (AI workspaces keep the original noise rules + global content scorer; other workspaces use neutral admission with pack/policy priors and no AI noise down-weighting)",
+      "category fallback keyword rules (built-in AI/ai_tools keyword tables are the built-in default data)",
+      "rendition board taxonomy (ai_builtin/domain_pack/label_policy/single_group; body_json records board_taxonomy_source)",
+      "generation fallback persona text (defaults to workspace.name; planning_intel is locked to the original 规划部 wording)",
+      "export_category_mode and company_sql_capable gating"
+    ],
+    "domain_pack_listing_endpoint": "GET /api/domain-packs lists consumable packs (boards/label_sets/category_keywords/scoring summary; associate_by=default_domain_code)",
+    "company_sql_gating": "Company SQL export is only available when the resolved policy is company-SQL capable: news_format_code=company_sql_v1 and allowed_primary_categories is a subset of the AI 10 categories. Other workspaces get preflight report-level error workspace_not_company_sql and HTTP 400 from the export APIs (batch entries fail per item); there is no silent category remapping."
+  },
   "domain_pack_example": {
     "file": "config/domain_packs/hardware.json",
     "domain_code": "hardware",
     "registered_label_set": "shared/hardware/hardware_categories",
-    "rule": "The startup seed reads flat JSON files in config/domain_packs and registers label_sets plus labels; domain pack config must not fork the pipeline."
+    "rule": "The startup seed reads flat JSON files in config/domain_packs and registers label_sets plus labels; domain pack config must not fork the pipeline. Packs are consumed at runtime through content_policy_resolution (scoring priors, boards with fallback_board, category_keywords) and listed by GET /api/domain-packs; consumption semantics are documented in config/domain_packs/README.md."
   }
 }

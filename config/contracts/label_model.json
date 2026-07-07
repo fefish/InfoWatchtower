@@ -86,7 +86,10 @@
       "news_generation",
       "post_dedupe_labeling"
     ],
-    "source_tag_config": "enabled_as_metadata_only"
+    "source_tag_config": "enabled_as_metadata_only",
+    "export_category_mode_contract": "Only news_primary is supported. The label-policy write API and the company SQL exporter both reject any other value (exporter raises instead of silently ignoring), so a future second mode cannot fail silently.",
+    "policy_resolution": "label_set_code/news_format_code/export_category_mode participate in the shared workspace content policy resolution (workspace label policy -> domain pack via default_domain_code -> built-in AI default); see config/contracts/workspace_model.json content_policy_resolution.",
+    "custom_label_set_runtime_upsert": "A custom label_set_code referenced by a workspace label policy is idempotently upserted as LabelSet + first/second-level Labels at recommendation time; built-in sets and pack shared sets stay seed-owned and are skipped."
   },
   "target_types": [
     "data_source",
@@ -114,9 +117,11 @@
     "After dedupe, model/rule label finalization must use the same workspace label policy, not per-source labels.",
     "Source management pages may display source-side tags from planning_source_tags, but these tags are only source metadata/hints.",
     "Second-level labels are stored as labels with parent_label_id pointing to a first-level label.",
+    "Second-level labels in a workspace label policy are consumed at three points: rendition board grouping (a category matching a second-level label is grouped under its first-level board), category fallback keyword rules, and neutral scoring priors for non-AI workspaces.",
     "Clustering and recommendation rules should reference label_set_code, label code and optional parent/child label paths.",
     "Candidate pool pages should display labels attached to the dedupe winner and its group.",
     "Company SQL export uses generated_news.category, which for planning_intel must be one of the AI 10 labels.",
+    "Company SQL export is gated by the resolved workspace policy: only workspaces whose policy resolves to news_format_code=company_sql_v1 with allowed_primary_categories within the AI 10 labels are company-SQL capable; other workspaces get preflight error workspace_not_company_sql and HTTP 400 instead of a silent category mapping.",
     "Adding hardware or semiconductor labels should add a label set or domain pack, not new columns."
   ]
 }

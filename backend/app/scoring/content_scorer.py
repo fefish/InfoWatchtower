@@ -215,6 +215,73 @@ def load_content_scorer(config_path: str) -> ContentScorer:
     return ContentScorer(config)
 
 
+def build_content_scorer_policy_summary(config_path: str) -> dict[str, Any]:
+    path = Path(config_path)
+    if not path.exists():
+        return {
+            "config_loaded": False,
+            "enabled": False,
+            "config_version": "",
+            "config_path": str(path),
+            "thresholds": {},
+            "daily_levels": [],
+            "weekly_levels": [],
+            "weights": [],
+            "top_topics": [],
+            "source_tiers": [],
+            "source_channels": [],
+            "noise_rule_count": 0,
+            "direct_reject_noise_types": [],
+            "formula_notes": [],
+        }
+    try:
+        config = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {
+            "config_loaded": False,
+            "enabled": False,
+            "config_version": "",
+            "config_path": str(path),
+            "thresholds": {},
+            "daily_levels": [],
+            "weekly_levels": [],
+            "weights": [],
+            "top_topics": [],
+            "source_tiers": [],
+            "source_channels": [],
+            "noise_rule_count": 0,
+            "direct_reject_noise_types": [],
+            "formula_notes": ["config_json_invalid"],
+        }
+
+    noise_rules = config.get("noise_rules") if isinstance(config.get("noise_rules"), list) else []
+    direct_reject = [
+        str(rule.get("type"))
+        for rule in noise_rules
+        if isinstance(rule, dict) and rule.get("direct_reject") is True and str(rule.get("type") or "").strip()
+    ]
+    notes = [
+        str(config.get("topic_score_formula") or "").strip(),
+        str(config.get("source_score_formula") or "").strip(),
+    ]
+    return {
+        "config_loaded": True,
+        "enabled": bool(config.get("enabled", True)),
+        "config_version": str(config.get("version") or ""),
+        "config_path": str(path),
+        "thresholds": _numeric_dict(config.get("thresholds")),
+        "daily_levels": _string_list(config.get("daily_levels")),
+        "weekly_levels": _string_list(config.get("weekly_levels")),
+        "weights": _top_numeric_pairs(config.get("weights"), limit=12),
+        "top_topics": _top_numeric_pairs(config.get("topic_weights"), limit=8),
+        "source_tiers": _top_numeric_pairs(config.get("source_tier_scores"), limit=8),
+        "source_channels": _top_numeric_pairs(config.get("source_channel_scores"), limit=8),
+        "noise_rule_count": len([rule for rule in noise_rules if isinstance(rule, dict)]),
+        "direct_reject_noise_types": list(dict.fromkeys(direct_reject)),
+        "formula_notes": [note for note in notes if note],
+    }
+
+
 def _source_metadata(news_item: Any) -> dict[str, Any]:
     data_source = getattr(news_item, "data_source", None)
     metadata = getattr(data_source, "metadata_json", None) if data_source is not None else {}
@@ -233,6 +300,25 @@ def _candidate_text(news_item: Any) -> str:
 
 def _dict_value(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+def _numeric_dict(value: Any) -> dict[str, float]:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, float] = {}
+    for key, raw in value.items():
+        parsed = _float(raw)
+        if parsed is not None:
+            result[str(key)] = parsed
+    return result
+
+
+def _top_numeric_pairs(value: Any, *, limit: int) -> list[dict[str, Any]]:
+    scores = _numeric_dict(value)
+    return [
+        {"name": name, "value": score}
+        for name, score in sorted(scores.items(), key=lambda item: (-item[1], item[0]))[:limit]
+    ]
 
 
 def _string_list(value: Any) -> list[str]:

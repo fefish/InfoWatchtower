@@ -6,10 +6,11 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
+from types import SimpleNamespace
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import get_settings
@@ -23,32 +24,25 @@ from app.models.content import (
     RecommendationItem,
     RecommendationRun,
 )
-from app.models.feedback import Comment, Rating, Reaction
-from app.models.reports import DailyReport, DailyReportItem
+from app.models.export import ExportJobItem
+from app.models.feedback import Comment, EditorialAction, Rating, Reaction
+from app.models.reports import DailyReport, DailyReportItem, WeeklyReportItem
+from app.models.strategy import RequirementSourceLink
 from app.models.workspace import Workspace, WorkspaceSourceLink
 from app.news_keywords import fallback_key_points
 from app.scoring.content_scorer import load_content_scorer
+from app.workspaces.policy import (
+    WorkspaceContentPolicy,
+    ensure_workspace_label_set,
+    policy_for_workspace,
+)
 
 BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 DEFAULT_RECOMMENDATION_LIMIT = 15
 DEFAULT_SOURCE_DAILY_LIMIT = 2
 DEFAULT_GENERATION_TIMEOUT_SECONDS = 45.0
-AI_SQL_CATEGORIES = (
-    "AI Infra",
-    "AI 应用",
-    "测评技术",
-    "大厂动态",
-    "模型",
-    "算法",
-    "推理加速",
-    "训练技术",
-    "智能体",
-    "基础竞争力",
-)
-SQL_EFFECTS_FALLBACK = (
-    "该信号可能影响规划部对技术路线、产品节奏、竞争态势或内部需求转化的"
-    "后续判断，需要结合业务场景继续观察。"
-)
+# 日报 draft 条目由推荐链路创建时的初始采信状态；偏离该值即视为编辑层决策。
+DAILY_ITEM_INITIAL_ADOPTION_STATUS = 2
 TECHNICAL_SOURCE_HINTS = (
     "machine learning",
     "ml blog",
@@ -532,9 +526,12 @@ def run_daily_recommendation(
     day_key = request.day_key or scoring_now.astimezone(BEIJING_TZ).date().isoformat()
     limit = max(0, request.limit)
     source_daily_limit = max(1, request.source_daily_limit)
+    policy = policy_for_workspace(workspace)
+    # 自定义 label_set_code 随推荐链路运行落 LabelSet 记录（幂等）。
+    ensure_workspace_label_set(session, workspace, policy)
     candidates = _candidate_rows(session, workspace.code, day_key)
     scored = sorted(
-        (_score_candidate(session, workspace, row, scoring_now) for row in candidates),
+        (_score_candidate(session, workspace, row, scoring_now, policy) for row in candidates),
         key=lambda item: (
             ADMISSION_ORDER.get(item.admission_level, 9),
             -item.final_score,
@@ -754,6 +751,65 @@ class ContentAdmission:
     eligible_for_daily: bool
 
 
+@dataclass(frozen=True)
+class ContentAdmissionPreviewRequest:
+    workspace_code: str
+    source_title: str
+    summary: str = ""
+    content: str = ""
+    source_type: str = "rss"
+    source_name: str = ""
+    source_url: str = ""
+    source_tier: str = ""
+    source_channel_type: str = ""
+    source_score: float = 0.0
+    source_tags: tuple[str, ...] = ()
+    source_secondary_tags: tuple[str, ...] = ()
+    board_relevance_json: dict[str, object] | None = None
+    freshness_score: float = 80.0
+
+
+@dataclass(frozen=True)
+class ContentAdmissionPreviewResult:
+    workspace_code: str
+    source_title: str
+    admission: ContentAdmission
+
+
+def preview_content_admission(
+    session: Session,
+    request: ContentAdmissionPreviewRequest,
+) -> ContentAdmissionPreviewResult:
+    workspace = session.scalar(select(Workspace).where(Workspace.code == request.workspace_code, Workspace.enabled.is_(True)))
+    if workspace is None:
+        raise WorkspaceNotFoundError(f"Workspace not found: {request.workspace_code}")
+    metadata = {
+        "source_tier": request.source_tier,
+        "source_channel_type": request.source_channel_type,
+        "source_score": request.source_score,
+        "source_tags": list(request.source_tags),
+        "source_secondary_tags": list(request.source_secondary_tags),
+        "board_relevance_json": request.board_relevance_json or {},
+    }
+    data_source = SimpleNamespace(metadata_json=metadata, source_score=request.source_score)
+    news_item = SimpleNamespace(
+        source_title=request.source_title,
+        summary=request.summary,
+        content=request.content,
+        source_type=request.source_type,
+        source_name=request.source_name,
+        source_url=request.source_url,
+        canonical_url=request.source_url,
+        data_source=data_source,
+    )
+    admission = _content_admission(news_item, workspace, request.freshness_score, policy_for_workspace(workspace))
+    return ContentAdmissionPreviewResult(
+        workspace_code=workspace.code,
+        source_title=request.source_title,
+        admission=admission,
+    )
+
+
 def _candidate_rows(
     session: Session,
     workspace_code: str,
@@ -793,16 +849,17 @@ def _score_candidate(
     workspace: Workspace,
     row: CandidateRow,
     now: datetime,
+    policy: WorkspaceContentPolicy,
 ) -> ScoredCandidate:
     news_item = row.news_item
     quality_score = _quality_score(news_item)
-    topic_score = _topic_score(news_item, workspace)
+    topic_score = _topic_score(news_item, workspace, policy)
     freshness_score = _freshness_score(news_item, now)
     source_score = _source_score(session, workspace, news_item)
     heat_score = _heat_score(session, news_item)
     feedback_score = _feedback_score(session, news_item)
     diversity_score = _diversity_score(news_item)
-    admission = _content_admission(news_item, workspace, freshness_score)
+    admission = _content_admission(news_item, workspace, freshness_score, policy)
     final_score = (
         admission.score * 0.35
         + quality_score * 0.15
@@ -843,6 +900,7 @@ def _score_candidate(
             freshness_score=freshness_score,
             source_score=source_score,
             heat_score=heat_score,
+            feedback_score=feedback_score,
         ),
     )
 
@@ -903,7 +961,7 @@ def _eligible_level(level: str) -> bool:
 
 def _has_daily_worthy_signal(score: ScoredCandidate) -> bool:
     reason = score.reason
-    if score.admission_pool in {"vendor_hardware", "telecom_system", "ai_engineering"}:
+    if score.admission_pool in {"vendor_hardware", "telecom_system", "ai_engineering", "workspace_prior"}:
         return True
     return any(
         marker in reason
@@ -922,7 +980,12 @@ def _content_admission(
     news_item: NewsItem,
     workspace: Workspace,
     freshness_score: float,
+    policy: WorkspaceContentPolicy,
 ) -> ContentAdmission:
+    # AI 情报口径（噪声降权、AI 池、全局 scorer 配置）只对声明 AI 口径的
+    # 工作台生效；其余工作台走中性准入，先验关键词经 policy 获取。
+    if policy.scoring_mode != "ai_default":
+        return _neutral_content_admission(news_item, policy, freshness_score)
     text = _candidate_text(news_item)
     source_identity = _source_identity(news_item)
     source_tags = _source_tags(news_item)
@@ -1193,6 +1256,58 @@ def _content_admission(
     )
 
 
+def _neutral_content_admission(
+    news_item: NewsItem,
+    policy: WorkspaceContentPolicy,
+    freshness_score: float,
+) -> ContentAdmission:
+    """非 AI 口径工作台的中性准入：不套 AI 噪声降权，
+    先验关键词来自 domain pack scoring 或工作台标签策略。"""
+    text = _candidate_text(news_item)
+    prior_hits = _keyword_hit_count(text, policy.scoring_prior_keywords)
+    novelty_hits = _keyword_hit_count(text, NOVELTY_TEXT_HINTS)
+    positive: list[str] = []
+    score = 45.0
+    if prior_hits:
+        score += min(24.0, prior_hits * 8.0)
+        positive.append("workspace_prior_keyword")
+    if novelty_hits:
+        score += min(9.0, novelty_hits * 3.0)
+        positive.append("new_or_released")
+    if len(news_item.content or "") >= 200:
+        score += 4.0
+    if news_item.canonical_url:
+        score += 2.0
+    score += min(5.0, freshness_score / 20.0)
+    score = max(0.0, min(100.0, score))
+    if score >= 85:
+        level = "P0"
+    elif score >= 60:
+        level = "P1"
+    elif score >= 44:
+        level = "P2"
+    elif score >= 30:
+        level = "P3"
+    else:
+        level = "R"
+    return ContentAdmission(
+        level=level,
+        score=round(score, 2),
+        pool="workspace_prior" if prior_hits else "general_tech",
+        noise_types=(),
+        positive_reasons=tuple(dict.fromkeys(positive)),
+        reject_reasons=(),
+        expert_routes=(),
+        scorer_breakdown={
+            "mode": "workspace_neutral",
+            "config_loaded": False,
+            "policy_source": policy.policy_source,
+            "prior_keyword_hits": prior_hits,
+        },
+        eligible_for_daily=_eligible_level(level),
+    )
+
+
 def _admission_summary(scored: list[ScoredCandidate]) -> dict[str, object]:
     return {
         "levels": dict(Counter(item.admission_level for item in scored)),
@@ -1222,15 +1337,20 @@ def _quality_score(news_item: NewsItem) -> float:
     return min(100.0, 30.0 + title_bonus + url_bonus + math.log1p(content_length) * 8.0)
 
 
-def _topic_score(news_item: NewsItem, workspace: Workspace) -> float:
-    policy = _label_policy(workspace)
+def _topic_score(news_item: NewsItem, workspace: Workspace, policy: WorkspaceContentPolicy) -> float:
     text = _candidate_text(news_item)
-    allowed = set(policy["allowed_primary_categories"])
+    allowed = set(policy.allowed_primary_categories)
     score = 55.0
-    for category, keywords in _category_keyword_rules():
+    for category, keywords in policy.category_keyword_rules:
         if category in allowed and any(keyword in text for keyword in keywords):
             score += 20.0
             break
+    if policy.scoring_mode != "ai_default":
+        # 中性口径：主题分只看策略先验与领域归属，不叠加 AI 文本信号。
+        score += min(25.0, _keyword_hit_count(text, policy.scoring_prior_keywords) * 5.0)
+        if news_item.domain_code == workspace.default_domain_code:
+            score += 15.0
+        return max(0.0, min(100.0, score))
     technical_hits = _keyword_hit_count(text, TECHNICAL_TEXT_HINTS)
     commercial_hits = _keyword_hit_count(text, COMMERCIAL_TEXT_HINTS)
     hardware_hits = _keyword_hit_count(text, HARDWARE_TEXT_HINTS)
@@ -1308,9 +1428,22 @@ def _heat_score(session: Session, news_item: NewsItem) -> float:
 
 def _feedback_score(session: Session, news_item: NewsItem) -> float:
     ratings = session.scalars(select(Rating.score).where(Rating.news_item_id == news_item.id)).all()
-    if not ratings:
-        return 0.0
-    return min(100.0, (sum(ratings) / len(ratings)) * 20.0)
+    rating_score = (sum(ratings) / len(ratings)) * 20.0 if ratings else 0.0
+    requirement_feedback = 0.0
+    actions = session.scalars(
+        select(EditorialAction).where(
+            EditorialAction.object_type == "news_item",
+            EditorialAction.object_id == news_item.id,
+            EditorialAction.action_type == "requirement.feedback_to_recommendation",
+        ),
+    ).all()
+    for action in actions:
+        after_json = action.after_json or {}
+        try:
+            requirement_feedback += float(after_json.get("score_delta") or 0.0)
+        except (TypeError, ValueError):
+            continue
+    return max(-50.0, min(100.0, rating_score + requirement_feedback))
 
 
 def _diversity_score(news_item: NewsItem) -> float:
@@ -1401,6 +1534,7 @@ def _recommendation_reason(
     freshness_score: float,
     source_score: float,
     heat_score: float,
+    feedback_score: float,
 ) -> str:
     reasons: list[str] = [
         f"admission={admission.level}",
@@ -1424,6 +1558,10 @@ def _recommendation_reason(
         reasons.append("trusted_source")
     if heat_score > 0:
         reasons.append("user_feedback")
+    if feedback_score > 0:
+        reasons.append("requirement_feedback_positive")
+    elif feedback_score < 0:
+        reasons.append("requirement_feedback_negative")
     return "; ".join(reasons) or "baseline_score"
 
 
@@ -1490,19 +1628,19 @@ def _generated_news_fields(
     generation_timeout_seconds: float,
 ) -> dict[str, object]:
     news_item = recommendation_item.news_item
-    category = _category_for_news(workspace, news_item)
-    policy = _label_policy(workspace)
+    policy = policy_for_workspace(workspace)
+    category = _category_for_news(workspace, news_item, policy)
     llm_draft = generate_news_with_minimax(
         news_item,
         fallback_category=category,
-        allowed_categories=list(policy["allowed_primary_categories"]),
+        allowed_categories=list(policy.allowed_primary_categories),
         recommendation_reason=recommendation_item.recommendation_reason,
         timeout_seconds=generation_timeout_seconds,
     )
     if llm_draft is None:
         content_json = {
             "background": f"来源：{news_item.source_name}；类型：{news_item.source_type}",
-            "effects": SQL_EFFECTS_FALLBACK,
+            "effects": policy.effects_fallback_text,
             "eventSummary": news_item.summary or news_item.source_title,
             "technologyAndInnovation": _content_excerpt(news_item.content),
             "valueAndImpact": "该信号进入日报候选，后续由管理员结合业务场景判断采信和改写。",
@@ -1557,6 +1695,7 @@ def _create_or_replace_daily_draft(
             DailyReport.day_key == day_key,
         ),
     )
+    existing_items: list[DailyReportItem] = []
     if report is None:
         report = DailyReport(
             workspace_code=workspace.code,
@@ -1571,12 +1710,41 @@ def _create_or_replace_daily_draft(
     elif report.status == "published":
         raise PublishedDailyReportError(f"Daily report is already published: {report.id}")
     else:
+        # 重跑对既有 draft 走增量合并：报告层是唯一可编辑层，
+        # adoption_status/is_headline/editor 覆盖不因 pipeline 重跑被整表重建。
         report.title = f"{day_key} {workspace.name} 日报"
         report.summary = "由阶段 5 推荐链路生成的日报草稿。"
-        session.execute(delete(DailyReportItem).where(DailyReportItem.daily_report_id == report.id))
-        session.flush()
+        existing_items = list(
+            session.scalars(
+                select(DailyReportItem)
+                .options(selectinload(DailyReportItem.generated_news))
+                .where(DailyReportItem.daily_report_id == report.id)
+                .order_by(
+                    DailyReportItem.sort_order,
+                    DailyReportItem.created_at,
+                    DailyReportItem.id,
+                ),
+            ).all(),
+        )
 
+    by_generated_news_id: dict[str, DailyReportItem] = {}
+    by_news_item_id: dict[str, DailyReportItem] = {}
+    for existing in existing_items:
+        by_generated_news_id.setdefault(existing.generated_news_id, existing)
+        if existing.generated_news is not None:
+            by_news_item_id.setdefault(existing.generated_news.news_item_id, existing)
+
+    matched_item_ids: set[str] = set()
     for index, item in enumerate(generated_news, start=1):
+        news_item_id = item.news_item.id if item.news_item is not None else item.news_item_id
+        existing = by_generated_news_id.get(item.id) or by_news_item_id.get(news_item_id)
+        if existing is not None and existing.id not in matched_item_ids:
+            matched_item_ids.add(existing.id)
+            # 已编辑条目原样保留（含其成稿指针）；未编辑条目跟随本次重跑刷新成稿和排序。
+            if not _daily_report_item_edited(existing):
+                existing.generated_news = item
+                existing.sort_order = index
+            continue
         session.add(
             DailyReportItem(
                 daily_report=report,
@@ -1585,55 +1753,75 @@ def _create_or_replace_daily_draft(
                 domain_code=item.domain_code,
                 visibility_scope=item.visibility_scope,
                 sync_policy=item.sync_policy,
-                adoption_status=2,
+                adoption_status=DAILY_ITEM_INITIAL_ADOPTION_STATUS,
                 sort_order=index,
             ),
         )
+
+    # 只移除"不在新候选集 + 无编辑痕迹 + 无外部引用"的条目，避免抹掉编辑决策或悬挂外键。
+    removable = [
+        existing
+        for existing in existing_items
+        if existing.id not in matched_item_ids and not _daily_report_item_edited(existing)
+    ]
+    referenced_ids = _referenced_daily_report_item_ids(
+        session,
+        [existing.id for existing in removable],
+    )
+    for existing in removable:
+        if existing.id not in referenced_ids:
+            session.delete(existing)
+    session.flush()
+    session.expire(report, ["items"])
     return report
 
 
-def _label_policy(workspace: Workspace) -> dict[str, object]:
-    config = workspace.config_json or {}
-    policy = config.get("label_policy") or {}
-    if workspace.code == "planning_intel" and policy.get("label_set_code") not in {None, "ai_sql_categories"}:
-        policy = {}
-    allowed = list(policy.get("allowed_primary_categories") or [])
-    if not allowed:
-        allowed = list(AI_SQL_CATEGORIES)
-    return {
-        "allowed_primary_categories": allowed,
-        "default_category": str(policy.get("default_category") or allowed[0]),
-        "fallback_category": str(policy.get("fallback_category") or allowed[0]),
-        "export_category_mode": str(policy.get("export_category_mode") or "news_primary"),
-    }
+def _daily_report_item_edited(item: DailyReportItem) -> bool:
+    """判断 draft 条目是否带有编辑层痕迹：采信状态偏离初始值、头条标记或任一 editor 覆盖。"""
+    return (
+        item.adoption_status != DAILY_ITEM_INITIAL_ADOPTION_STATUS
+        or item.is_headline
+        or item.editor_title is not None
+        or item.editor_summary is not None
+        or item.editor_key_points is not None
+        or item.editor_content_json is not None
+        or bool((item.editor_notes or "").strip())
+    )
 
 
-def _category_for_news(workspace: Workspace, news_item: NewsItem) -> str:
-    policy = _label_policy(workspace)
-    allowed = list(policy["allowed_primary_categories"])
+def _referenced_daily_report_item_ids(session: Session, item_ids: list[str]) -> set[str]:
+    """查出仍被反馈/周报/导出/需求证据链引用的日报条目，删除这些条目会造成外键悬挂。"""
+    if not item_ids:
+        return set()
+    referencing_columns = (
+        Reaction.daily_report_item_id,
+        Rating.daily_report_item_id,
+        Comment.daily_report_item_id,
+        WeeklyReportItem.daily_report_item_id,
+        ExportJobItem.daily_report_item_id,
+        RequirementSourceLink.daily_report_item_id,
+    )
+    referenced: set[str] = set()
+    for column in referencing_columns:
+        referenced.update(session.scalars(select(column).where(column.in_(item_ids))).all())
+    return referenced
+
+
+def _category_for_news(
+    workspace: Workspace,
+    news_item: NewsItem,
+    policy: WorkspaceContentPolicy | None = None,
+) -> str:
+    # 分类降级（LLM 不可用时）：关键词规则经工作台策略解析，
+    # AI/AI 工具关键词表只是内置默认，不再对自定义类目隐含生效。
+    policy = policy or policy_for_workspace(workspace)
+    allowed = list(policy.allowed_primary_categories)
     text = f"{news_item.source_title} {news_item.summary} {news_item.content}".lower()
-    for category, keywords in _category_keyword_rules():
+    for category, keywords in policy.category_keyword_rules:
         if category in allowed and any(keyword in text for keyword in keywords):
             return category
-    default_category = str(policy["default_category"])
+    default_category = policy.default_category
     return default_category if default_category in allowed else allowed[0]
-
-
-def _category_keyword_rules() -> list[tuple[str, list[str]]]:
-    return [
-        ("工具新功能", ["release", "发布", "更新", "feature"]),
-        ("工具新案例", ["case", "案例", "实践"]),
-        ("工具新技术", ["技术", "architecture", "benchmark"]),
-        ("智能体", ["agent", "agents", "智能体"]),
-        ("推理加速", ["inference", "推理", "加速", "kv cache", "serving", "latency", "吞吐"]),
-        ("训练技术", ["training", "训练", "fine-tuning", "finetune", "post-training", "后训练"]),
-        ("测评技术", ["benchmark", "评测", "evaluation", "eval", "dataset", "数据集"]),
-        ("AI Infra", ["infra", "infrastructure", "gpu", "hbm", "cxl", "集群", "数据中心"]),
-        ("模型", ["model", "模型", "llm"]),
-        ("算法", ["algorithm", "算法", "architecture", "架构", "优化"]),
-        ("大厂动态", ["openai", "google", "deepmind", "meta", "microsoft", "anthropic", "amazon"]),
-        ("AI 应用", ["application", "应用", "assistant", "copilot", "workflow", "case"]),
-    ]
 
 
 def _generated_title(news_item: NewsItem) -> str:
