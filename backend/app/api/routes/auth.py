@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hmac
+from hashlib import sha256
 import secrets
 from datetime import datetime, timezone
 from urllib.parse import urlencode, unquote
@@ -246,7 +247,13 @@ def _client_ip(request: Request, settings: Settings) -> str:
 
 
 def _session_version(user: User) -> str:
-    value = user.updated_at or user.created_at
+    # 会话版本必须绑定凭据生命周期，而不是 updated_at：改密/管理员重置（password_hash
+    # 变化）才吊销既有会话。绑 updated_at 时每次登录写 last_login_at 都会顶掉版本号，
+    # 造成"任意一端登录、其他端全部掉线"的多端互踢。外部身份（无本地密码）用创建时间，
+    # 其凭据吊销由外部 IdP 负责，本地会话仍受 exp 与 is_active 约束。
+    if user.password_hash:
+        return sha256(user.password_hash.encode("utf-8")).hexdigest()[:16]
+    value = user.created_at or datetime.now(timezone.utc)
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc).isoformat()
@@ -306,7 +313,8 @@ def get_current_user(
 ) -> User:
     _require_auth_ready(settings)
     token = request.cookies.get(settings.auth_session_cookie)
-    payload = verify_session_token(token, settings.auth_session_secret)
+    # 轮换语义：AUTH_SESSION_SECRETS 全列表可验签（第一个签名），换密钥不掉线
+    payload = verify_session_token(token, settings.auth_session_secret_list)
     if payload:
         user = find_user_with_roles(session, payload["sub"])
         if user and user.is_active and user.status in {"active", "must_change_password"}:
