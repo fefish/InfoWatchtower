@@ -1,11 +1,15 @@
 import { defineStore } from "pinia";
 
+import { HttpError } from "../api/http";
 import {
   fetchRuntime,
   type AuthMembershipMapping,
   type DeployMode,
   type RuntimeCapabilities
 } from "../api/meta";
+
+/** meta 失败的可诊断分类：stale-backend=后端活着但没有 /api/meta/runtime（版本过旧）；unreachable=网络层失败。 */
+export type MetaErrorKind = "stale-backend" | "unreachable" | "http-error";
 
 const DEPLOY_MODE_BADGES: Record<DeployMode, string> = {
   standalone: "",
@@ -31,6 +35,8 @@ export const useRuntimeStore = defineStore("runtime", {
     checked: false,
     loading: false,
     metaError: false,
+    metaErrorKind: null as MetaErrorKind | null,
+    metaErrorStatus: null as number | null,
     deployMode: "standalone" as DeployMode,
     instanceId: "",
     authMode: "public_password",
@@ -58,10 +64,20 @@ export const useRuntimeStore = defineStore("runtime", {
         this.authMembershipMapping = runtime.auth_membership_mapping ?? emptyAuthMembershipMapping();
         this.capabilities = { ...runtime.capabilities };
         this.metaError = false;
-      } catch {
-        // meta 接口失败时保守禁用全部能力（fail-closed），防止 intranet 等受限形态误放开采集入口；
-        // 界面据 metaError 提示"运行时信息加载失败"并提供重试（reload）。
+        this.metaErrorKind = null;
+        this.metaErrorStatus = null;
+      } catch (error) {
+        // meta 接口失败时保守禁用全部能力（fail-closed），防止 intranet 等受限形态误放开采集入口。
+        // 失败必须可诊断：404 几乎总是"前端新、后端旧"（后端进程/镜像没随代码更新，缺 /api/meta/runtime 路由），
+        // 提示重启/重建后端而不是让用户对着"加载失败"抓瞎。
         this.metaError = true;
+        if (error instanceof HttpError) {
+          this.metaErrorStatus = error.status;
+          this.metaErrorKind = error.status === 404 ? "stale-backend" : "http-error";
+        } else {
+          this.metaErrorStatus = null;
+          this.metaErrorKind = "unreachable";
+        }
         this.deployMode = "standalone";
         this.authMode = "public_password";
         this.authMembershipMapping = emptyAuthMembershipMapping();

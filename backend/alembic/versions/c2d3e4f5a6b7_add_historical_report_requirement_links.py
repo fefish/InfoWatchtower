@@ -20,7 +20,7 @@ def upgrade() -> None:
     with op.batch_alter_table("requirement_source_links") as batch_op:
         batch_op.add_column(sa.Column("historical_report_id", sa.String(length=36), nullable=True))
         batch_op.create_foreign_key(
-            "fk_requirement_source_links_historical_report_id_historical_reports",
+            "fk_req_src_links_historical_report_id",
             "historical_reports",
             ["historical_report_id"],
             ["id"],
@@ -32,7 +32,7 @@ def downgrade() -> None:
     with op.batch_alter_table("requirement_source_links") as batch_op:
         batch_op.drop_index("ix_requirement_source_links_historical_report_id")
         batch_op.drop_constraint(
-            "fk_requirement_source_links_historical_report_id_historical_reports",
+            "fk_req_src_links_historical_report_id",
             type_="foreignkey",
         )
         batch_op.drop_column("historical_report_id")

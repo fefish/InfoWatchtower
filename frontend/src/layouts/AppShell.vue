@@ -49,6 +49,16 @@ const session = useSessionStore();
 const workspace = useWorkspaceStore();
 const runtime = useRuntimeStore();
 
+const metaErrorMessage = computed(() => {
+  if (runtime.metaErrorKind === "stale-backend") {
+    return "后端版本过旧（缺少 /api/meta/runtime）：前端代码已更新但后端进程/镜像未更新，请重启或重建后端后重试。";
+  }
+  if (runtime.metaErrorKind === "unreachable") {
+    return "后端不可达：请确认后端服务已启动，再点重试。";
+  }
+  return `运行时信息加载失败${runtime.metaErrorStatus ? `（HTTP ${runtime.metaErrorStatus}）` : ""}，功能已保守禁用。`;
+});
+
 const canCreateWorkspace = computed(
   () => session.user?.roles.some((role) => role === "super_admin" || role === "editor_admin") ?? false
 );
@@ -720,7 +730,7 @@ async function logout() {
       </header>
 
       <div v-if="runtime.metaError" class="form-error runtime-meta-error" role="alert">
-        <span>运行时信息加载失败，功能已保守禁用。</span>
+        <span>{{ metaErrorMessage }}</span>
         <button type="button" class="ghost-button" :disabled="runtime.loading" @click="runtime.reload()">
           {{ runtime.loading ? "重试中" : "重试" }}
         </button>

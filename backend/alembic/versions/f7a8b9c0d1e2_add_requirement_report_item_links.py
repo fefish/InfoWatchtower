@@ -21,13 +21,13 @@ def upgrade() -> None:
         batch_op.add_column(sa.Column("daily_report_item_id", sa.String(length=36), nullable=True))
         batch_op.add_column(sa.Column("weekly_report_item_id", sa.String(length=36), nullable=True))
         batch_op.create_foreign_key(
-            "fk_requirement_source_links_daily_report_item_id_daily_report_items",
+            "fk_req_src_links_daily_report_item_id",
             "daily_report_items",
             ["daily_report_item_id"],
             ["id"],
         )
         batch_op.create_foreign_key(
-            "fk_requirement_source_links_weekly_report_item_id_weekly_report_items",
+            "fk_req_src_links_weekly_report_item_id",
             "weekly_report_items",
             ["weekly_report_item_id"],
             ["id"],
@@ -41,11 +41,11 @@ def downgrade() -> None:
         batch_op.drop_index("ix_requirement_source_links_weekly_report_item_id")
         batch_op.drop_index("ix_requirement_source_links_daily_report_item_id")
         batch_op.drop_constraint(
-            "fk_requirement_source_links_weekly_report_item_id_weekly_report_items",
+            "fk_req_src_links_weekly_report_item_id",
             type_="foreignkey",
         )
         batch_op.drop_constraint(
-            "fk_requirement_source_links_daily_report_item_id_daily_report_items",
+            "fk_req_src_links_daily_report_item_id",
             type_="foreignkey",
         )
         batch_op.drop_column("weekly_report_item_id")

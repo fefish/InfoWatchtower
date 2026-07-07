@@ -2,6 +2,7 @@ import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { HttpError } from "../api/http";
 import SourcesPage from "../pages/SourcesPage.vue";
 import { useRuntimeStore } from "./runtime";
 import { useWorkspaceStore } from "./workspace";
@@ -105,6 +106,7 @@ describe("runtime store", () => {
 
     expect(runtime.checked).toBe(true);
     expect(runtime.metaError).toBe(true);
+    expect(runtime.metaErrorKind).toBe("unreachable");
     expect(runtime.canIngest).toBe(false);
     expect(runtime.capabilities).toEqual({
       ingestion: false,
@@ -113,6 +115,28 @@ describe("runtime store", () => {
       embedding: false,
       search: false
     });
+  });
+
+  it("meta 404 时诊断为 stale-backend（后端进程/镜像未随前端更新）", async () => {
+    metaApi.fetchRuntime.mockRejectedValue(new HttpError("Not Found", 404));
+    const runtime = useRuntimeStore();
+
+    await runtime.load();
+
+    expect(runtime.metaError).toBe(true);
+    expect(runtime.metaErrorKind).toBe("stale-backend");
+    expect(runtime.metaErrorStatus).toBe(404);
+    expect(runtime.canIngest).toBe(false);
+  });
+
+  it("meta 非 404 HTTP 错误时诊断为 http-error 并携带状态码", async () => {
+    metaApi.fetchRuntime.mockRejectedValue(new HttpError("boom", 500));
+    const runtime = useRuntimeStore();
+
+    await runtime.load();
+
+    expect(runtime.metaErrorKind).toBe("http-error");
+    expect(runtime.metaErrorStatus).toBe(500);
   });
 
   it("checked 后重复 load 不再请求 meta", async () => {

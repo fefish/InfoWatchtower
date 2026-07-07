@@ -52,13 +52,24 @@ function buildInit(init?: RequestInit): RequestInit {
   };
 }
 
+/** 带状态码的请求错误：调用方可按 status 区分 404（路由缺失/后端版本过旧）、401 等；网络层失败没有 status。 */
+export class HttpError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "HttpError";
+    this.status = status;
+  }
+}
+
 async function raiseForStatus(response: Response): Promise<void> {
   if (response.ok) {
     return;
   }
   const body: { detail?: unknown } = await response.json().catch(() => ({}));
   const detail = typeof body.detail === "string" ? body.detail : `HTTP ${response.status}`;
-  throw new Error(detail);
+  throw new HttpError(detail, response.status);
 }
 
 /** 底层入口：仅拼 base 前缀 + 附 cookie/CSRF，不检查状态码（logout 等特殊流程用）。 */
