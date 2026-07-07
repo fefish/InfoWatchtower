@@ -383,7 +383,13 @@ def test_patch_url_fills_entry_for_metadata_only_source(monkeypatch, tmp_path):
 
     sources = client.get("/api/sources", params={"workspace_code": "planning_intel"})
     assert sources.status_code == 200
-    target = next(item for item in sources.json() if item["name"] == "机器之心")
+    # CSV 里有两条「机器之心」（rss + wx://）；wx 行现在映射为 source_type=wechat，
+    # 按 metadata_only 精确选中待补入口的治理记录，不依赖列表排序。
+    target = next(
+        item
+        for item in sources.json()
+        if item["name"] == "机器之心" and item["metadata_only"] is True
+    )
     assert target["needs_entry"] is True
     assert target["metadata_only"] is True
 

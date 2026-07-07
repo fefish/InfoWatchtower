@@ -6,6 +6,7 @@ from app.adapters.paper import PaperApiAdapter
 from app.adapters.paper_page import PaperPageAdapter
 from app.adapters.push_based import InternalSourceAdapter, ManualNewsAdapter
 from app.adapters.rss import PaperRssFeedAdapter, RssFeedAdapter
+from app.adapters.wechat import WeChatMpAdapter
 from app.adapters.wiseflow import WiseflowReadInfoAdapter
 
 
@@ -23,6 +24,7 @@ def create_default_registry() -> AdapterRegistry:
         PaperPageAdapter(),
         ManualNewsAdapter(),
         InternalSourceAdapter(),
+        WeChatMpAdapter(),
     ]:
         registry.register(adapter)
     return registry
@@ -43,6 +45,7 @@ __all__ = [
     "RssFeedAdapter",
     "SourceAdapter",
     "SourceFetchContext",
+    "WeChatMpAdapter",
     "WiseflowReadInfoAdapter",
     "create_default_registry",
 ]
