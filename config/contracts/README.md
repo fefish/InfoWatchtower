@@ -28,6 +28,7 @@ contracts 管“代码必须长什么样”
 - `source_fields.json`：数据源配置字段、旧源如何导入新系统。
 - `adapter_pipeline.json`：采集 adapter、raw_items、news_items、去重阶段的字段和顺序。
 - `news_sql_mapping.json`：内部新闻对象如何导出为公司 SQL。
+- `company_sql_baseline_20260505.sql`：0505 legacy 基准的锁列夹具，`scripts/validate_company_sql.py` 在无 `outputs/` 本地基准（如 CI 全新 checkout）时回落加载；列顺序与本地完整 0505 预览必须一致。
 - `auth_modes.json`：公网/内网登录模式和统一身份字段。
 - `deployment_modes.json`：四种部署形态（standalone/cloud/intranet/extranet）、能力开关、合法登录组合、启动 fail-fast 规则和 `GET /api/meta/runtime`。
 - `workspace_model.json`：工作台、共享源启用、工作台内模块和情报板块边界。
