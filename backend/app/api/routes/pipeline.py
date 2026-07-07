@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.api.routes.auth import assert_workspace_member, get_current_user
+from app.api.routes.auth import assert_workspace_member, get_current_user, require_capability
 from app.core.database import get_db_session
 from app.models.identity import User
 from app.pipeline.daily import DailyPipelineRequest, daily_pipeline_payload, run_daily_pipeline
@@ -13,9 +13,11 @@ from app.schemas.pipeline import DailyPipelineRunCreate, DailyPipelineRunRead
 router = APIRouter(prefix="/api/pipeline", tags=["pipeline"])
 CURRENT_USER = Depends(get_current_user)
 DB_SESSION = Depends(get_db_session)
+# 含采集阶段，intranet 形态整条本地管线关闭（消费远端成稿）
+INGESTION_CAPABILITY = Depends(require_capability("ingestion"))
 
 
-@router.post("/daily-runs", response_model=DailyPipelineRunRead)
+@router.post("/daily-runs", response_model=DailyPipelineRunRead, dependencies=[INGESTION_CAPABILITY])
 async def create_daily_pipeline_run(
     payload: DailyPipelineRunCreate,
     current_user: User = CURRENT_USER,

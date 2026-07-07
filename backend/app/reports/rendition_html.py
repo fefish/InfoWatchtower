@@ -100,8 +100,17 @@ def render_html(rendition: ReportRendition) -> str:
     if distribution:
         dist_text = "，".join(f"{escape(str(key))} {count} 条" for key, count in distribution.items())
         headline_titles = summary.get("headline_titles") or []
+        key_highlights = summary.get("key_highlights") or []
         parts.append("<div class='summary-box'>")
+        if summary.get("summary_text"):
+            parts.append(f"<p><strong>摘要：</strong>{escape(str(summary['summary_text']))}</p>")
         parts.append(f"<p><strong>板块分布：</strong>{dist_text}，合计 {summary.get('item_total', 0)} 条。</p>")
+        if key_highlights:
+            parts.append(
+                "<p><strong>关键亮点：</strong>"
+                + "；".join(escape(str(title)) for title in key_highlights[:4])
+                + "。</p>",
+            )
         if headline_titles:
             parts.append(
                 "<p><strong>今日头条：</strong>"

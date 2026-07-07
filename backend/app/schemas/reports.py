@@ -16,7 +16,8 @@ class GeneratedNewsRead(BaseModel):
     source_url: str | None
     generation_status: str
     news_item_id: str
-    recommendation_item_id: str
+    # nullable：intranet 联动同步的成稿不复算推荐链（app/sync/apply.py 留空该外键）
+    recommendation_item_id: str | None
 
 
 class DailyReportItemRead(BaseModel):
@@ -74,6 +75,32 @@ class DailyReportGenerationRerunRead(BaseModel):
     skipped_total: int
 
 
+class DailyReportBulkAdoptCreate(BaseModel):
+    workspace_code: str
+    day_key: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    dedupe_group_ids: list[str] = Field(min_length=1, max_length=100)
+    generation_timeout_seconds: float = Field(default=45.0, ge=5, le=180)
+
+
+class DailyReportBulkRejectCreate(BaseModel):
+    workspace_code: str
+    day_key: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    dedupe_group_ids: list[str] = Field(min_length=1, max_length=100)
+
+
+class DailyReportBulkAdoptSkippedItem(BaseModel):
+    dedupe_group_id: str
+    reason: str
+
+
+class DailyReportBulkAdoptRead(BaseModel):
+    report: DailyReportRead
+    created_total: int
+    updated_total: int
+    skipped_total: int
+    skipped_items: list[DailyReportBulkAdoptSkippedItem] = Field(default_factory=list)
+
+
 class WeeklyReportItemRead(BaseModel):
     id: str
     daily_report_item_id: str | None
@@ -81,6 +108,10 @@ class WeeklyReportItemRead(BaseModel):
     generated_news: GeneratedNewsRead | None
     adoption_status: int
     sort_order: int
+    weekly_score: float = 0.0
+    final_score: float = 0.0
+    heat_score: float = 0.0
+    feedback_score: float = 0.0
     editor_title: str | None
     editor_summary: str | None
     editor_content_json: dict[str, Any] | None

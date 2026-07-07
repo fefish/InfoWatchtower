@@ -52,6 +52,7 @@ class DedupeGroupItemRead(BaseModel):
     duplicate_reason: str
     rank_score: float
     title: str
+    source_type: str
     source_name: str
     source_url: str | None
 
@@ -92,6 +93,21 @@ class DedupeGroupDailyReportRead(BaseModel):
     category: str
 
 
+class DedupeGroupLineageNodeRead(BaseModel):
+    object_type: str
+    object_id: str | None
+    label: str
+    status: str
+    review_note: str
+    target_path: str | None = None
+    occurred_at: datetime | None = None
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+
+class DedupeGroupLineageRead(BaseModel):
+    nodes: list[DedupeGroupLineageNodeRead] = Field(default_factory=list)
+
+
 class DedupeGroupRead(BaseModel):
     id: str
     workspace_code: str
@@ -99,8 +115,11 @@ class DedupeGroupRead(BaseModel):
     dedupe_key: str
     winner_news_item_id: str | None
     winner_title: str | None
+    winner_published_at: datetime | None = None
+    winner_source_type: str | None = None
     item_count: int
     status: str
     items: list[DedupeGroupItemRead] = Field(default_factory=list)
     recommendation: DedupeGroupRecommendationRead | None = None
     daily_report: DedupeGroupDailyReportRead | None = None
+    lineage: DedupeGroupLineageRead = Field(default_factory=DedupeGroupLineageRead)

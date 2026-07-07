@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, time
 from html import unescape
 from typing import Any
@@ -15,6 +15,14 @@ from app.models.common import utc_now
 from app.models.content import GeneratedNews, NewsItem
 from app.models.export import ExportJob, ExportJobItem
 from app.models.reports import DailyReport, DailyReportItem
+from app.models.workspace import Workspace
+from app.workspaces.policy import (
+    AI_SQL_CATEGORIES as CANONICAL_AI_SQL_CATEGORIES,
+)
+from app.workspaces.policy import (
+    WorkspaceContentPolicy,
+    policy_for_workspace,
+)
 
 COMPANY_SQL_CONTENT_FIELDS = (
     "background",
@@ -23,7 +31,19 @@ COMPANY_SQL_CONTENT_FIELDS = (
     "technologyAndInnovation",
     "valueAndImpact",
 )
+# 非公司 SQL 口径工作台（news_format_code 非 company_sql_v1 或一级标签
+# 不是 AI 十分类）的导出指引：不产出语义错误的兼容映射 SQL。
+COMPANY_SQL_WORKSPACE_GUIDANCE = (
+    "该工作台的标签策略不是公司 SQL 口径（需 news_format_code=company_sql_v1 "
+    "且一级标签为 AI 十分类），无法生成标准公司 SQL；"
+    "请调整工作台标签策略，或改用技术洞察版 Markdown/HTML 导出。"
+)
 BEIJING_TZ = ZoneInfo("Asia/Shanghai")
+COMPANY_SQL_SOURCE_URL_MAX_LENGTH = 1024
+COMPANY_SQL_TITLE_WARN_LENGTH = 255
+COMPANY_SQL_SUMMARY_WARN_LENGTH = 2000
+COMPANY_SQL_KEY_POINTS_WARN_LENGTH = 1000
+HTML_TAG_RE = re.compile(r"<\s*/?\s*[a-zA-Z][^>]*>")
 
 
 class DailyReportNotFoundError(ValueError):
@@ -35,6 +55,10 @@ class DailyReportNotPublishedError(ValueError):
 
 
 class DailyReportGenerationNotReadyError(ValueError):
+    pass
+
+
+class CompanySqlWorkspaceNotSupportedError(ValueError):
     pass
 
 
@@ -52,6 +76,105 @@ class CompanySqlStatement:
     sql: str
 
 
+@dataclass(frozen=True)
+class CompanySqlPreflightIssue:
+    level: str
+    code: str
+    message: str
+    field: str | None = None
+    daily_report_item_id: str | None = None
+
+
+@dataclass(frozen=True)
+class CompanySqlPreflightItem:
+    daily_report_item_id: str
+    generated_news_id: str
+    news_item_id: str
+    adoption_status: int
+    status: str
+    title: str
+    source_url: str | None
+    category: str | None
+    errors: list[CompanySqlPreflightIssue]
+    warnings: list[CompanySqlPreflightIssue]
+
+
+@dataclass(frozen=True)
+class CompanySqlPreflightReport:
+    daily_report_id: str
+    workspace_code: str
+    domain_code: str
+    day_key: str
+    report_status: str
+    status: str
+    eligible_count: int
+    blocked_count: int
+    skipped_count: int
+    warning_count: int
+    error_count: int
+    errors: list[CompanySqlPreflightIssue]
+    warnings: list[CompanySqlPreflightIssue]
+    items: list[CompanySqlPreflightItem]
+
+    def to_json(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def run_company_sql_preflight(session: Session, daily_report_id: str) -> CompanySqlPreflightReport:
+    report = _load_daily_report(session, daily_report_id)
+    if report is None:
+        raise DailyReportNotFoundError(f"Daily report not found: {daily_report_id}")
+
+    report_errors: list[CompanySqlPreflightIssue] = []
+    report_warnings: list[CompanySqlPreflightIssue] = []
+    if report.status != "published":
+        report_errors.append(
+            CompanySqlPreflightIssue(
+                level="error",
+                code="report_not_published",
+                field="daily_reports.status",
+                message="公司 SQL 只能导出已发布日报。",
+            ),
+        )
+    policy = _workspace_export_policy(session, report)
+    if policy is not None and not policy.company_sql_capable:
+        report_errors.append(
+            CompanySqlPreflightIssue(
+                level="error",
+                code="workspace_not_company_sql",
+                field="workspace.label_policy",
+                message=COMPANY_SQL_WORKSPACE_GUIDANCE,
+            ),
+        )
+
+    export_category_mode = _export_category_mode(session, report)
+    items = [
+        _preflight_item(item, export_category_mode, report.day_key)
+        for item in sorted(report.items, key=lambda item: (item.sort_order, item.created_at, item.id))
+    ]
+    eligible_count = sum(1 for item in items if item.status == "eligible")
+    blocked_count = sum(1 for item in items if item.status == "blocked")
+    skipped_count = sum(1 for item in items if item.status == "skipped")
+    error_count = len(report_errors) + sum(len(item.errors) for item in items)
+    warning_count = len(report_warnings) + sum(len(item.warnings) for item in items)
+    return CompanySqlPreflightReport(
+        daily_report_id=report.id,
+        workspace_code=report.workspace_code,
+        domain_code=report.domain_code,
+        day_key=report.day_key,
+        report_status=report.status,
+        status="failed" if error_count else "passed",
+        eligible_count=eligible_count,
+        blocked_count=blocked_count,
+        skipped_count=skipped_count,
+        warning_count=warning_count,
+        error_count=error_count,
+        errors=report_errors,
+        warnings=report_warnings,
+        items=items,
+    )
+
+
 def generate_company_sql_for_daily_report(
     session: Session,
     daily_report_id: str,
@@ -63,6 +186,20 @@ def generate_company_sql_for_daily_report(
     if report.status != "published":
         raise DailyReportNotPublishedError(
             "Company SQL export only supports published daily reports.",
+        )
+    policy = _workspace_export_policy(session, report)
+    if policy is not None and not policy.company_sql_capable:
+        raise CompanySqlWorkspaceNotSupportedError(
+            f"Workspace {report.workspace_code} 不适配公司 SQL 导出：{COMPANY_SQL_WORKSPACE_GUIDANCE}",
+        )
+    preflight = run_company_sql_preflight(session, daily_report_id)
+    if preflight.status != "passed":
+        first_error = preflight.errors[0] if preflight.errors else next(
+            (item.errors[0] for item in preflight.items if item.errors),
+            None,
+        )
+        raise DailyReportGenerationNotReadyError(
+            first_error.message if first_error else "Company SQL preflight failed.",
         )
 
     adopted_items = sorted(
@@ -126,6 +263,7 @@ def generate_company_sql_for_daily_report(
     sql_text = _sql_header(started_at, report, len(adopted_items), statement_count) + "".join(
         item_blocks,
     )
+    sql_size_bytes = len(sql_text.encode("utf-8"))
     export_job.status = "completed"
     export_job.completed_at = utc_now()
     export_job.result_json = {
@@ -133,7 +271,10 @@ def generate_company_sql_for_daily_report(
         "day_key": report.day_key,
         "item_count": len(adopted_items),
         "statement_count": statement_count,
+        "preflight": preflight.to_json(),
         "sql_text": sql_text,
+        "sql_size_bytes": sql_size_bytes,
+        "download_strategy": "server_streaming",
         "sql_tables": [
             "ai_journal",
             "ai_journal_focus",
@@ -147,6 +288,125 @@ def generate_company_sql_for_daily_report(
         sql_text=sql_text,
         item_count=len(adopted_items),
         statement_count=statement_count,
+    )
+
+
+def _preflight_item(
+    item: DailyReportItem,
+    export_category_mode: str,
+    report_day_key: str,
+) -> CompanySqlPreflightItem:
+    generated = item.generated_news
+    news_item = generated.news_item
+    raw_item = news_item.raw_item
+    title = _first_text(item.editor_title, generated.title)
+    source_url = _first_text(raw_item.source_url, news_item.source_url, generated.source_url)
+    export_category = _export_category(item, export_category_mode)
+    errors: list[CompanySqlPreflightIssue] = []
+    warnings: list[CompanySqlPreflightIssue] = []
+
+    if item.adoption_status != 2:
+        return CompanySqlPreflightItem(
+            daily_report_item_id=item.id,
+            generated_news_id=generated.id,
+            news_item_id=news_item.id,
+            adoption_status=item.adoption_status,
+            status="skipped",
+            title=title,
+            source_url=source_url or None,
+            category=export_category or None,
+            errors=[],
+            warnings=[],
+        )
+
+    def add_error(code: str, field: str, message: str) -> None:
+        errors.append(
+            CompanySqlPreflightIssue(
+                level="error",
+                code=code,
+                field=field,
+                message=message,
+                daily_report_item_id=item.id,
+            ),
+        )
+
+    def add_warning(code: str, field: str, message: str) -> None:
+        warnings.append(
+            CompanySqlPreflightIssue(
+                level="warning",
+                code=code,
+                field=field,
+                message=message,
+                daily_report_item_id=item.id,
+            ),
+        )
+
+    if generated.generated_by.startswith("rule_v1"):
+        add_error("rule_fallback_blocked", "generated_news.generated_by", "rule_v1/fallback 草稿不能进入标准公司 SQL。")
+    if generated.generation_status != "ready":
+        add_error("generation_not_ready", "generated_news.generation_status", "采信条目生成稿必须为 ready。")
+    if not source_url:
+        add_error("source_url_missing", "source_url", "source_url 不能为空。")
+    elif len(source_url) > COMPANY_SQL_SOURCE_URL_MAX_LENGTH:
+        add_error("source_url_too_long", "source_url", f"source_url 超过 {COMPANY_SQL_SOURCE_URL_MAX_LENGTH} 字符。")
+
+    if not title:
+        add_error("title_missing", "title", "导出标题不能为空。")
+    elif len(title) > COMPANY_SQL_TITLE_WARN_LENGTH:
+        add_warning("title_long", "title", f"标题超过 {COMPANY_SQL_TITLE_WARN_LENGTH} 字符，导入前需复核。")
+    summary = _first_text(item.editor_summary, generated.summary)
+    if not summary:
+        add_error("summary_missing", "summary", "导出摘要不能为空。")
+    elif len(summary) > COMPANY_SQL_SUMMARY_WARN_LENGTH:
+        add_warning("summary_long", "summary", f"摘要超过 {COMPANY_SQL_SUMMARY_WARN_LENGTH} 字符，导入前需复核。")
+    key_points = _first_text(item.editor_key_points, generated.key_points)
+    if not key_points:
+        add_error("key_points_missing", "key_points", "导出关键点不能为空。")
+    elif len(key_points) > COMPANY_SQL_KEY_POINTS_WARN_LENGTH:
+        add_warning("key_points_long", "key_points", f"关键点超过 {COMPANY_SQL_KEY_POINTS_WARN_LENGTH} 字符，导入前需复核。")
+
+    merged_content = {**(generated.content_json or {}), **(item.editor_content_json or {})}
+    for field in COMPANY_SQL_CONTENT_FIELDS:
+        if field not in merged_content:
+            add_error("content_field_missing", f"content_json.{field}", f"content_json 缺少 {field}。")
+            continue
+        content_value = _stringify_content_value(merged_content.get(field))
+        if HTML_TAG_RE.search(content_value):
+            add_error("content_html_detected", f"content_json.{field}", f"content_json.{field} 含 HTML 标签。")
+
+    if export_category not in AI_SQL_CATEGORIES:
+        add_error("category_invalid", "generated_news.category", "category 必须是规划部 AI 十分类。")
+    elif generated.category and generated.category not in AI_SQL_CATEGORIES:
+        add_warning("category_remapped", "generated_news.category", "原始 category 非 AI 十分类，导出时将按兼容规则映射。")
+
+    source_title_raw = _first_text(raw_item.source_title, news_item.source_title, "自动同步抓取")
+    source_title_clean = _clean_export_text(source_title_raw)
+    if not source_title_clean:
+        add_error("source_title_empty_after_clean", "source_title", "source_title 清洗后为空。")
+    elif _contains_html(source_title_raw):
+        add_warning("source_title_html_cleaned", "source_title", "source_title 含 HTML，导出会清洗为纯文本。")
+    raw_content_raw = _first_text(raw_item.raw_content, news_item.content)
+    raw_content_clean = _clean_export_text(raw_content_raw)
+    if not raw_content_clean:
+        add_error("raw_content_empty_after_clean", "raw_content", "ai_journal.content 清洗后为空。")
+    elif _contains_html(raw_content_raw):
+        add_warning("raw_content_html_cleaned", "raw_content", "ai_journal.content 含 HTML，导出会清洗为纯文本。")
+
+    source_datetime = raw_item.published_at or news_item.published_at or _report_day_fallback_datetime(report_day_key)
+    if source_datetime is None:
+        add_error("created_at_unrenderable", "created_at", "created_at 无法按北京时间字面量渲染。")
+
+    return CompanySqlPreflightItem(
+        daily_report_item_id=item.id,
+        generated_news_id=generated.id,
+        news_item_id=news_item.id,
+        adoption_status=item.adoption_status,
+        status="blocked" if errors else "eligible",
+        title=title,
+        source_url=source_url or None,
+        category=export_category or None,
+        errors=errors,
+        warnings=warnings,
     )
 
 
@@ -251,11 +511,26 @@ def _sql_block_for_item(
     return block, statements
 
 
+def _workspace_export_policy(session: Session, report: DailyReport) -> WorkspaceContentPolicy | None:
+    workspace = session.scalar(select(Workspace).where(Workspace.code == report.workspace_code))
+    if workspace is None:
+        return None
+    return policy_for_workspace(workspace)
+
+
 def _export_category_mode(session: Session, report: DailyReport) -> str:
-    return "news_primary"
+    """导出 category 口径来自工作台标签策略（与推荐层共用同一解析）。
+
+    当前契约只允许 news_primary（API 写入侧同样锁死），其他值在
+    _export_category 中显式拒绝，避免未来扩展第二种口径时静默失效。
+    """
+    policy = _workspace_export_policy(session, report)
+    return policy.export_category_mode if policy is not None else "news_primary"
 
 
 def _export_category(item: DailyReportItem, export_category_mode: str) -> str:
+    if export_category_mode != "news_primary":
+        raise ValueError(f"Unsupported export_category_mode: {export_category_mode}")
     generated = item.generated_news
     category = generated.category or ""
     if category in AI_SQL_CATEGORIES:
@@ -270,18 +545,8 @@ def _export_category(item: DailyReportItem, export_category_mode: str) -> str:
     return _legacy_ai_category_for_item(item)
 
 
-AI_SQL_CATEGORIES = {
-    "AI Infra",
-    "AI 应用",
-    "测评技术",
-    "大厂动态",
-    "模型",
-    "算法",
-    "推理加速",
-    "训练技术",
-    "智能体",
-    "基础竞争力",
-}
+# 公司 SQL 契约锁死的一级分类集合（单一事实源在 app.workspaces.policy）。
+AI_SQL_CATEGORIES = set(CANONICAL_AI_SQL_CATEGORIES)
 
 
 def _legacy_ai_category_for_item(item: DailyReportItem) -> str:
@@ -348,6 +613,10 @@ def _clean_export_text(value: Any) -> str:
     text = re.sub(r"</p\s*>", "\n", text, flags=re.IGNORECASE)
     text = re.sub(r"<[^>]+>", " ", text)
     return " ".join(text.split())
+
+
+def _contains_html(value: Any) -> bool:
+    return bool(value and HTML_TAG_RE.search(str(value)))
 
 
 def _safe_int(value: Any) -> int:

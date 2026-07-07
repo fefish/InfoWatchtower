@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.adapters import AdapterRegistry
 from app.core.database import get_session_factory
+from app.ingestion.jobs import ingestion_capability_skip
 from app.ingestion.runs import (
     DEFAULT_INGESTION_CONCURRENCY,
     DEFAULT_SOURCE_TIMEOUT_SECONDS,
@@ -111,6 +112,10 @@ def run_daily_pipeline_job(
     run_ingestion: bool = True,
     day_key: str | None = None,
 ) -> dict[str, Any]:
+    # 日报管线含采集阶段（intranet 消费远端成稿，不本地跑管线），与采集 job 同门
+    skipped = ingestion_capability_skip("daily_pipeline", workspace_code)
+    if skipped is not None:
+        return skipped
     return asyncio.run(
         _run_daily_pipeline_job(
             workspace_code=workspace_code,

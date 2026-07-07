@@ -1,20 +1,32 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import desc, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.routes.auth import assert_workspace_member, get_current_user, require_super_admin
 from app.auth.service import write_audit
+from app.collaboration.notifications import (
+    record_comment_activity,
+    record_daily_report_publish_activity,
+    record_dedupe_group_adoption_changed_activity,
+    record_rating_activity,
+    record_reaction_activity,
+    record_weekly_report_item_updated_activity,
+    record_weekly_report_publish_activity,
+)
 from app.core.database import get_db_session
 from app.models.common import utc_now
-from app.models.content import GeneratedNews
+from app.models.content import DedupeGroup, GeneratedNews, RecommendationItem, RecommendationRun
 from app.models.feedback import Comment, EditorialAction, Rating, Reaction
 from app.models.identity import User
 from app.models.reports import DailyReport, DailyReportItem, WeeklyReport, WeeklyReportItem
+from app.models.workspace import Workspace
 from app.recommendations.service import (
     DailyReportGenerationRerunRequest,
     DailyReportNotFoundError,
+    _create_generated_news,
+    _normalize_generation_timeout,
     regenerate_daily_report_generated_news,
 )
 from app.recommendations.service import (
@@ -26,10 +38,16 @@ from app.reports.weekly import (
     WeeklyReportDraftRequest,
     WorkspaceNotFoundError,
     create_weekly_report_draft,
+    refresh_weekly_report_summary,
+    weekly_item_score,
 )
 from app.schemas.reports import (
     CommentCreate,
     CommentRead,
+    DailyReportBulkAdoptCreate,
+    DailyReportBulkAdoptRead,
+    DailyReportBulkRejectCreate,
+    DailyReportBulkAdoptSkippedItem,
     DailyReportGenerationRerunCreate,
     DailyReportGenerationRerunRead,
     DailyReportItemRead,
@@ -88,6 +106,7 @@ def publish_daily_report(
 ) -> DailyReportRead:
     report = _load_daily_report(session, report_id)
     assert_workspace_member(session, current_user, report.workspace_code, min_role="member")
+    was_published = report.status == "published"
     report.status = "published"
     report.published_at = utc_now()
     write_audit(
@@ -98,6 +117,8 @@ def publish_daily_report(
         report.id,
         {"day_key": report.day_key, "workspace_code": report.workspace_code},
     )
+    if not was_published and _workspace_feedback_policy(session, report.workspace_code).get("notify_on_publish"):
+        record_daily_report_publish_activity(session, actor=current_user, report=report)
     session.commit()
     return _daily_report_to_read(_load_daily_report(session, report_id))
 
@@ -150,6 +171,250 @@ def regenerate_daily_report_news(
         ready_total=result.ready_total,
         fallback_total=result.fallback_total,
         skipped_total=result.skipped_total,
+    )
+
+
+@router.post("/daily-reports/bulk-adopt-from-candidates", response_model=DailyReportBulkAdoptRead)
+def bulk_adopt_daily_report_candidates(
+    payload: DailyReportBulkAdoptCreate,
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> DailyReportBulkAdoptRead:
+    assert_workspace_member(session, current_user, payload.workspace_code, min_role="member")
+    workspace = session.scalar(
+        select(Workspace).where(
+            Workspace.code == payload.workspace_code,
+            Workspace.enabled.is_(True),
+        ),
+    )
+    if workspace is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
+    report = _load_or_create_daily_draft_for_bulk_adopt(
+        session,
+        workspace=workspace,
+        day_key=payload.day_key,
+    )
+    if report.status == "published":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Daily report is already published",
+        )
+
+    created_total = 0
+    updated_total = 0
+    skipped_items: list[DailyReportBulkAdoptSkippedItem] = []
+    next_sort_order = _next_daily_report_sort_order(report)
+    timeout_seconds = _normalize_generation_timeout(payload.generation_timeout_seconds)
+    seen_group_ids: set[str] = set()
+    for group_id in payload.dedupe_group_ids:
+        if group_id in seen_group_ids:
+            continue
+        seen_group_ids.add(group_id)
+        group = _load_workspace_dedupe_group(session, payload.workspace_code, group_id)
+        if group is None or group.winner_news_item_id is None:
+            skipped_items.append(
+                DailyReportBulkAdoptSkippedItem(
+                    dedupe_group_id=group_id,
+                    reason="missing_winner",
+                ),
+            )
+            continue
+        recommendation_item = _latest_recommendation_item_for_news(
+            session,
+            workspace_code=payload.workspace_code,
+            news_item_id=group.winner_news_item_id,
+        )
+        if recommendation_item is None:
+            skipped_items.append(
+                DailyReportBulkAdoptSkippedItem(
+                    dedupe_group_id=group_id,
+                    reason="missing_recommendation",
+                ),
+            )
+            continue
+        generated = _latest_generated_news_for_recommendation(session, recommendation_item.id)
+        if generated is None:
+            generated = _create_generated_news(
+                session,
+                workspace,
+                recommendation_item,
+                generation_timeout_seconds=timeout_seconds,
+            )
+            session.flush()
+
+        existing = _daily_report_item_for_generated_news(session, report.id, generated.id)
+        changed_item: DailyReportItem | None = None
+        if existing is None:
+            changed_item = DailyReportItem(
+                daily_report=report,
+                generated_news=generated,
+                workspace_code=workspace.code,
+                domain_code=generated.domain_code,
+                visibility_scope=generated.visibility_scope,
+                sync_policy=generated.sync_policy,
+                adoption_status=2,
+                sort_order=next_sort_order,
+            )
+            session.add(changed_item)
+            created_total += 1
+            next_sort_order += 1
+        elif existing.adoption_status != 2:
+            existing.adoption_status = 2
+            changed_item = existing
+            updated_total += 1
+        if changed_item is not None:
+            session.flush()
+            record_dedupe_group_adoption_changed_activity(
+                session,
+                actor=current_user,
+                group=group,
+                daily_report_item=changed_item,
+                action_type="bulk_adopt_from_candidates",
+            )
+
+    session.add(
+        EditorialAction(
+            user=current_user,
+            object_type="daily_report",
+            object_id=report.id,
+            action_type="bulk_adopt_from_candidates",
+            after_json={
+                "workspace_code": payload.workspace_code,
+                "day_key": payload.day_key,
+                "dedupe_group_ids": list(seen_group_ids),
+                "created_total": created_total,
+                "updated_total": updated_total,
+                "skipped_total": len(skipped_items),
+            },
+        ),
+    )
+    session.commit()
+    return DailyReportBulkAdoptRead(
+        report=_daily_report_to_read(_load_daily_report(session, report.id)),
+        created_total=created_total,
+        updated_total=updated_total,
+        skipped_total=len(skipped_items),
+        skipped_items=skipped_items,
+    )
+
+
+@router.post("/daily-reports/bulk-reject-from-candidates", response_model=DailyReportBulkAdoptRead)
+def bulk_reject_daily_report_candidates(
+    payload: DailyReportBulkRejectCreate,
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> DailyReportBulkAdoptRead:
+    assert_workspace_member(session, current_user, payload.workspace_code, min_role="member")
+    workspace = session.scalar(
+        select(Workspace).where(
+            Workspace.code == payload.workspace_code,
+            Workspace.enabled.is_(True),
+        ),
+    )
+    if workspace is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
+    report = _load_or_create_daily_draft_for_bulk_adopt(
+        session,
+        workspace=workspace,
+        day_key=payload.day_key,
+    )
+    if report.status == "published":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Daily report is already published",
+        )
+
+    created_total = 0
+    updated_total = 0
+    skipped_items: list[DailyReportBulkAdoptSkippedItem] = []
+    next_sort_order = _next_daily_report_sort_order(report)
+    seen_group_ids: set[str] = set()
+    for group_id in payload.dedupe_group_ids:
+        if group_id in seen_group_ids:
+            continue
+        seen_group_ids.add(group_id)
+        group = _load_workspace_dedupe_group(session, payload.workspace_code, group_id)
+        if group is None or group.winner_news_item_id is None:
+            skipped_items.append(
+                DailyReportBulkAdoptSkippedItem(
+                    dedupe_group_id=group_id,
+                    reason="missing_winner",
+                ),
+            )
+            continue
+        recommendation_item = _latest_recommendation_item_for_news(
+            session,
+            workspace_code=payload.workspace_code,
+            news_item_id=group.winner_news_item_id,
+        )
+        if recommendation_item is None:
+            skipped_items.append(
+                DailyReportBulkAdoptSkippedItem(
+                    dedupe_group_id=group_id,
+                    reason="missing_recommendation",
+                ),
+            )
+            continue
+        generated = _latest_generated_news_for_recommendation(session, recommendation_item.id)
+        if generated is None:
+            generated = _create_rejected_generated_news_placeholder(session, workspace, recommendation_item)
+            session.flush()
+
+        existing = _daily_report_item_for_generated_news(session, report.id, generated.id)
+        changed_item: DailyReportItem | None = None
+        if existing is None:
+            changed_item = DailyReportItem(
+                daily_report=report,
+                generated_news=generated,
+                workspace_code=workspace.code,
+                domain_code=generated.domain_code,
+                visibility_scope=generated.visibility_scope,
+                sync_policy=generated.sync_policy,
+                adoption_status=0,
+                sort_order=next_sort_order,
+                editor_notes="候选池批量剔除。",
+            )
+            session.add(changed_item)
+            created_total += 1
+            next_sort_order += 1
+        elif existing.adoption_status != 0:
+            existing.adoption_status = 0
+            existing.editor_notes = (existing.editor_notes or "候选池批量剔除。").strip()
+            changed_item = existing
+            updated_total += 1
+        if changed_item is not None:
+            session.flush()
+            record_dedupe_group_adoption_changed_activity(
+                session,
+                actor=current_user,
+                group=group,
+                daily_report_item=changed_item,
+                action_type="bulk_reject_from_candidates",
+            )
+
+    session.add(
+        EditorialAction(
+            user=current_user,
+            object_type="daily_report",
+            object_id=report.id,
+            action_type="bulk_reject_from_candidates",
+            after_json={
+                "workspace_code": payload.workspace_code,
+                "day_key": payload.day_key,
+                "dedupe_group_ids": list(seen_group_ids),
+                "created_total": created_total,
+                "updated_total": updated_total,
+                "skipped_total": len(skipped_items),
+            },
+        ),
+    )
+    session.commit()
+    return DailyReportBulkAdoptRead(
+        report=_daily_report_to_read(_load_daily_report(session, report.id)),
+        created_total=created_total,
+        updated_total=updated_total,
+        skipped_total=len(skipped_items),
+        skipped_items=skipped_items,
     )
 
 
@@ -226,6 +491,7 @@ def publish_weekly_report(
 ) -> WeeklyReportRead:
     report = _load_weekly_report(session, report_id)
     assert_workspace_member(session, current_user, report.workspace_code, min_role="member")
+    was_published = report.status == "published"
     report.status = "published"
     report.published_at = utc_now()
     write_audit(
@@ -236,6 +502,8 @@ def publish_weekly_report(
         report.id,
         {"week_key": report.week_key, "workspace_code": report.workspace_code},
     )
+    if not was_published and _workspace_feedback_policy(session, report.workspace_code).get("notify_on_publish"):
+        record_weekly_report_publish_activity(session, actor=current_user, report=report)
     session.commit()
     return _weekly_report_to_read(_load_weekly_report(session, report_id))
 
@@ -271,6 +539,14 @@ def update_weekly_report_item(
             after_json=_weekly_item_editor_snapshot(item),
         ),
     )
+    record_weekly_report_item_updated_activity(
+        session,
+        actor=current_user,
+        item=item,
+        before_json=before,
+        after_json=_weekly_item_editor_snapshot(item),
+    )
+    refresh_weekly_report_summary(_load_weekly_report(session, item.weekly_report.id))
     session.commit()
     return _weekly_report_item_to_read(_load_weekly_report_item(session, item.id))
 
@@ -324,7 +600,7 @@ def react_to_daily_report_item(
     session: Session = DB_SESSION,
 ) -> dict[str, str | bool]:
     item = _load_daily_report_item(session, item_id)
-    assert_workspace_member(session, current_user, item.daily_report.workspace_code, min_role="member")
+    _assert_feedback_allowed(session, current_user, item.daily_report.workspace_code, "react")
     reaction = session.scalar(
         select(Reaction).where(
             Reaction.user_id == current_user.id,
@@ -341,6 +617,8 @@ def react_to_daily_report_item(
         )
         session.add(reaction)
     reaction.active = payload.active
+    session.flush()
+    record_reaction_activity(session, actor=current_user, item=item, reaction=reaction)
     session.commit()
     return {"id": reaction.id, "active": reaction.active}
 
@@ -353,7 +631,7 @@ def rate_daily_report_item(
     session: Session = DB_SESSION,
 ) -> RatingRead:
     item = _load_daily_report_item(session, item_id)
-    assert_workspace_member(session, current_user, item.daily_report.workspace_code, min_role="member")
+    _assert_feedback_allowed(session, current_user, item.daily_report.workspace_code, "rate")
     rating = session.scalar(
         select(Rating).where(
             Rating.user_id == current_user.id,
@@ -361,6 +639,7 @@ def rate_daily_report_item(
             Rating.dimension == payload.dimension,
         ),
     )
+    created = rating is None
     if rating is None:
         rating = Rating(
             user=current_user,
@@ -374,6 +653,8 @@ def rate_daily_report_item(
     else:
         rating.score = payload.score
         rating.comment = payload.comment
+    session.flush()
+    record_rating_activity(session, actor=current_user, item=item, rating=rating, created=created)
     session.commit()
     return RatingRead(
         id=rating.id,
@@ -410,7 +691,7 @@ def create_daily_report_item_comment(
     session: Session = DB_SESSION,
 ) -> CommentRead:
     item = _load_daily_report_item(session, item_id)
-    assert_workspace_member(session, current_user, item.daily_report.workspace_code, min_role="member")
+    _assert_feedback_allowed(session, current_user, item.daily_report.workspace_code, "comment")
     parent = None
     if payload.parent_id:
         parent = session.get(Comment, payload.parent_id)
@@ -428,6 +709,8 @@ def create_daily_report_item_comment(
         body=payload.body,
     )
     session.add(comment)
+    session.flush()
+    record_comment_activity(session, actor=current_user, item=item, comment=comment, parent=parent)
     session.commit()
     return _comment_to_read(comment)
 
@@ -460,6 +743,185 @@ def _load_daily_report(session: Session, report_id: str) -> DailyReport:
     if report is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Daily report not found")
     return report
+
+
+def _load_or_create_daily_draft_for_bulk_adopt(
+    session: Session,
+    *,
+    workspace: Workspace,
+    day_key: str,
+) -> DailyReport:
+    report = session.scalar(
+        select(DailyReport)
+        .options(_daily_report_options())
+        .where(
+            DailyReport.workspace_code == workspace.code,
+            DailyReport.domain_code == workspace.default_domain_code,
+            DailyReport.day_key == day_key,
+        ),
+    )
+    if report is not None:
+        return report
+    report = DailyReport(
+        workspace_code=workspace.code,
+        domain_code=workspace.default_domain_code,
+        day_key=day_key,
+        title=f"{day_key} {workspace.name} 日报",
+        summary="由候选池批量采信生成的日报草稿。",
+        status="draft",
+    )
+    session.add(report)
+    session.flush()
+    return report
+
+
+def _create_rejected_generated_news_placeholder(
+    session: Session,
+    workspace: Workspace,
+    recommendation_item: RecommendationItem,
+) -> GeneratedNews:
+    news_item = recommendation_item.news_item
+    title = news_item.normalized_title or news_item.source_title
+    generated = GeneratedNews(
+        recommendation_item=recommendation_item,
+        news_item=news_item,
+        workspace_code=workspace.code,
+        domain_code=news_item.domain_code,
+        visibility_scope=news_item.visibility_scope,
+        sync_policy=news_item.sync_policy,
+        category="基础竞争力",
+        title=title,
+        summary=news_item.summary or "候选池剔除占位记录，不进入标准公司 SQL。",
+        key_points="",
+        content_json={
+            "background": "",
+            "effects": "",
+            "eventSummary": news_item.summary or title,
+            "technologyAndInnovation": "",
+            "valueAndImpact": "",
+        },
+        source_url=news_item.source_url,
+        generated_by="bulk_reject_placeholder_v1",
+        generation_status="rejected_candidate",
+    )
+    session.add(generated)
+    return generated
+
+
+def _next_daily_report_sort_order(report: DailyReport) -> int:
+    if not report.items:
+        return 1
+    return max(item.sort_order for item in report.items) + 1
+
+
+def _load_workspace_dedupe_group(
+    session: Session,
+    workspace_code: str,
+    group_id: str,
+) -> DedupeGroup | None:
+    return session.scalar(
+        select(DedupeGroup).where(
+            DedupeGroup.id == group_id,
+            DedupeGroup.workspace_code == workspace_code,
+            DedupeGroup.status == "active",
+        ),
+    )
+
+
+def _latest_recommendation_item_for_news(
+    session: Session,
+    *,
+    workspace_code: str,
+    news_item_id: str,
+) -> RecommendationItem | None:
+    return session.scalar(
+        select(RecommendationItem)
+        .join(RecommendationRun)
+        .options(selectinload(RecommendationItem.news_item))
+        .where(
+            RecommendationItem.workspace_code == workspace_code,
+            RecommendationItem.news_item_id == news_item_id,
+        )
+        .order_by(desc(RecommendationRun.created_at), RecommendationItem.rank)
+        .limit(1),
+    )
+
+
+def _latest_generated_news_for_recommendation(
+    session: Session,
+    recommendation_item_id: str,
+) -> GeneratedNews | None:
+    return session.scalar(
+        select(GeneratedNews)
+        .where(GeneratedNews.recommendation_item_id == recommendation_item_id)
+        .order_by(desc(GeneratedNews.created_at), GeneratedNews.id)
+        .limit(1),
+    )
+
+
+def _daily_report_item_for_generated_news(
+    session: Session,
+    report_id: str,
+    generated_news_id: str,
+) -> DailyReportItem | None:
+    return session.scalar(
+        select(DailyReportItem).where(
+            DailyReportItem.daily_report_id == report_id,
+            DailyReportItem.generated_news_id == generated_news_id,
+        ),
+    )
+
+
+def _assert_feedback_allowed(
+    session: Session,
+    current_user: User,
+    workspace_code: str,
+    action: str,
+) -> None:
+    workspace = session.scalar(
+        select(Workspace).where(
+            Workspace.code == workspace_code,
+            Workspace.enabled.is_(True),
+        ),
+    )
+    if workspace is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
+    policy = _feedback_policy_from_workspace(workspace)
+    policy_key = {
+        "react": "viewer_can_react",
+        "rate": "viewer_can_rate",
+        "comment": "viewer_can_comment",
+    }[action]
+    assert_workspace_member(
+        session,
+        current_user,
+        workspace_code,
+        min_role="viewer" if policy.get(policy_key) else "member",
+    )
+
+
+def _workspace_feedback_policy(session: Session, workspace_code: str) -> dict[str, bool]:
+    workspace = session.scalar(
+        select(Workspace).where(
+            Workspace.code == workspace_code,
+            Workspace.enabled.is_(True),
+        ),
+    )
+    if workspace is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
+    return _feedback_policy_from_workspace(workspace)
+
+
+def _feedback_policy_from_workspace(workspace: Workspace) -> dict[str, bool]:
+    return {
+        "viewer_can_react": True,
+        "viewer_can_rate": True,
+        "viewer_can_comment": True,
+        "viewer_can_edit": False,
+        "notify_on_comment": True,
+        "notify_on_publish": False,
+        **dict((workspace.config_json or {}).get("feedback_policy") or {}),
+    }
 
 
 def _load_weekly_report(session: Session, report_id: str) -> WeeklyReport:
@@ -575,6 +1037,7 @@ def _daily_report_item_to_read(item: DailyReportItem) -> DailyReportItemRead:
 
 def _weekly_report_item_to_read(item: WeeklyReportItem) -> WeeklyReportItemRead:
     daily_report_item = item.daily_report_item
+    scores = weekly_item_score(item.generated_news)
     return WeeklyReportItemRead(
         id=item.id,
         daily_report_item_id=item.daily_report_item_id,
@@ -588,6 +1051,10 @@ def _weekly_report_item_to_read(item: WeeklyReportItem) -> WeeklyReportItemRead:
         ),
         adoption_status=item.adoption_status,
         sort_order=item.sort_order,
+        weekly_score=scores.weekly_score,
+        final_score=scores.final_score,
+        heat_score=scores.heat_score,
+        feedback_score=scores.feedback_score,
         editor_title=item.editor_title,
         editor_summary=item.editor_summary,
         editor_content_json=item.editor_content_json,
