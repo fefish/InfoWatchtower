@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { KeyRound, Save } from "lucide-vue-next";
+import { Save } from "lucide-vue-next";
 import { computed, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 
@@ -57,6 +57,11 @@ async function submitPassword() {
     error.value = exc instanceof Error ? exc.message : "修改密码失败";
   }
 }
+
+async function signOut() {
+  await session.logout();
+  router.replace("/login");
+}
 </script>
 
 <template>
@@ -66,7 +71,7 @@ async function submitPassword() {
       <h2>账号</h2>
       <p>{{ session.user?.display_name }} · {{ session.user?.username }} · {{ providerLabel }}</p>
     </div>
-    <KeyRound :size="22" />
+    <button class="ghost-button" type="button" @click="signOut">退出登录</button>
   </section>
 
   <section class="data-table-wrap account-profile-card">

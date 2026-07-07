@@ -97,6 +97,20 @@ describe("AccountPage", () => {
     expect(wrapper.text()).toContain("新密码至少 8 位");
   });
 
+  it("提供显式退出登录：调用登出 API 并回到登录页", async () => {
+    authApi.logout.mockResolvedValue(undefined);
+    const wrapper = mountAccountPage();
+
+    const logoutButton = wrapper.findAll("button").find((button) => button.text().includes("退出登录"));
+    expect(logoutButton).toBeDefined();
+
+    await logoutButton!.trigger("click");
+    await flushPromises();
+
+    expect(authApi.logout).toHaveBeenCalled();
+    expect(routerReplace).toHaveBeenCalledWith("/login");
+  });
+
   it("hides local password fields for externally managed identities", () => {
     const wrapper = mountAccountPage(
       userRecord({
