@@ -15,6 +15,8 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import get_settings
 from app.llm import generate_news_with_minimax
+from app.llm.budget import GenerationRuntime
+from app.llm.provider import ResolvedGenerationConfig, resolve_generation_config
 from app.models.common import utc_now
 from app.models.content import (
     DedupeGroup,
@@ -26,10 +28,11 @@ from app.models.content import (
 )
 from app.models.export import ExportJobItem
 from app.models.feedback import Comment, EditorialAction, Rating, Reaction
-from app.models.reports import DailyReport, DailyReportItem, WeeklyReportItem
+from app.models.reports import DailyReport, DailyReportItem, ReportFormat, WeeklyReportItem
 from app.models.strategy import RequirementSourceLink
 from app.models.workspace import Workspace, WorkspaceSourceLink
 from app.news_keywords import fallback_key_points
+from app.reports.generation_template import backfill_template_extras, has_generated_fields
 from app.scoring.content_scorer import load_content_scorer
 from app.workspaces.policy import (
     WorkspaceContentPolicy,
@@ -596,16 +599,26 @@ def run_daily_recommendation(
     generation_timeout_seconds = _normalize_generation_timeout(
         request.generation_timeout_seconds,
     )
+    runtime = _generation_runtime(session, workspace)
     generated_news = [
         _create_generated_news(
             session,
             workspace,
             item,
             generation_timeout_seconds=generation_timeout_seconds,
+            runtime=runtime,
         )
         for item in recommendation_items
         if item.selected
     ]
+    # 模板驱动生成（report-renditions-design §10.4.1）：基稿产出后，对该工作台
+    # enabled=true 且含增量字段的格式逐一追加生成；纯投影格式零额外模型调用。
+    template_extras_generated = _generate_template_extras_for_run(
+        session,
+        workspace.code,
+        generated_news,
+        runtime,
+    )
     daily_report = None
     if request.create_daily_draft:
         daily_report = _create_or_replace_daily_draft(
@@ -626,6 +639,10 @@ def run_daily_recommendation(
         ),
         "daily_report_id": daily_report.id if daily_report else None,
         "admission": _admission_summary(scored),
+        # 预算耗尽计数（generation-provider-design §3.2）：当日剩余条目按
+        # fallback_behavior 处理，这里记录本次 run 内被预算拦下的调用次数。
+        "generation_budget_exhausted": runtime.budget_exhausted_total,
+        "template_extras_generated": template_extras_generated,
     }
     session.flush()
     return RecommendationRunResult(
@@ -677,6 +694,8 @@ def regenerate_daily_report_generated_news(
     fallback_total = 0
     skipped_total = 0
     timeout_seconds = _normalize_generation_timeout(request.generation_timeout_seconds)
+    runtime = _generation_runtime(session, workspace)
+    refreshed: list[GeneratedNews] = []
     for item in items:
         generated = item.generated_news
         if generated.generation_status == "ready" and not request.replace_ready:
@@ -692,12 +711,16 @@ def regenerate_daily_report_generated_news(
             workspace,
             recommendation_item,
             generation_timeout_seconds=timeout_seconds,
+            runtime=runtime,
         )
+        refreshed.append(generated)
         if generated.generation_status == "ready":
             ready_total += 1
         else:
             fallback_total += 1
 
+    # 基稿重跑后同步补齐模板增量字段（缺失/过期惰性补齐，§10.4.1）
+    _generate_template_extras_for_run(session, workspace.code, refreshed, runtime)
     session.flush()
     return DailyReportGenerationRerunResult(
         report=report,
@@ -1565,18 +1588,63 @@ def _recommendation_reason(
     return "; ".join(reasons) or "baseline_score"
 
 
+def _generation_runtime(session: Session, workspace: Workspace) -> GenerationRuntime:
+    """本次生成链路的 resolved 配置 + 预算闸门（generation_policy 覆盖实例 env）。"""
+    return GenerationRuntime(
+        session=session,
+        workspace_code=workspace.code,
+        config=resolve_generation_config(workspace=workspace),
+    )
+
+
+def _template_formats_with_generated_fields(
+    session: Session,
+    workspace_code: str,
+) -> list[ReportFormat]:
+    formats = session.scalars(
+        select(ReportFormat)
+        .where(
+            ReportFormat.workspace_code == workspace_code,
+            ReportFormat.enabled.is_(True),
+            ReportFormat.generation_template.isnot(None),
+        )
+        .order_by(ReportFormat.sort_order, ReportFormat.format_code),
+    ).all()
+    return [fmt for fmt in formats if has_generated_fields(fmt.generation_template)]
+
+
+def _generate_template_extras_for_run(
+    session: Session,
+    workspace_code: str,
+    generated_news: list[GeneratedNews],
+    runtime: GenerationRuntime,
+) -> int:
+    """generation step 的模板增量字段追加生成；provider 不可用/预算尽时静默降级
+    （extras 缺失由 rendition 投影侧标记 template_fallback，`regenerate` 可补齐）。"""
+    if not generated_news or not runtime.provider_usable:
+        return 0
+    generated_total = 0
+    for fmt in _template_formats_with_generated_fields(session, workspace_code):
+        generated_total += backfill_template_extras(fmt, generated_news, runtime)
+    if generated_total:
+        session.flush()
+    return generated_total
+
+
 def _create_generated_news(
     session: Session,
     workspace: Workspace,
     recommendation_item: RecommendationItem,
     *,
     generation_timeout_seconds: float,
+    runtime: GenerationRuntime | None = None,
 ) -> GeneratedNews:
     news_item = recommendation_item.news_item
     generated_fields = _generated_news_fields(
         workspace,
         recommendation_item,
         generation_timeout_seconds=generation_timeout_seconds,
+        runtime=runtime,
     )
     generated = GeneratedNews(
         recommendation_item=recommendation_item,
@@ -1604,11 +1672,13 @@ def _refresh_generated_news(
     recommendation_item: RecommendationItem,
     *,
     generation_timeout_seconds: float,
+    runtime: GenerationRuntime | None = None,
 ) -> None:
     generated_fields = _generated_news_fields(
         workspace,
         recommendation_item,
         generation_timeout_seconds=generation_timeout_seconds,
+        runtime=runtime,
     )
     generated.category = str(generated_fields["category"])
     generated.title = str(generated_fields["title"])
@@ -1626,18 +1696,51 @@ def _generated_news_fields(
     recommendation_item: RecommendationItem,
     *,
     generation_timeout_seconds: float,
+    runtime: GenerationRuntime | None = None,
 ) -> dict[str, object]:
     news_item = recommendation_item.news_item
     policy = policy_for_workspace(workspace)
     category = _category_for_news(workspace, news_item, policy)
-    llm_draft = generate_news_with_minimax(
-        news_item,
-        fallback_category=category,
-        allowed_categories=list(policy.allowed_primary_categories),
-        recommendation_reason=recommendation_item.recommendation_reason,
-        timeout_seconds=generation_timeout_seconds,
+    config: ResolvedGenerationConfig = (
+        runtime.config if runtime is not None else resolve_generation_config(workspace=workspace)
     )
-    if llm_draft is None:
+    effective_timeout = _effective_generation_timeout(workspace, generation_timeout_seconds)
+    llm_draft = None
+    if runtime is not None:
+        # 预算闸门：provider 不可用不外呼不计数；预算耗尽记 budget_exhausted，
+        # 本条按 fallback_behavior 处理（generation-provider-design §3.2）。
+        if runtime.try_acquire_call():
+            llm_draft = generate_news_with_minimax(
+                news_item,
+                fallback_category=category,
+                allowed_categories=list(policy.allowed_primary_categories),
+                recommendation_reason=recommendation_item.recommendation_reason,
+                timeout_seconds=effective_timeout,
+                config=config,
+            )
+    else:
+        llm_draft = generate_news_with_minimax(
+            news_item,
+            fallback_category=category,
+            allowed_categories=list(policy.allowed_primary_categories),
+            recommendation_reason=recommendation_item.recommendation_reason,
+            timeout_seconds=effective_timeout,
+            config=config,
+        )
+    if llm_draft is None and config.fallback_behavior == "fail":
+        # fallback_behavior=fail：不产 rule_v1 降级稿，generation step 记 failed，
+        # 条目留待 regenerate-generated-news 补跑（不进公司 SQL：非 ready 被 gating 挡）。
+        generated_fields: dict[str, object] = {
+            "category": category,
+            "title": _generated_title(news_item),
+            "summary": "",
+            "key_points": "",
+            "content_json": {},
+            "insight_json": {},
+            "generated_by": "generation_failed",
+            "generation_status": "failed",
+        }
+    elif llm_draft is None:
         content_json = {
             "background": f"来源：{news_item.source_name}；类型：{news_item.source_type}",
             "effects": policy.effects_fallback_text,
@@ -1672,10 +1775,21 @@ def _generated_news_fields(
             "news_item_id": news_item.id,
             "raw_item_id": news_item.raw_item_id,
             "data_source_id": news_item.data_source_id,
-            "generation_timeout_seconds": generation_timeout_seconds,
+            "generation_timeout_seconds": effective_timeout,
         },
     }
     return generated_fields
+
+
+def _effective_generation_timeout(workspace: Workspace, generation_timeout_seconds: float) -> float:
+    """单条生成超时：workspace generation_policy.timeout_seconds 覆盖 run 参数；
+    均未配置时与现状一致（run 参数已按 5..180 归一）。"""
+    from app.llm.provider import workspace_generation_policy
+
+    policy_timeout = workspace_generation_policy(workspace).get("timeout_seconds")
+    if policy_timeout is not None:
+        return min(max(float(policy_timeout), 5.0), 300.0)
+    return _normalize_generation_timeout(generation_timeout_seconds)
 
 
 def _normalize_generation_timeout(value: float) -> float:

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+# 与现状一致的宽松邮箱格式校验（users.email 无唯一约束，口径同 PATCH /api/users/{id}）
+EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 class RoleRead(BaseModel):
@@ -103,6 +107,48 @@ class UserPatchRequest(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=128)
     department: str | None = Field(default=None, max_length=128)
     email: str | None = Field(default=None, max_length=255)
+
+
+class ProfileUpdateRequest(BaseModel):
+    """PATCH /api/auth/me 自助资料编辑（identity-access-design §4.4）。
+
+    - 只有 display_name/department/email 三个字段可改；body 出现未知字段按 422 拒绝；
+    - display_name trim 后必填 1-128；department/email 可空可清空；
+    - username、角色、is_active、workspace membership 一律不可经此端点变更。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: str | None = Field(default=None, max_length=128)
+    department: str | None = Field(default=None, max_length=128)
+    email: str | None = Field(default=None, max_length=255)
+
+    @field_validator("display_name")
+    @classmethod
+    def _display_name_not_blank(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            raise ValueError("display_name must not be blank")
+        return value
+
+    @field_validator("department")
+    @classmethod
+    def _trim_department(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip()
+
+    @field_validator("email")
+    @classmethod
+    def _validate_email(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if value and not EMAIL_PATTERN.match(value):
+            raise ValueError("email format is invalid")
+        return value
 
 
 class PermissionChangeDiffRead(BaseModel):

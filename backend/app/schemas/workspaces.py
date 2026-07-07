@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 from app.schemas.auth import UserRead
@@ -141,6 +143,39 @@ class WorkspaceSubscriptionRead(BaseModel):
 
 class WorkspaceVisibilityUpdate(BaseModel):
     visibility: str = Field(pattern=r"^(private|internal_public)$")
+
+
+class WorkspaceJoinCodeRead(BaseModel):
+    """当前 active 加入码（GET/POST /api/workspaces/{code}/join-code）。"""
+
+    code: str
+    default_role: str
+    expires_at: datetime | None = None
+    max_uses: int | None = None
+    use_count: int = 0
+    created_at: datetime
+    created_by: str | None = None
+
+
+class WorkspaceJoinCodeCreate(BaseModel):
+    """生成/轮换加入码。default_role 只允许 viewer|member（admin/owner 走
+    成员管理单人流程 + 危险确认），否则 422。"""
+
+    default_role: str = Field(default="viewer", pattern=r"^(viewer|member)$")
+    expires_in_days: int | None = Field(default=None, ge=1, le=365)
+    max_uses: int | None = Field(default=None, ge=1, le=100000)
+
+
+class WorkspaceJoinByCodeRequest(BaseModel):
+    code: str = Field(min_length=1, max_length=64)
+
+
+class WorkspaceJoinByCodeRead(BaseModel):
+    workspace_code: str
+    workspace_name: str
+    workspace_role: str
+    # 本次是否真实新增或重新启用 membership（已是 enabled 成员时 False，幂等不降级）
+    joined: bool
 
 
 class WorkspaceDepartmentMembershipTarget(BaseModel):

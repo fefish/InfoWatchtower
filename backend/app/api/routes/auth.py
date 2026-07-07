@@ -66,6 +66,7 @@ from app.schemas.auth import (
     PermissionRollbackRead,
     PermissionRollbackRequest,
     PermissionRollbackResultItem,
+    ProfileUpdateRequest,
     RoleRead,
     UpdateUserRolesRequest,
     UserPatchRequest,
@@ -807,6 +808,65 @@ def me(
     settings: Settings = Depends(get_settings),
 ) -> AuthResponse:
     _set_csrf_cookie(response, settings)
+    return AuthResponse(user=user_to_read(current_user))
+
+
+@router.patch("/me", response_model=AuthResponse)
+def update_me(
+    payload: ProfileUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> AuthResponse:
+    """本地账号资料自助编辑（identity-access-design §4.4，契约
+    auth_modes.json `profile_self_service`）。
+
+    - 独立 self 路径，不复用 super_admin 的 PATCH /api/users/{id}（权限门与
+      审计语义不同，混用会把管理员字段暴露进自助面）；
+    - 只允许 external_provider=local；OIDC/intranet_header 等外部身份 400
+      （资料以 provider claims / 网关 header 登录时同步为准，与改密同一边界）；
+    - 游客在 get_current_user 的集中写门禁被 403 拦截（提示注册）；
+    - must_change_password 用户维持既有白名单（me/logout/password change 的
+      路径白名单只为放行 GET /me），改密完成前不可编辑资料；
+    - 审计 auth.profile.update 带三字段 before/after 快照。
+    """
+    if current_user.status == "must_change_password":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="must_change_password")
+    if current_user.external_provider != "local":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Profile is managed externally",
+        )
+    if payload.display_name is None and payload.department is None and payload.email is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No profile fields provided")
+
+    before = {
+        "display_name": current_user.display_name,
+        "department": current_user.department,
+        "email": current_user.email,
+    }
+    if payload.display_name is not None:
+        current_user.display_name = payload.display_name
+    if payload.department is not None:
+        current_user.department = payload.department or None
+    if payload.email is not None:
+        current_user.email = payload.email or None
+    after = {
+        "display_name": current_user.display_name,
+        "department": current_user.department,
+        "email": current_user.email,
+    }
+    write_audit(
+        session,
+        current_user,
+        "auth.profile.update",
+        "user",
+        current_user.id,
+        {"before": before, "after": after},
+    )
+    session.commit()
+    current_user = find_user_with_roles(session, current_user.id)
+    if current_user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     return AuthResponse(user=user_to_read(current_user))
 
 

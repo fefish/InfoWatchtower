@@ -124,6 +124,10 @@ class ReportFormat(IdMixin, ScopeMixin, SyncMixin, TimestampMixin, Base):
     export_targets: Mapped[JsonDict] = mapped_column(JsonColumn, default=dict)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    # 模板驱动生成（report-renditions-design §10.1）：解析后的模板规范形
+    # （运行时只读规范形；内置格式恒为 null）与用户上传原文（JSON/XML，仅回显编辑）。
+    generation_template: Mapped[JsonDict | None] = mapped_column(JsonColumn, nullable=True)
+    generation_template_source: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class ReportRendition(IdMixin, ScopeMixin, SyncMixin, TimestampMixin, Base):
