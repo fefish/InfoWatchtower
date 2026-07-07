@@ -340,3 +340,42 @@ def test_candidate_pool_filters_sort_and_bulk_reject_candidates(monkeypatch, tmp
         assert generated is not None
         assert generated.generated_by == "bulk_reject_placeholder_v1"
         assert generated.generation_status == "rejected_candidate"
+
+
+def test_candidate_pool_default_sort_is_score_desc_with_stable_ties():
+    """候选池默认排序契约（recommendation_ranking.json ordering_consistency
+    candidate_pool）：GET /api/dedupe-groups 不带 sort 时默认 score_desc
+    （final_score 降序，并列按 news_item_id 升序，未推荐候选排在最后）。"""
+    import inspect
+
+    from app.api.routes.news import _sort_dedupe_group_reads, list_dedupe_groups
+    from app.schemas.news import DedupeGroupRead, DedupeGroupRecommendationRead
+
+    sort_query = inspect.signature(list_dedupe_groups).parameters["sort"].default
+    assert sort_query.default == "score_desc"
+
+    def group(group_id: str, news_item_id: str, final_score: float | None) -> DedupeGroupRead:
+        recommendation = (
+            DedupeGroupRecommendationRead.model_construct(final_score=final_score)
+            if final_score is not None
+            else None
+        )
+        return DedupeGroupRead.model_construct(
+            id=group_id,
+            winner_news_item_id=news_item_id,
+            recommendation=recommendation,
+        )
+
+    shuffled = [
+        group("group-tie-b", "news-b", 80.0),
+        group("group-unscored", "news-z", None),
+        group("group-top", "news-t", 91.5),
+        group("group-tie-a", "news-a", 80.0),
+    ]
+    ordered = _sort_dedupe_group_reads(shuffled, "score_desc")
+    assert [record.id for record in ordered] == [
+        "group-top",
+        "group-tie-a",
+        "group-tie-b",
+        "group-unscored",
+    ]

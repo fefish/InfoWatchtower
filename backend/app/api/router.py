@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.api.routes import (
     auth,
+    credentials,
     domain_packs,
     exports,
     generation,
@@ -32,6 +33,7 @@ api_router.include_router(sources.router)
 api_router.include_router(workspaces.router)
 api_router.include_router(workspace_access.router)
 api_router.include_router(generation.router)
+api_router.include_router(credentials.router)
 api_router.include_router(groups.router)
 api_router.include_router(domain_packs.router)
 api_router.include_router(ingestion.router)
@@ -40,6 +42,7 @@ api_router.include_router(notifications.router)
 api_router.include_router(operations.router)
 api_router.include_router(pipeline.router)
 api_router.include_router(recommendations.router)
+api_router.include_router(recommendations.policy_router)
 api_router.include_router(reports.router)
 api_router.include_router(renditions.router)
 api_router.include_router(exports.router)
