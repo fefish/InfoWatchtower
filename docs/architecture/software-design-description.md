@@ -4,16 +4,21 @@
 
 本文是 AI情报官的 SDD（Software Design Description）总装版，用于说明系统目标、设计约束、模块划分、数据流、接口边界、DFX 要求和后续扩展方式。详细字段以 `config/contracts/*.json` 为准，专题细节以对应设计文档为准。
 
-相关材料：
+完整文档权威关系见 [文档地图与治理规则](../README.md)。常用入口：
 
-- [系统总纲](00-system-design.md)
-- [API 与前端设计](api-and-ui-implementation.md)
-- [采集、适配器与去重设计](ingestion-adapter-dedup-spec.md)
-- [数据格式与 SQL 映射](data-format-mapping.md)
-- [数据追溯与存储](data-lineage-and-storage.md)
-- [扩展点设计](extension-points.md)
-- [统一登录设计](auth-unified-login.md)
-- [部署运维设计](deployment-ops.md)
+- [系统总纲](../00-system-design.md)
+- [架构设计分层](design-governance.md)
+- [前端产品与页面设计](../product/frontend-product-design.md)
+- [前端逐页规格与完成标记](../product/page-specs/frontend-page-specs.md)
+- [后端功能模块设计](../backend/backend-module-design.md)
+- [契约与测试治理](../backend/contract-test-governance-design.md)
+- [API 与 UI 实现对照](../implementation/api-and-ui-implementation.md)
+- [采集、适配器与去重设计](../backend/ingestion-adapter-dedup-spec.md)
+- [数据格式与 SQL 映射](../backend/data-format-mapping.md)
+- [数据追溯与存储](../backend/data-lineage-and-storage.md)
+- [扩展点设计](../backend/extension-points.md)
+- [统一登录设计](../deployment/auth-unified-login.md)
+- [部署运维设计](../deployment/deployment-ops.md)
 
 ## 2. 系统范围
 
@@ -38,7 +43,7 @@ AI情报官用于持续接入公开信源和内部补充资料，把原始信息
 
 ## 3. 设计原则
 
-1. 原始数据优先保留。抓取结果先进入 `raw_items.raw_payload_json`，后续加工不覆盖原始记录。
+1. 原始数据优先保留。抓取结果先进入 `raw_items.raw_payload_json`；同源同 entry_key 重抓按最新抓取幂等刷新（upsert 语义），标准化/去重/推荐/编辑等下游加工永不回写原始记录。
 2. 字段合同先于实现。公司 SQL、成品新闻五段结构、分类和同步边界由 `config/contracts` 固化。
 3. 去重在推荐之前。`raw_items` 标准化为 `news_items` 后再进入 `dedupe_groups`。
 4. 采信属于报告层。`adoption_status` 只属于日报/周报条目，不属于原始新闻。
@@ -160,7 +165,7 @@ scripts/   SQL 校验、历史导入、数据回填等工具
 - `backend/app/exports/company_sql.py`
 - `GET /api/exports/{export_job_id}/trace`
 - `config/contracts/news_sql_mapping.json`
-- `docs/data-format-mapping.md`
+- `docs/backend/data-format-mapping.md`
 
 导出追溯：
 
@@ -169,25 +174,58 @@ scripts/   SQL 校验、历史导入、数据回填等工具
 - trace API 通过 `news_items -> raw_items -> data_sources` 补齐原始来源链路。
 - 追溯字段只留在 InfoWatchtower 自己的关系表和 API 中，不写入公司 SQL 的 `content_json`。
 
-### 5.6 登录、权限和同步
+### 5.6 部署形态与能力开关
 
-系统支持公网账号密码登录，并预留 Google OIDC 和公司 IDaaS code flow。内网同步遵循单向同步优先原则：公网公开信号向内网同步，内网用户反馈默认不回流公网。
+同一套代码支撑四种部署形态，由单一环境变量 `DEPLOY_MODE` 一等抽象定义
+（契约：`config/contracts/deployment_modes.json`；实现级规格：
+`docs/deployment/deployment-topology.md`）：
 
-第一版同步包能力已经提供可审计骨架：
+```text
+standalone   本地一键 Docker，自采自用（CSRF 默认关）
+cloud        云主机官方站：管理员采集，非管理员 viewer 只读
+intranet     内网门户同站反代 iframe 嵌入：禁采集、pull-only 消费者、header 登录
+extranet     公网发布者：OIDC SSO，开放 GET /api/sync/feed 向内网下发
+```
 
-- `POST /api/sync/packages/export` 从 `sync_outbox` 生成同步包 manifest 和 records。
-- `GET /api/sync/packages/{package_id}/download` 下载 zip，包含 `manifest.json` 和 `records.jsonl`。
-- `POST /api/sync/packages/import` 写入 `sync_inbox` 做幂等验收和审计。
-- `/sync` 页面可导出和下载同步包。
-
-当前导入侧只做 inbox 幂等和审计，不直接改业务表；后续再按 `object_type` 增加 apply handler 和冲突处理。
+`DEPLOY_MODE` 派生能力开关（`ingestion/sync_publisher/sync_consumer/embedding/search`），
+三层同时 gate：API 按开关 403（`require_capability`）、scheduler 按开关投任务、前端
+按免登录的 `GET /api/meta/runtime` 隐藏入口。非法组合（AUTH_MODE 不在形态白名单、
+intranet 覆盖打开采集、extranet 缺 `SYNC_SERVICE_TOKENS`、缺 `AUTH_SESSION_SECRET`
+等）由 `backend/app/core/deploy_checks.py` 在 API/scheduler/worker 三个进程入口
+统一 fail-fast。
 
 关键文件：
 
-- `backend/app/auth/service.py`
-- `docs/auth-unified-login.md`
-- `docs/auth-security-roadmap.md`
-- `docs/multi-environment-sync.md`
+- `backend/app/core/config.py`（MODE_CAPABILITIES/MODE_CSRF_DEFAULTS/MODE_ALLOWED_AUTH_MODES）
+- `backend/app/core/deploy_checks.py`、`backend/app/core/security.py`
+- `backend/tests/test_deployment_modes.py`
+- `docs/backend/backend-capability-test-matrix.md`（形态 × 能力 × 必跑测试矩阵）
+
+### 5.7 登录、权限和同步
+
+系统支持公网账号密码登录、通用 OIDC authorization code flow + PKCE（含 id_token
+验签/强校验）和公司内网可信 header 登录（可选 `AUTH_TRUSTED_PROXY_CIDRS` 信任边界
+兜底）。内网同步遵循单向硬不变式：外网公开信号向内网同步，内网用户反馈永不回流公网。
+
+机器同步主路径是 extranet feed 下发 / intranet 定时拉取（已实现，
+`backend/app/sync/`）：
+
+- `GET /api/sync/feed(/manifest)`：业务表水位直查、keyset 游标、无副作用可重放，
+  service token 鉴权（支持命名消费者），访问写审计。
+- `POST /api/sync/pull-runs` + scheduler 定时任务：intranet 按序拉取
+  `data_sources → raw_items → news_items → generated_news → daily_reports →
+  weekly_reports` 六类对象，经 `app/sync/apply.py` 的 apply handler 幂等落库，
+  revision/content_hash 冲突写 `sync_conflicts` 并有查询/resolve 闭环，
+  `sync_cursors` 记录水位，`GET /api/sync/health` 汇总健康告警。
+- 手工同步包（export/download/import）保留为网络隔离场景的人工 fallback 通道。
+
+关键文件：
+
+- `backend/app/auth/service.py`、`backend/app/auth/oidc.py`
+- `backend/app/sync/`（feed.py/pull.py/apply.py/retry.py）
+- `docs/deployment/auth-unified-login.md`
+- `docs/deployment/auth-security-roadmap.md`
+- `docs/deployment/multi-environment-sync.md`
 
 ## 6. 关键时序
 
@@ -266,29 +304,27 @@ sequenceDiagram
 - 周报草稿和条目编辑。
 - 公司 SQL 导出。
 - SQL 导出 trace API。
-- 同步包导出、下载和导入幂等骨架。
+- 部署形态与能力开关（四形态启动自检、能力门、runtime meta）。
+- sync feed/pull、apply handler、冲突处置和 failed inbox 重试。
 - Tech Insight Loop 源治理和历史归档导入。
 
-当前本地验证结果：
+测试计数与覆盖率以 CI 实跑结果为准（`.github/workflows/ci.yml` 的
+backend-coverage-report artifact），本文不再硬编码通过数量；四种部署形态
+对应的必跑测试文件矩阵见 `docs/backend/backend-capability-test-matrix.md`。
 
-- 后端测试：`83 passed`。
-- 后端 `backend/app` 整体源码覆盖率：`83%`。
-- 白盒提交口径：新增代码测试覆盖率 `80%`。
+CI 门禁：
 
-CI 后续要求：
-
-- 后端测试必须通过。
-- 前端构建必须通过。
-- 覆盖率门禁不低于 `80%`。
+- 后端测试必须通过（含覆盖率报告产物）。
+- 前端 Vitest 必须通过，随后前端构建必须通过。
 - CI 生成 `coverage.xml` 和 `htmlcov`，并上传 `backend-coverage-report` artifact。
 - CI 运行 `scripts/check_prod_deploy.py --env-file deploy/env.production.example` 检查生产部署配置。
+- 本地等价入口是 `make test`（docs/契约治理校验 + 后端 pytest + 前端 vitest + 前端 build）。
 
 ## 10. 后续演进项
 
 | 项目 | 说明 |
 | --- | --- |
-| 深度历史补采 | 需要超出 RSS 当前窗口的归档页、sitemap、论文 provider 和手工 CSV |
-| 周报正文生成 | 当前只管理采信项，自动长文生成仍是后续任务 |
-| 同步包业务 apply handler | 当前导入侧先写 `sync_inbox` 做幂等和审计，后续补按对象类型 upsert 和冲突处理 |
-| 生产备份恢复演练 | 当前有生产 compose、env 模板和部署检查脚本，仍需在真实服务器跑恢复演练 |
-| 领域包样例 | 需要补硬件或半导体 domain pack 样例证明跨板块复用 |
+| 深度历史补采 | arXiv/OpenAlex/Semantic Scholar paper_api v1 已补；仍需要超出 RSS 当前窗口的归档页、sitemap、OpenReview 等更多论文 provider |
+| 周报正文生成 | 当前只管理采信项和规则摘要投影，自动长文生成仍是后续任务 |
+| 实机验收证据 | 真实 OIDC provider、双实例网络同步演练、prod TLS 证书签发、门户真实 iframe 联调、离线升级演练、生产备份恢复演练（见 `SESSION-HANDOFF.md` E 系清单） |
+| wx 公众号采集 | wx 桥接 sidecar + wechat adapter（C-1，外部前置是确认 wx 二进制事实） |

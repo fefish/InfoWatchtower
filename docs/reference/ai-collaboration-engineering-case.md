@@ -12,9 +12,9 @@ AI情报官用于支撑规划部技术情报工作。重构前已有旧系统、
 
 第一层是总设计。`docs/00-system-design.md` 定义系统定位、主数据流、边界原则和阶段范围，明确 AI情报官不是单纯新闻站，也不能写死成 RSS + AI 日报。
 
-第二层是 SDD。`docs/software-design-description.md` 把系统范围、架构、模块、时序、DFX、设计模式和测试设计整理成总装版，作为白盒评价和后续接手开发的主设计文档。
+第二层是 SDD。`docs/architecture/software-design-description.md` 把系统范围、架构、模块、时序、DFX、设计模式和测试设计整理成总装版，作为白盒评价和后续接手开发的主设计文档。
 
-第三层是开发提纲。`docs/01-implementation-plan.md` 把设计拆成阶段，说明每一步交付什么、如何验收、什么时候可以进入下一步。
+第三层是开发提纲。`docs/implementation/01-implementation-plan.md` 把设计拆成阶段，说明每一步交付什么、如何验收、什么时候可以进入下一步。
 
 第四层是机器契约。`config/contracts/*.json` 固定字段、SQL 映射、工作台、同步策略和扩展点，避免只靠自然语言理解导致实现漂移。
 
@@ -117,7 +117,7 @@ data_sources
 后续重点不是推倒重来，而是在现有边界内补完整度：
 
 - 同步包导入侧补业务对象 apply handler 和冲突报告。
-- 历史补采继续扩展到归档页分页、sitemap 深挖、论文 provider 和 CSV 导入。
+- 历史补采继续扩展到归档页分页、sitemap 深挖、OpenReview 等更多论文 provider 和 CSV 导入；arXiv/OpenAlex/Semantic Scholar paper_api v1 已进入主链路。
 - 周报在采信项管理基础上补自动正文生成。
 - 生产环境补一次真实备份恢复演练记录。
 - 增加硬件或半导体 domain pack 样例，证明系统可以扩展到 AI 以外的规划板块。

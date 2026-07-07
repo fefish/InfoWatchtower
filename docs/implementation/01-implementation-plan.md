@@ -1,26 +1,21 @@
 # 第一版实现计划
 
-本文是 InfoWatchtower 第一版的施工计划。它不重新定义架构；架构以 `docs/00-system-design.md`、`docs/implementation-handoff.md` 和 `config/contracts/*.json` 为准。
+本文是 InfoWatchtower 第一版的施工计划。它不重新定义架构；架构以 `docs/00-system-design.md`、`docs/implementation/implementation-handoff.md` 和 `config/contracts/*.json` 为准。
 
-如果说 `docs/implementation-handoff.md` 回答“要实现什么”，本文回答“按什么顺序实现、每一步交付什么、怎么验收、什么时候能进入下一步”。
+如果说 `docs/implementation/implementation-handoff.md` 回答“要实现什么”，本文回答“按什么顺序实现、每一步交付什么、怎么验收、什么时候能进入下一步”。
 
 ## 1. 文档结构复核结论
 
-当前文档体系已经可以开始开发：
+当前文档体系已经按“总纲、前端页面、后端模块、部署同步、契约测试、能力地图”分层：
 
 - `docs/00-system-design.md` 是唯一总纲，覆盖愿景、边界、主数据流、登录、部署、同步和 SQL 导出。
-- `docs/implementation-handoff.md` 是任务书，覆盖后端实施顺序、前端页面、最低测试和第一版完成定义。
+- `docs/README.md` 是文档地图和修改同步规则。
+- `docs/product/frontend-product-design.md` 是前端页面、顶部栏和用户旅程事实源。
+- `docs/backend/backend-module-design.md` 是后端领域模块总图；每个一级模块必须有专题事实源。
+- `docs/backend/contract-test-governance-design.md` 是 contract、schema、前后端测试、假控件拦截和 CI 门禁事实源。
 - `config/contracts/*.json` 是机器契约，覆盖字段、adapter、SQL、登录、扩展点和同步。
-- 模块文档负责展开细节，不应成为另一套架构。
 
-需要补强的地方：
-
-- 开发阶段边界要更清楚。
-- 每阶段交付物要落到目录和命令。
-- 每阶段验收要能被工程师或 AI 直接执行。
-- 前端、后端、部署不要并行散开，先跑通端到端主链路。
-
-本文补齐这些执行细节。
+本文只回答“按什么顺序施工、每一步交付什么、怎么验收”，不再补充新的目标架构。
 
 ## 2. 开发总原则
 
@@ -62,7 +57,7 @@
 
 - wiseflow adapter 骨架。
 - page monitor adapter 骨架。
-- paper_rss/paper_api/paper_page 骨架。
+- paper_rss/paper_page 骨架；paper_api 已有 arXiv v1、OpenAlex Works v1 和 Semantic Scholar bulk search v1，后续扩展更多论文 provider。
 - weekly report 草稿骨架。
 - sync outbox/inbox 同步包骨架。
 - domain pack 扩展目录和注册点。
@@ -189,6 +184,7 @@ AuthAdapter
 - `local`
 - `public_password`
 - `intranet_header`
+- `oidc`
 
 API：
 
@@ -199,6 +195,8 @@ GET  /api/auth/me
 GET  /api/users
 GET  /api/roles
 PATCH /api/users/{id}/roles
+GET  /api/identity/permission-changes
+POST /api/identity/permission-rollbacks
 ```
 
 验收：
@@ -207,7 +205,7 @@ PATCH /api/users/{id}/roles
 - 内网模式下可信 header 自动 provision 用户。
 - 业务代码只使用本地 `user_id`、角色和权限。
 - 角色至少有 `super_admin`、`editor_admin`、`analyst`、`viewer`。
-- 登录、登出、授权变更写 `audit_logs`。
+- 登录、登出、授权变更写 `audit_logs`；权限变更可解释 diff，并可受保护地回滚上一版。
 
 已验证：
 
@@ -220,13 +218,15 @@ GET  /api/auth/me
 GET  /api/users
 GET  /api/roles
 PATCH /api/users/{id}/roles
+GET  /api/identity/permission-changes
+POST /api/identity/permission-rollbacks
 ```
 
 后续加固计划：
 
-- 公网部署前补登录限流、CSRF、服务端 session、HTTPS Secure Cookie 和默认密码禁用。
-- 新增 `public_oidc`，优先实现 Google OIDC。
-- 新增 `intranet_oidc`，通过公司 IDaaS code flow 换取工号、姓名、部门和邮箱。
+- 公网部署前持续验证 CSRF、HTTPS Secure Cookie 和默认密码禁用。
+- 保留真实 OIDC provider 登录、建号、membership 和登出验收证据。
+- 后续如需 `intranet_oidc` 或 SAML，仍通过 `ExternalIdentity` 接入工号、姓名、部门和邮箱。
 - 保持所有外部身份只映射到 `ExternalIdentity`，业务层继续只认本地 `user_id` 和 `roles`。
 
 ## 7. 阶段 3：数据源导入与 adapter 框架
@@ -235,7 +235,7 @@ PATCH /api/users/{id}/roles
 
 前置调整：工作台模型按共享主链路收束。`workspaces/workspace_sections/workspace_memberships` 管工作范围、页面和权限；`workspace_source_links` 管工作台启用哪些共享数据源；`domain_code` 继续只表达情报主题板块。
 
-当前实现状态：导入、工作台统一标签/新闻结构策略、adapter 框架、RSS/paper RSS/page_manual/page_monitor 抓取到 raw 入库、工作台级 ingestion run API 和 Redis/RQ worker + scheduler 调度入口已完成。`backend/app/adapters/` 已有统一 `SourceAdapter`、RSS adapter、页面源 adapter 和 wiseflow/paper/manual 等骨架；`/api/sources/import-legacy-seeds` 可以导入旧 113 个种子源和 `information_source_registry_20260511.csv` 补充台账，361 条导入记录按 URL 去重后形成 294 个共享源，规划部工作台 v1 默认全部启用；`/api/sources/import-tech-insight-loop` 可以导入 `sources_full_zh.csv` 的 386 行 Tech Insight Loop 源治理记录，355 行有入口、31 行待补入口，去重后形成 363 个共享源，并把源等级、渠道类型、专家路由、板块相关度和评分拆解保存为源侧 metadata；`/api/sources?workspace_code=...` 可以展示共享源池及当前工作台配置；`/api/workspaces/{workspace_code}/label-policy` 可以增删改工作台统一新闻一级/二级标签策略，并返回/保存 `news_format_code`、`export_category_mode` 与 `required_content_fields`；`planning_intel` 默认 `ai_sql_categories + company_sql_v1 + news_primary`，`ai_tools` 默认 `ai_tools_categories + tool_intel_v1`；数据源侧方向标签来自 `planning_source_tags/source_tags.json`，只用于源管理和评分先验；`/api/sources/{source_id}/workspace-link` 可以更新当前工作台对单源的启用状态、权重和日限；`/api/sources/{source_id}/fetch` 可以触发单个 RSS/paper RSS/page_manual/page_monitor 源抓取并幂等写入 `raw_items`；`/api/ingestion/runs` 可以按工作台创建同步执行的抓取 run，默认处理该工作台已启用的 `rss/paper_rss/page_manual/page_monitor/wiseflow` 源并写入 `ingestion_runs` 摘要；抓取 run 支持并发池和单源超时，默认 `INGESTION_CONCURRENCY=8`、`INGESTION_SOURCE_TIMEOUT_SECONDS=25`；完整日报流水线通过 `/api/pipeline/daily-runs` 默认覆盖同一套全量源类型。scheduler 可按环境变量定时把每日完整流水线入队给 worker 执行，默认关闭自动任务；`workspace_source_links` 会为规划部工作台建立全量启用链接。
+当前实现状态：导入、工作台统一标签/新闻结构策略、adapter 框架、RSS/paper RSS/arXiv paper API/OpenAlex paper API/Semantic Scholar paper API/page_manual/page_monitor 抓取到 raw 入库、工作台级 ingestion run API 和 Redis/RQ worker + scheduler 调度入口已完成。`backend/app/adapters/` 已有统一 `SourceAdapter`、RSS adapter、页面源 adapter、arXiv/OpenAlex/Semantic Scholar paper API adapter；wiseflow/crawler/csv/paper_page/manual/internal 等 stub adapter 已显式返回 `skipped_unimplemented`，不再显示成功 0 条；`/api/sources/import-legacy-seeds` 可以导入旧 113 个种子源和 `information_source_registry_20260511.csv` 补充台账，361 条导入记录按 URL 去重后形成 294 个共享源，规划部工作台 v1 默认全部启用；`/api/sources/import-tech-insight-loop` 可以导入 `sources_full_zh.csv` 的 386 行 Tech Insight Loop 源治理记录，355 行有入口、31 行待补入口，去重后形成 363 个共享源，并把源等级、渠道类型、专家路由、板块相关度和评分拆解保存为源侧 metadata；`/api/sources?workspace_code=...` 可以展示共享源池及当前工作台配置；`/api/workspaces/{workspace_code}/label-policy` 可以增删改工作台统一新闻一级/二级标签策略，并返回/保存 `news_format_code`、`export_category_mode` 与 `required_content_fields`；`planning_intel` 默认 `ai_sql_categories + company_sql_v1 + news_primary`，`ai_tools` 默认 `ai_tools_categories + tool_intel_v1`；数据源侧方向标签来自 `planning_source_tags/source_tags.json`，只用于源管理和评分先验；`/api/sources/{source_id}/workspace-link` 可以更新当前工作台对单源的启用状态、权重和日限；`/api/sources/{source_id}/fetch` 可以触发单个 RSS/paper RSS/paper_api/page_manual/page_monitor 源抓取并幂等写入 `raw_items`；`/api/ingestion/runs` 可以按工作台创建同步执行的抓取 run，默认处理该工作台已启用的 `rss/paper_rss/page_manual/page_monitor/wiseflow` 源并写入 `ingestion_runs` 摘要；抓取 run 支持并发池和单源超时，默认 `INGESTION_CONCURRENCY=8`、`INGESTION_SOURCE_TIMEOUT_SECONDS=25`；完整日报流水线通过 `/api/pipeline/daily-runs` 默认覆盖同一套全量源类型。scheduler 可按环境变量定时把每日完整流水线入队给 worker 执行，默认关闭自动任务；`workspace_source_links` 会为规划部工作台建立全量启用链接。
 
 实现：
 
@@ -270,7 +270,7 @@ class SourceAdapter:
 - 旧 wiseflow 不被混成 RSS。
 - `planning_intel` 和 `ai_tools` 都能看到 294 个共享源链接；规划部工作台默认 294 个全部启用。
 - 单个 RSS/paper RSS/page_manual/page_monitor 源可以手动触发抓取，首次创建 `raw_items`，重复抓取更新已有 raw 记录而不重复插入。
-- 可以创建工作台级 ingestion run，run 记录 source 成功/失败、拉取数、raw 新增数和 raw 更新数；`limit=0` 可用于无网络验收 API。
+- 可以创建工作台级 ingestion run，run 记录 source 成功/失败、拉取数、raw 新增数和 raw 更新数；`limit` 必须为空或大于 0，`limit=0` 返回 422，筛选不到启用源时 run 状态为 `no_sources`。
 - 可以启动 worker/scheduler 容器；默认 `INGESTION_SCHEDULER_ENABLED=false` 不会自动执行，设为 `true` 后按 `INGESTION_SCHEDULER_INTERVAL_SECONDS` 入队完整日报流水线；如需旧的只抓取行为，设置 `SCHEDULER_JOB_MODE=ingestion_only`。
 - 前端首页当前显示阶段 5；数据源页仍可验收阶段 3 的数据源管理能力，并能通过右侧 tab 面板增删改工作台统一一级/二级标签策略、查看和保存工作台新闻结构字段、通过“配置”修改单源启用/权重/日限、通过“抓取”按钮触发 RSS/paper RSS/page_manual/page_monitor 单源抓取。
 - 新增 source_type 只需注册 adapter。
@@ -312,7 +312,7 @@ winner 选择顺序：
 - 同 canonical URL 的两条新闻只有一个 active winner。
 - loser 写入 `duplicate_of`，但 raw 不删除。
 - 不同 URL 的相似主题第一版不自动删除。
-- `docs/data-examples.md` 中的 RSS 样例能转成 news item。
+- `docs/reference/data-examples.md` 中的 RSS 样例能转成 news item。
 - 同一条共享 raw 在 `planning_intel` 和 `ai_tools` 下可各自生成 news item 和 dedupe group。
 
 已验证：
@@ -430,7 +430,7 @@ daily_report_items.adoption_status = 2
 
 目标：让主链路变成可操作看板，不做营销首页。
 
-当前实现状态：浅色工作台壳、登录页、用户权限页、数据源管理页、候选池页、推荐运行页、抓取覆盖率页、周报页、历史归档页、实体大事记页、质量归档页、SQL 导出页、需求页、任务页、同步运行页、审计页、数据源详情页和日报详情/编辑路由已可用。工作台列表与左侧导航已从后端 `workspaces/workspace_sections` 读取，不再前端硬编码；第一版默认不显示工具目录、工具任务、独立热点专题等插件页。数据源页采用参考高保真风格的信息流式共享源列表，展示共享源池、当前工作台启用数、源类型分布、工作台启用状态和抓取状态，已补 Tech Insight Loop 源等级、渠道类型、专家路由、质量分和待补入口状态；右侧标签面板用一级/二级/新闻结构 tab 管理工作台统一策略。单个源配置只包含启用、权重和日限，不维护标签。候选池页接入 `GET /api/dedupe-groups` 和 `GET /api/news-items`，展示 winner、重复来源、来源排序、推荐分、准入等级、噪声/剔除原因、推荐状态、日报采信状态和追溯 ID；推荐运行页接入 `GET/POST /api/recommendation/runs`，展示分数拆解、结构化准入字段和是否进入日报；抓取覆盖率页接入 `GET/POST /api/ingestion/runs`、`POST /api/ingestion/backfill-runs` 和 `GET /api/ingestion/coverage`，支持常规抓取、`rss_window/paper_api/archive_page/sitemap/manual_import` 补采、目标日覆盖漏斗和每源链路详情；SQL 导出页接入 `GET /api/daily-reports`、`GET /api/exports` 和 `POST /api/exports/company-sql/daily-reports/{daily_report_id}`，支持预览和下载 SQL。日报页采用 brief 列表 + 详情处理弹窗，避免正文和处理区互相遮挡，并支持生成稿 ready/fallback 状态展示和草稿重跑。周报页接入 `GET/POST /api/weekly-reports`、发布和条目编辑 API，支持从已发布日报采信项生成候选草稿，并按成品新闻一级标签形成周报板块；默认只展示板块统计、短摘要和采信动作，五段正文只在编辑态出现。历史归档页接入 `GET /api/historical-reports/summary`、`GET /api/historical-reports`、`GET /api/historical-reports/{id}`、`GET /api/legacy-import/summary` 和 `GET /api/legacy-import/gaps`，只读展示旧日报/周报正文、筛选条件、导入覆盖率和引用解析缺口。质量归档页接入 `GET /api/quality-archive/summary`、`GET /api/historical-feedback-items` 和 `GET /api/historical-job-runs`，只读展示旧反馈、质量反馈、旧任务统计和反馈引用缺口。需求、任务、同步和审计页面已从模块化路线页升级为真实 API 页面。
+当前实现状态：浅色工作台壳、登录页、用户权限页、数据源管理页、候选池页、推荐运行页、抓取覆盖率页、周报页、历史归档页、实体大事记页、质量归档页、SQL 导出页、需求页、任务页、同步运行页、审计页、数据源详情页和日报详情/编辑路由已可用。工作台列表与左侧导航已从后端 `workspaces/workspace_sections` 读取，不再前端硬编码；第一版默认不显示工具目录、工具任务、独立热点专题等插件页。数据源页采用参考高保真风格的信息流式共享源列表，展示共享源池、当前工作台启用数、源类型分布、工作台启用状态和抓取状态，已补 Tech Insight Loop 源等级、渠道类型、专家路由、质量分和待补入口状态；右侧标签面板用一级/二级/新闻结构 tab 管理工作台统一策略。单个源配置只包含启用、权重和日限，不维护标签。候选池页接入 `GET /api/dedupe-groups` 和 `GET /api/news-items`，展示 winner、重复来源、来源排序、推荐分、准入等级、噪声/剔除原因、推荐状态、日报采信状态和追溯 ID；推荐运行页接入 `GET/POST /api/recommendation/runs`，展示分数拆解、结构化准入字段和是否进入日报；抓取覆盖率页接入 `GET/POST /api/ingestion/runs`、`POST /api/ingestion/backfill-runs`、`POST /api/ingestion/manual-import-preview` 和 `GET /api/ingestion/coverage`，支持常规抓取、`rss_window/paper_api/archive_page/sitemap/manual_import` 补采、manual_import CSV/SQL 上传或粘贴、后端预览、错误报告、目标日覆盖漏斗和每源链路详情；SQL 导出页接入 `GET /api/daily-reports`、`GET /api/exports`、`POST /api/exports/company-sql/daily-reports/{daily_report_id}/preflight`、`POST /api/exports/company-sql/daily-reports/{daily_report_id}`、`GET /api/exports/{export_job_id}/download` 和 `GET /api/exports/{export_job_id}/trace`，支持预检、截断预览保护、复制预览、服务端流式下载和 trace 锚点。日报页采用 brief 列表 + 详情处理弹窗，避免正文和处理区互相遮挡，并支持生成稿 ready/fallback 状态展示和草稿重跑。周报页接入 `GET/POST /api/weekly-reports`、发布和条目编辑 API，支持从已发布日报采信项生成候选草稿，并按成品新闻一级标签形成周报板块；默认只展示板块统计、短摘要和采信动作，五段正文只在编辑态出现。历史归档页接入 `GET /api/historical-reports/summary`、`GET /api/historical-reports`、`GET /api/historical-reports/{id}`、`GET /api/legacy-import/summary` 和 `GET /api/legacy-import/gaps`，只读展示旧日报/周报正文、筛选条件、导入覆盖率和引用解析缺口，并支持从旧报告转需求。实体大事记页接入实体列表、事件详情、旧引用解析、当前事件编辑/确认/撤销和转需求。质量归档页接入 `GET /api/quality-archive/summary`、`GET /api/historical-feedback-items` 和 `GET /api/historical-job-runs`，只读展示旧反馈、质量反馈、旧任务统计和反馈引用缺口，并支持管理员把单条历史反馈转为 requirement 来源。需求、任务、同步和审计页面已从模块化路线页升级为真实 API 页面；同步页已展示 failed inbox 告警、对象分布、本地重放重试入口和自动 backoff 到期/阻塞状态。
 
 页面顺序：
 
@@ -488,7 +488,7 @@ cd frontend && npm run build
 浏览器打开 /news、/recommendations、/exports、/ingestion-runs、/weekly-reports、/requirements、/tasks、/sync、/audit-logs
 ```
 
-以上页面不再落入通用 `PlaceholderPage`。`/weekly-reports`、`/requirements`、`/tasks`、`/sync`、`/audit-logs` 已是真实 API 页面；其中 `/sync` 当前只记录同步 run，完整同步包导出/导入仍在阶段 8 实现。
+以上页面不再落入通用 `PlaceholderPage`。`/weekly-reports`、`/requirements`、`/tasks`、`/sync`、`/audit-logs` 已是真实 API 页面；其中 `/sync` 已接入同步包导出/下载/导入、feed/pull 运行、同步健康、水位/失败告警、立即拉取和冲突处置 UI。
 
 ## 12. 阶段 8：同步、部署和自动发布
 
@@ -502,8 +502,9 @@ cd frontend && npm run build
 - Redis 不暴露公网端口。
 - `.env.production` 放服务器，不进 Git。
 - GitHub Actions 通过 SSH 部署。
-- `sync_outbox/sync_inbox/sync_runs/sync_conflicts` 骨架。
-- 公网导出同步包，内网导入同步包。
+- `sync_outbox/sync_inbox/sync_runs/sync_conflicts` 骨架和 `sync_cursors` 水位。
+- 公网导出同步包，内网导入同步包；机器同步主线走 extranet feed / intranet pull。
+- failed `sync_inbox` 保存可重放 envelope，并可通过 `POST /api/sync/inbox/retry-failed` 本地重试。
 
 验收：
 
@@ -511,7 +512,9 @@ cd frontend && npm run build
 - `80/443` 可访问网站。
 - `/healthz` 可被部署脚本检查。
 - `postgres:5432` 只在 Docker 内网访问。
-- 同步包不包含 token、cookie、password、secret、`.env`。
+- 同步包不包含 token、cookie、password、secret、authorization、api_key、`.env`、
+  client_secret、session 等 secret-like 字段。
+- 审计详情不保存 secret-like 原值，只保存 `[REDACTED]`。
 - 重复导入同一同步包不会重复写数据。
 
 ## 13. 阶段 9：硬化与第一版发布
@@ -526,7 +529,7 @@ cd frontend && npm run build
 - 后台任务失败可见。
 - 审计日志可查询。
 - 数据源抓取失败率统计。
-- SQL 导出前字段长度和 URL 过长校验。
+- SQL 导出前 preflight、字段长度、URL 和 HTML 污染校验。
 - 最小端到端测试。
 
 发布验收：
@@ -556,7 +559,7 @@ backup restore smoke test
 
 - 主链路：抓取、raw 入库、news 标准化、工作台隔离去重、推荐、MiniMax 结构化生成、日报发布和标准公司 SQL 导出已跑通。
 - 源治理：`/api/sources/import-tech-insight-loop` 已支持导入 Tech Insight Loop 的 386 行源治理记录，其中 355 行有可抓取入口、31 行作为待补入口 metadata-only，按 URL/RSS 去重后形成 363 个共享源且不覆盖既有人工启用关系。
-- 融合迁移基线：`scripts/tech_insight_loop_inventory.py` 已只读盘点旧 SQLite，确认 14834 条素材、66 份报告、23 个实体、275 条实体大事记、反馈和旧任务记录；`scripts/tech_insight_loop_legacy_dry_run.py` 已生成历史素材/报告导入 dry-run，确认 14834 条素材可归档、58 份 daily/weekly 报告可归档、报告引用 2773 个中 30 个缺口；`scripts/tech_insight_loop_legacy_import.py` 已提供默认 no-write、`--execute` 才写库的真实导入脚本，旧素材进入禁用的 `legacy_tech_insight_loop` 档案源和 `raw_items.raw_payload_json.legacy_tech_insight_loop`，旧报告进入 `historical_reports`，不进入当前推荐、日报和公司 SQL；`tracked_entities/entity_milestones` 归档模型、`scripts/tech_insight_loop_entity_import.py` 和 `/entity-milestones` 只读页面已提供旧实体/大事记导入与查看能力，旧引用缺口写入 `metadata_json.legacy_refs`；`historical_feedback_items/historical_job_runs` 归档模型、`scripts/tech_insight_loop_quality_import.py` 和 `/quality-archive` 只读页面已提供旧反馈、质量反馈和旧任务统计导入/查看能力，不创建当前反馈或当前抓取任务；`GET /api/legacy-import/summary`、`GET /api/legacy-import/gaps` 和 `/historical-reports` 顶部验收面板已提供导入覆盖率、未解析引用和缺口样例查看；`scripts/tech_insight_loop_import_verify.py` 已提供 check-only、小批量执行和全量确认执行的统一验收报告，历史反馈和旧任务归档通过 `--include-quality-archive` 显式纳入。
+- 融合迁移基线：`scripts/tech_insight_loop_inventory.py` 已只读盘点旧 SQLite，确认 14834 条素材、66 份报告、23 个实体、275 条实体大事记、反馈和旧任务记录；`scripts/tech_insight_loop_legacy_dry_run.py` 已生成历史素材/报告导入 dry-run，确认 14834 条素材可归档、58 份 daily/weekly 报告可归档、报告引用 2773 个中 30 个缺口；`scripts/tech_insight_loop_legacy_import.py` 已提供默认 no-write、`--execute` 才写库的真实导入脚本，旧素材进入禁用的 `legacy_tech_insight_loop` 档案源和 `raw_items.raw_payload_json.legacy_tech_insight_loop`，旧报告进入 `historical_reports`，不进入当前推荐、日报和公司 SQL；`tracked_entities/entity_milestones` 归档模型、`scripts/tech_insight_loop_entity_import.py` 和 `/entity-milestones` 已提供旧实体/大事记导入与查看能力，旧引用缺口写入 `metadata_json.legacy_refs`；旧导入事件只读，当前日报/周报条目登记出的实体事件支持编辑、确认、撤销和转 requirement 来源；`historical_feedback_items/historical_job_runs` 归档模型、`scripts/tech_insight_loop_quality_import.py` 和 `/quality-archive` 页面已提供旧反馈、质量反馈和旧任务统计导入/查看能力，管理员可把历史反馈登记为 requirement 来源，但不创建当前评论/评分或当前抓取任务；`GET /api/legacy-import/summary`、`GET /api/legacy-import/gaps` 和 `/historical-reports` 顶部验收面板已提供导入覆盖率、未解析引用和缺口样例查看；`scripts/tech_insight_loop_import_verify.py` 已提供 check-only、小批量执行和全量确认执行的统一验收报告，历史反馈和旧任务归档通过 `--include-quality-archive` 显式纳入。
 - 可观测：`/ingestion-runs` 已展示常规抓取、多模式补采、每源覆盖统计和目标日 raw/news/winner/recommendation/daily 漏斗；`/news` 已展示候选推荐分、推荐状态、日报采信状态和追溯 ID。
 - 内容运营：日报已支持 brief 列表、详情弹窗、采信、编辑、点赞、评分、评论和生成稿重跑；已校验单日公司 SQL 预览可以回填为完整追溯链路的已发布日报；周报 v1 已支持从已发布日报采信项生成候选、按一级标签分板块、条目采信/剔除、排序、编辑和发布。
 - 管理页面：数据源、推荐运行、SQL 导出、用户权限、需求、任务、历史归档、实体大事记、质量归档、同步和审计均已从占位页升级为真实 API 页面。
@@ -566,12 +569,12 @@ backup restore smoke test
 
 1. Tech Insight Loop 历史归档执行验收：配置真实数据库 `DATABASE_URL` 后，先跑 `python3 scripts/tech_insight_loop_import_verify.py --execute --article-limit 20 --report-limit 5 --entity-limit 5 --milestone-limit 20` 小批量；如需同步验收历史反馈和旧任务，加 `--include-quality-archive --feedback-limit 4 --quality-feedback-limit 4 --job-limit 10`；再跑 `--execute --confirm-full-import` 全量。用输出报告、`GET /api/legacy-import/summary`、`GET /api/legacy-import/gaps`、`/historical-reports` 顶部验收面板和 `/quality-archive` 核对覆盖率、未解析报告/反馈引用、旧任务失败原因和跳过原因。
 2. Tech Insight Loop 实体大事记执行验收：同一验收脚本会在历史导入后执行实体/事件导入；也可用原子脚本 `scripts/tech_insight_loop_entity_import.py --execute` 单独重跑，并用导入验收面板和 `/entity-milestones` 核对实体事件覆盖率、未解析旧引用和跳过原因。
-3. SQL 导出增强：补导出前字段长度、URL 长度、HTML 污染校验；把 SQL 条目追溯到 daily item、generated news、news item、raw item 和 source。
-4. 部署和登录安全：补公网登录限流、默认密码治理、Google OIDC 预留、公司 IDaaS code flow adapter 预留、生产 Compose 和反向代理配置。
-5. 公网/内网同步骨架：当前已有 `sync-runs` 运行记录页；下一步做同步包导出/导入、下载、幂等导入和冲突审计，不做实时双写。
+3. 部署和登录安全：已补公网登录限流、默认密码治理、通用 OIDC code flow + PKCE、公司内网 header 登录、生产 Compose 和反向代理配置；后续只需按具体企业 IDaaS claims 做字段适配并留真实 provider 证据。
+4. 公网/内网同步骨架：当前已有 feed/pull、同步包导出/导入、下载、幂等导入、open conflict 查询和人工处置；下一步补 `use_incoming/manual_merge` 对象级合并器和端到端实机证据。
+5. SQL 导出深化：导出前 preflight、字段长度、URL、HTML 污染校验、SQL trace、trace 字段来源详情、trace 字段差异预览、导入回执、失败语句反馈、service token importer 回调、服务端流式下载端点、viewer 下载禁用、预览复制、截断预览保护和批量 manifest 已补；下一步补真实内网平台生产联调证据。
 6. 周报增强：当前周报 v1 管理采信项和板块；下一步补热度/反馈排序、自动周报正文、周报导出和必要的 weekly section 映射。
-7. 战略闭环深化：当前已有 requirements、topic tasks 的列表/创建/状态更新和审计；下一步从已发布日报/周报条目沉淀 insight、requirement 和 task，并补追溯关系。
-8. 历史补采深化：补更完整的论文 provider、分页归档 crawler、失败源长超时重试策略和手工 CSV 导入页面，覆盖超出当前 RSS 窗口的历史缺口。
+7. 战略闭环深化：当前已有 insights、strategic implications、requirements、topic tasks 的列表/创建/状态更新和审计；insight/implication 独立管理 v1 已能在 `/insights` 创建、编辑、确认/归档洞察并管理战略影响；requirement source links v1 已能从 daily/weekly report item、entity milestone、historical report、historical feedback、news 或 raw 追溯外部信号，并在 `/requirements` 展示。report item strategy loop v1 已能从日报/周报条目沉淀 insight、implication、requirement 和可选 task，并在 `/tasks` 展示 requirement/source trace；task owner view v1 已支持我的/逾期/阻塞视图和 blocked reason 提交；task batch update v1 已支持 `POST /api/topic-tasks/batch` 批量处理状态和阻塞原因；task detail v1 已支持 `GET /api/topic-tasks/{id}` 和 `/tasks` 详情抽屉；sync boundary v1 已验证 requirements/topic_tasks 不进入 extranet feed；requirement feedback to recommendation v1 已把需求结论写入可审计 `EditorialAction` 并进入推荐 `feedback_score`。下一步补跨对象联动体验和更多协作对象解释关系。
+8. 历史补采深化：arXiv paper_api v1、OpenAlex Works paper_api v1、Semantic Scholar bulk search paper_api v1、manual_import CSV/SQL 上传或粘贴、后端预览、错误报告、覆盖趋势 v1、失败源自动重试队列 v1 和站内告警投递 v1 已补；下一步补 OpenReview 等论文 provider、分页归档 crawler、邮件/外部告警通道、复杂 SQL dialect 和大文件分片，覆盖超出当前 RSS 窗口的历史缺口。
 
 每一轮提交前都要重新跑对应后端测试、前端 build，并确认 `docs/00-system-design.md`、本文和相关模块文档没有出现两套口径。
 
@@ -596,11 +599,11 @@ backup restore smoke test
 | --- | --- | --- | --- |
 | 日报生成恢复 | 已支持 MiniMax 单条超时、失败 fallback、推荐 run 生成状态汇总、草稿生成稿重跑和前端状态展示；`2026-05-21` 到 `2026-05-27` 已补齐发布和 SQL；`scripts/import_company_sql_preview_to_reports.py` 可把已校验单日 SQL 预览回填为日报/周报工作台数据 | 后续沉淀为定时任务/运维按钮，减少手工补跑 | 每天自动生成昨天日报，失败条目不会阻塞整天，标准 SQL 只导出 ready |
 | 候选池运营 | 前端已展示 winner/loser、重复来源、推荐分、推荐状态、日报采信状态和追溯 ID | 补筛选、采信入口和更清晰的质量治理字段 | 管理员能判断一条日报候选来自哪些源，为什么被推荐 |
-| 抓取覆盖率 | 前端已展示 ingestion run 摘要、每源明细、补采窗口统计和目标日 raw/news/winner/recommendation/daily 漏斗 | 补失败源重试、长期覆盖趋势和异常告警 | 能解释“294 个源全启用为什么当天仍只有少量候选” |
-| 历史补采 | 已有 `rss_window/paper_api/archive_page/sitemap/manual_import` API、job 和前端入口，可按日期窗口过滤条目入 raw | 补更完整的论文 provider、分页归档 crawler、失败源重试和手工 CSV 页面 | 能补齐超出 RSS 当前窗口的目标日期缺失候选，并说明每源命中情况 |
-| SQL 前端 | 前端已能选择已发布日报、生成、预览和下载 SQL | 补复制、字段校验和逐条追溯 | 管理员不进后端也能拿到内网可导入 SQL |
+| 抓取覆盖率 | 前端已展示 ingestion run 摘要、每源明细、补采窗口统计、失败源手动重试、失败源自动重试策略、目标日 raw/news/winner/recommendation/daily 漏斗、近 14 日覆盖趋势、Top 失败源和站内告警通知 | 补邮件/外部告警通道、生产 runbook 和更长周期趋势分析 | 能解释“294 个源全启用为什么当天仍只有少量候选”，并能看到最近是否持续失败或持续 0 产出 |
+| 历史补采 | 已有 `rss_window/paper_api/archive_page/sitemap/manual_import` API、job、前端入口、manual_import CSV/SQL 上传或粘贴、后端预览、错误报告下载、arXiv submittedDate 日期窗口 provider、OpenAlex publication_date 日期窗口 provider、Semantic Scholar publicationDateOrYear 日期窗口 provider、非 `manual_import` 失败源手动/自动重试和站内告警，可按日期窗口过滤条目入 raw | 补 OpenReview 等论文 provider、分页归档 crawler、邮件/外部告警通道、复杂 SQL dialect 和大文件分片 | 能补齐超出 RSS 当前窗口的目标日期缺失候选，并说明每源命中情况 |
+| SQL 前端 | 前端已能选择已发布日报、运行预检、生成、截断预览保护、复制预览、服务端下载 SQL、查看 trace 锚点、字段来源、字段差异预览、登记导入回执、展示 importer 回调 endpoint 并生成批量 manifest | 补真实内网平台生产联调证据 | 管理员不进后端也能拿到内网可导入 SQL，并能把导入结果追溯回导出任务 |
 | 周报 | 前后端已能从已发布日报采信条目生成周报候选草稿，前端按一级标签形成周报板块，并支持条目编辑、板块内排序、采信和发布 | 补热度/反馈排序、自动周报正文和周报导出；必要时增加 weekly section 映射层 | 一周日报采信能汇总成周报草稿，管理员能按板块调整采信后发布 |
-| 战略闭环 | requirement/task 已有真实 API 页面和审计，insight/source_links 仍需串起来 | 从日报新闻沉淀洞察、影响、需求和指派任务 | 任一内部需求能追溯到外部原始信号 |
+| 战略闭环 | insight/implication 独立管理、requirement/task 页面和审计已落地，requirement source links v1 已能追溯 daily/weekly report item、entity milestone、historical report、historical feedback、news 和 raw；report item strategy loop v1 已能从日报/周报条目沉淀 insight、implication、requirement 和可选 task，任务列表可回链到来源；task owner view v1 已补我的/逾期/阻塞视图和 blocked reason；task batch update v1 已补批量状态/阻塞原因处理；task detail v1 已补详情 API 和 `/tasks` 抽屉；sync boundary v1 已补内网 requirement/task 不进 feed 的负向验收；requirement feedback to recommendation v1 已进入推荐反馈分 | 补跨对象联动体验和更多协作对象解释关系 | 任一内部任务能追溯到 requirement 和外部原始信号；洞察和需求结论能进入可审计的后续反馈链 |
 | 公网部署 | 本地/Compose 骨架具备 | 生产 Compose、Caddy/Nginx、GitHub Actions SSH 部署 | 云服务器可滚动部署，数据库不暴露公网 |
 | 内网适配 | `intranet_header` 已有，IDaaS 仍是计划 | `intranet_oidc` code flow adapter | 公司登录拿到工号/姓名后能映射本地用户 |
 | 多环境同步 | 表结构、策略设计和 `sync-runs` 记录页已有 | sync package 导出/导入 | 公网公开信号能同步到内网，敏感数据不回流 |

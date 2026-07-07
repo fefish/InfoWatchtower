@@ -2,6 +2,9 @@
 
 本文记录 AI情报官在重构过程中的技术债务、处理方案和代码证据。台账只记录会影响维护、测试、部署或后续扩展的事项，普通需求不放入本文。
 
+本文是技术债台账，不是模块设计事实源。缺口的归属和目标态设计分别以
+`docs/backend/backend-module-design.md`、对应专题文档和 `docs/architecture/capability-map.md` 为准。
+
 ## 1. 当前原则
 
 - 不把旧系统作为运行入口，只保留字段合同、样例和历史资料。
@@ -26,15 +29,17 @@
 | R-010 | 同步页面只有运行记录，无法形成内外网交付包 | 增加同步包导出、zip 下载和导入幂等骨架，manifest 与 records 写入审计运行 | `backend/app/api/routes/operations.py`、`frontend/src/pages/SyncRunsPage.vue` |
 | R-011 | 生产部署口径缺少可执行检查 | 增加生产 env 模板、部署检查脚本和 CI 检查，覆盖 compose 服务、反代、默认密钥和 docs 开关 | `deploy/env.production.example`、`scripts/check_prod_deploy.py`、`.github/workflows/ci.yml` |
 | R-012 | 覆盖率门禁有了但缺少可下载报告 | CI 生成 `coverage.xml` 和 `htmlcov` 并上传 artifact，便于白盒评审取证 | `.github/workflows/ci.yml` |
+| R-013 | `alembic check` 因历史 index/nullable 漂移导致 `make migration-check` 不再可信 | 新增尾部 schema 对齐迁移，统一唯一索引、推荐字段 nullable、report format/rendition mixin 索引和 tracked entity name 索引差异 | `backend/alembic/versions/b0c1d2e3f4a5_align_schema_indexes_and_nullability.py`、`make migration-check` |
+| R-014 | 同步导入侧停留在 inbox 幂等记录，无法真正落业务对象 | 增加 `data_sources/raw_items/news_items/generated_news/daily_reports/weekly_reports` apply handler、revision/hash 冲突写入和人工处置入口 | `backend/app/sync/apply.py`、`backend/tests/test_sync_feed_pull.py`、`frontend/src/pages/SyncRunsPage.vue` |
+| R-015 | `ModuleRoadmapPage.vue` 无路由引用、无 spec、不受 section gating，属游离死代码 | 确认全仓无 import/路由/测试引用后删除该文件（2026-07-07）；后续如需路线页，必须由 `workspace_sections` 显式启用并补 spec | `frontend/src/router/index.ts`（路由表无引用）、`docs/product/page-specs/frontend-page-specs.md` §28 |
 
 ## 3. 当前技术债务
 
 | 编号 | 等级 | 内容 | 风险 | 计划 |
 | --- | --- | --- | --- | --- |
-| D-004 | P1 | 深度历史补采还依赖 RSS 当前窗口 | 老日期日报可能缺候选 | 增加归档页分页、sitemap 深挖、论文 provider 和 CSV 导入 |
-| D-005 | P1 | 周报正文自动生成未实现 | 周报仍需人工整理长文 | 在现有采信项版本基础上增加周报生成服务 |
-| D-007 | P2 | 领域包样例不足 | 证明跨板块复用时证据不够 | 增加硬件或半导体 domain pack 样例 |
-| D-008 | P1 | 同步包导入侧还只是 inbox 幂等验收 | 内网导入后还不能自动 upsert 业务对象 | 增加按 `object_type` 分发的 apply handler 和冲突处理 |
+| D-004 | P1 | 深度历史补采还依赖 RSS 当前窗口 | 老日期日报可能缺候选 | arXiv/OpenAlex/Semantic Scholar paper_api v1、manual_import CSV/SQL 上传或粘贴、后端预览、逐行校验和错误报告已补；继续增加归档页分页、sitemap 深挖、OpenReview 等更多论文 provider、复杂 SQL dialect 和大文件分片 |
+| D-005 | P1 | 周报正文自动生成未实现 | 周报摘要段规则投影 v1 已完成；整篇周报长文、LLM 摘要模型和热度/反馈排序仍需后续补齐 | 在现有采信项版本基础上增加周报生成服务 |
+| D-007 | P2 | 领域包样例仍偏少 | 现有 hardware 样例能证明扩展路径，但跨更多产业板块的证据不够 | 增加半导体、云基础设施或政策市场等 domain pack 样例 |
 | D-009 | P1 | 生产备份恢复还缺真实演练记录 | 部署文档有流程，但没有服务器恢复证据 | 在正式环境执行一次备份、恢复和健康检查演练 |
 
 ## 4. 后续微重构计划
@@ -71,15 +76,17 @@
 
 计划：
 
-1. 失败源重试。
+1. 自动失败源重试队列、退避策略和告警投递。
 2. 归档页和 sitemap provider。
-3. 手工 CSV 导入入口。
+3. 复杂 SQL dialect 和大文件分片。
 4. 覆盖率趋势统计。
+
+已完成：手动失败源重试 v1，入口为 `POST /api/ingestion/runs/{run_id}/retry-failed-sources`，仅重试原 run 的失败源并记录 `retry_of_run_id/source_ids`；manual_import 已支持 CSV/SQL 上传或粘贴、`POST /api/ingestion/manual-import-preview` 后端预览、逐行校验、0 accepted 阻断和错误报告下载，提交时只把预览通过的条目写入 `manual_items`，并保留 raw payload 追溯。
 
 ## 5. 验收方式
 
 - 微重构必须有测试或校验脚本。
 - 涉及字段时同步 `config/contracts`。
-- 涉及页面结构时同步 `docs/api-and-ui-implementation.md`。
+- 涉及页面结构时同步 `docs/implementation/api-and-ui-implementation.md`。
 - 涉及 SQL 导出时运行 `scripts/validate_company_sql.py`。
 - 涉及测试覆盖率时运行 coverage 并保持门禁不低于 `80%`。

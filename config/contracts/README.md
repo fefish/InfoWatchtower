@@ -29,11 +29,18 @@ contracts 管“代码必须长什么样”
 - `adapter_pipeline.json`：采集 adapter、raw_items、news_items、去重阶段的字段和顺序。
 - `news_sql_mapping.json`：内部新闻对象如何导出为公司 SQL。
 - `auth_modes.json`：公网/内网登录模式和统一身份字段。
+- `deployment_modes.json`：四种部署形态（standalone/cloud/intranet/extranet）、能力开关、合法登录组合、启动 fail-fast 规则和 `GET /api/meta/runtime`。
 - `workspace_model.json`：工作台、共享源启用、工作台内模块和情报板块边界。
+- `notifications.json`：协作活动事件、站内通知、未读/已读 API 和前端铃铛出现条件。
+- `search.json`：全局检索 API、对象类型、权限过滤、runtime capability 和顶部搜索出现条件。
+- `frontend_control_governance.json`：全局前端控件、按钮/RouterLink 行为、假控件扫描和测试证据规则。
 - `label_model.json`：可配置标签集、标签和内容标签绑定。
+- `report_renditions.json`：成稿格式注册表、rendition 投影字段和导出边界（rendition 是投影不是副本）。
 - `extension_points.json`：数据源、推荐、生成、导出、登录、板块、同步的扩展点。
 - `strategic_loop.json`：外部信号到洞察、需求、任务的规划部闭环。
 - `sync_strategy.json`：公网/内网多环境同步策略、同步表和同步包格式。
+- `audit_ops.json`：审计日志字段、工作台过滤、查询权限和审计页前端调用规则。
+- `archive_knowledge.json`：当前系统实体目录、实体事件、从日报/周报条目登记实体事件的 API 和追溯规则。
 - `tech_insight_loop_legacy_import.json`：Tech Insight Loop 旧 SQLite 资产盘点、历史导入 dry-run、历史导入边界和目标映射。
 
 ## 什么时候改 contracts

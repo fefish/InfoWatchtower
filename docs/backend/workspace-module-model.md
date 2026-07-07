@@ -2,6 +2,10 @@
 
 本文说明 InfoWatchtower 如何支持多个工作台，同时保持一套简洁、共享、可插拔的情报主链路。
 
+当前工作台、sections、成员、label/feedback policy、report formats 和 domain pack 的
+目标态事实源是 `docs/backend/workspace-configuration-design.md`。本文保留为共享源、标签模型
+和工作台概念的细节附录。
+
 机器契约见：
 
 - `config/contracts/workspace_model.json`

@@ -1,5 +1,8 @@
 # 数据库存储与追溯链路
 
+本文是存储和追溯细节附录。数据抓取、流转、raw/news、去重和覆盖率的目标态事实源是
+`docs/backend/data-ingestion-flow-storage-design.md`。
+
 ## 1. 存储方式
 
 InfoWatchtower 以数据库为主存储。正式环境建议 PostgreSQL。

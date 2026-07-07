@@ -1,6 +1,8 @@
 # 部署与运维设计
 
 本文档回答：系统怎么部署，数据库放在哪里，公网和内网如何隔离，代码推到 GitHub 后如何自动发布到云服务器。
+审计日志、运行状态、告警、备份恢复演练和验收证据的模块事实源是
+`docs/backend/audit-ops-observability-design.md`；本文保留部署执行细节。
 
 ## 1. 推荐部署形态
 
@@ -32,12 +34,63 @@ internet / intranet
 同一套部署形态适用于公网和内网。差异不靠改代码解决，而靠：
 
 - `.env.production`
+- `DEPLOY_MODE`
 - `AUTH_MODE`
 - 数据源密钥
 - 域名/证书
 - 是否启用同步任务
 
 因此内网快速上线的目标是：拉同一个 Git 仓库，换一份内网 `.env.production`，执行迁移和 Compose 启动。
+
+### 1.1 四种部署拓扑与 env 矩阵
+
+2026-07 起部署形态由单一环境变量 `DEPLOY_MODE` 定义，四种拓扑复用同一套 Compose，
+差异全部落在 env 组合。实现级规格见 `docs/deployment/deployment-topology.md`，机器契约见
+`config/contracts/deployment_modes.json`：
+
+| env / 维度 | `standalone`（本地） | `cloud`（云官方） | `intranet`（内网嵌入） | `extranet`（外网发布者） |
+|---|---|---|---|---|
+| `DEPLOY_MODE` | `standalone`（默认） | `cloud` | `intranet` | `extranet` |
+| `AUTH_MODE` 合法值 | `local` / `public_password` | `public_password` / `oidc` | `intranet_header`（强制） | `oidc` / `public_password` |
+| `AUTH_AUTO_PROVISION` | `false` | `false`（邀请制，默认 viewer） | `true`（header 自动建号，默认 viewer） | 按 provider，默认 `false` |
+| `AUTH_CSRF_ENABLED` 默认 | `false` | `true` | `true` | `true` |
+| `SYNC_SERVICE_TOKENS` | 不需要 | 不需要 | 不需要 | **必填**（为空启动失败） |
+| `SYNC_REMOTE_BASE_URL` / `SYNC_REMOTE_TOKEN` | 不需要 | 不需要 | **必填**（`SYNC_PULL_ENABLED=true` 时） | 不需要 |
+| `SYNC_PULL_ENABLED` / `SYNC_PULL_INTERVAL_SECONDS` | — | — | 默认 `true` / `900` | — |
+| `SYNC_FAILED_INBOX_AUTO_RETRY_ENABLED` / retry 参数 | — | — | 默认跟随 sync pull；base=300/max=3600/max attempts=5/limit=50 | — |
+| `SEMANTIC_SCHOLAR_API_KEY` | 可选 | 可选 | 不需要（禁采集） | 可选 |
+| `EMBED_FRAME_ANCESTORS` | `'self'`（默认） | `'self'` | 门户域白名单 | `'self'` |
+| 采集能力（`CAPABILITY_INGESTION`） | 开 | 开（仅 workspace admin+ 可触发） | **关**（不可覆盖打开） | 开 |
+| 搜索能力 | 开 | 开 | 开（不返回禁采集对象） | 开 |
+| sync 角色 | 无（调试可 `CAPABILITY_SYNC_PUBLISHER=true`） | 无 | consumer（定时拉取 extranet feed） | publisher（`GET /api/sync/feed`） |
+| TLS/网络 | 本机端口全暴露 | 仅 443（TLS 收口：`docker compose --profile tls` 启用 caddy 自动签证书） | backend 仅网关可达 | 443 + feed 端点（同 cloud 走 tls profile） |
+| 升级 | `upgrade.sh` | `upgrade.sh`（后续 GHCR 镜像） | 离线包：`scripts/export_offline_bundle.sh` + `scripts/upgrade_offline.sh` | `upgrade.sh` |
+
+分节要点：
+
+- **standalone**：`deploy/install.sh --local` 一键起，默认 `DEPLOY_MODE=standalone`；
+  本地调试联动时可显式 `CAPABILITY_SYNC_PUBLISHER=true`。
+- **cloud**：邀请制建号、默认全局角色 viewer；env 样例 `deploy/env.production.example`
+  （已含 `DEPLOY_MODE=cloud` 与拓扑段）。TLS 收口：`docker compose --profile tls up -d`
+  启用可选 caddy 服务（`CADDY_DOMAIN` 自动 ACME 签发/续期，前端 nginx 端口让位
+  `FRONTEND_HTTP_PORT=127.0.0.1:8080`）。
+- **intranet**：env 样例 `deploy/env.intranet.example`，compose 为
+  `deploy/docker-compose.intranet.yml`（前端/backend 只绑门户主机回环，不映射到外网卡）。
+  内网门户以同站路径反向代理承载 iframe，门户侧样例配置见
+  `deploy/nginx.portal.example.conf`（同站反代 + 注入
+  `X-Employee-No/X-Employee-Name/X-Department/X-Email` 身份头）。
+  `AUTH_TRUSTED_PROXY_CIDRS` 兜底校验**已实现**：非空时身份头只信白名单直连 peer
+  （不受信 peer 视为未登录 401），登录限流取 IP 也只在受信 peer 时采信
+  X-Forwarded-For；未配置时保持旧行为并打启动 warning，非法 CIDR 直接拒启。
+  intranet env 样例默认给出该配置项。
+- **extranet**：env 样例 `deploy/env.extranet.example`，compose 为
+  `deploy/docker-compose.extranet.yml`；`GET /api/sync/feed*` 只走
+  `SYNC_SERVICE_TOKENS` Bearer 鉴权（条目支持 `name:token` 命名消费者，访问写审计），
+  向 intranet 下发已采集/已成稿数据。
+
+非法组合会启动失败（fail-fast，不是 warning），完整规则见
+`config/contracts/deployment_modes.json` 的 `startup_failfast_rules`。前端通过免登录的
+`GET /api/meta/runtime` 感知当前形态与能力开关。
 
 当前 scheduler 已接入每日完整流水线，默认关闭自动任务。开启后可按固定墙上时间执行：
 
@@ -137,8 +190,10 @@ AUTH_AUTO_PROVISION=false
 AUTH_DEFAULT_ROLE=viewer
 ```
 
-`AUTH_MODE=public_password` 时，API 启动会检查 `AUTH_SESSION_SECRET`；为空会直接退出并给出
-修复指引。建议由 `openssl rand -hex 32` 生成。公网建号默认走管理员邀请：超级管理员登录
+所有 auth mode（`local/public_password/oidc/intranet_header`）都签发签名 session
+cookie，因此启动自检对全部模式检查 `AUTH_SESSION_SECRET`；为空时 API、scheduler、
+worker 三个进程入口都会直接退出并给出修复指引（compose 三个服务共用同一份 env file，
+无需额外配置）。建议由 `openssl rand -hex 32` 生成。公网建号默认走管理员邀请：超级管理员登录
 `/users` 生成邀请链接；用户接受邀请后会写入本地用户、全局角色和工作台 membership。
 用户忘记密码且未接 SMTP 时，管理员可在 `/users` 对该用户执行重置，系统只返回一次性临时
 密码，并强制用户下次登录后先到 `/account` 修改密码。
@@ -157,18 +212,32 @@ AUTH_DEFAULT_ROLE=viewer
 
 ## 5. 内网部署
 
-公司内网部署可以复用同一套代码。
+公司内网部署可以复用同一套代码，形态为 `DEPLOY_MODE=intranet`（禁采集、pull-only、
+iframe 嵌入），env 组合见 §1.1；同站反代与 CSRF 规格见 `docs/deployment/deployment-topology.md`
+§4，门户侧样例配置为 `deploy/nginx.portal.example.conf`。
 
 如果内网网关能直接给工号和姓名，使用：
 
 ```text
+DEPLOY_MODE=intranet
 AUTH_MODE=intranet_header
 AUTH_HEADER_EMPLOYEE_NO=X-Employee-No
 AUTH_HEADER_DISPLAY_NAME=X-Employee-Name
 AUTH_HEADER_DEPARTMENT=X-Department
 AUTH_HEADER_EMAIL=X-Email
+# 建议配置：身份头只信任门户网关所在网段的直连 peer（未配置会打启动 warning）
+AUTH_TRUSTED_PROXY_CIDRS=10.0.0.0/24
 AUTH_AUTO_PROVISION=true
 AUTH_DEFAULT_ROLE=viewer
+SYNC_REMOTE_BASE_URL=https://extranet.example.com
+SYNC_REMOTE_TOKEN=...
+SYNC_PULL_ENABLED=true
+SYNC_PULL_INTERVAL_SECONDS=900
+SYNC_FAILED_INBOX_AUTO_RETRY_ENABLED=true
+SYNC_FAILED_INBOX_RETRY_BASE_SECONDS=300
+SYNC_FAILED_INBOX_RETRY_MAX_SECONDS=3600
+SYNC_FAILED_INBOX_RETRY_MAX_ATTEMPTS=5
+SYNC_FAILED_INBOX_RETRY_LIMIT=50
 ```
 
 关键要求：
@@ -183,7 +252,38 @@ AUTH_DEFAULT_ROLE=viewer
 - 复用同一个 PostgreSQL：适合早期或可信网络，运维最简单。
 - 内网单独 PostgreSQL：适合长期正式运行，内部评论、需求、任务和权限边界更清晰。
 
-如果公网和内网各自一套数据库，同步策略见 `docs/multi-environment-sync.md`。
+如果公网和内网各自一套数据库，同步策略见 `docs/deployment/multi-environment-sync.md`。
+
+外网发布者对应最小同步 env：
+
+```text
+DEPLOY_MODE=extranet
+AUTH_MODE=oidc
+AUTH_AUTO_PROVISION=true
+AUTH_DEFAULT_ROLE=viewer
+OIDC_ISSUER=https://idp.example.com
+# 可选：id_token 验签 JWKS 地址；缺省时用 issuer discovery 的 jwks_uri，
+# 两者都没有时退化为 iss/aud/exp/nonce 强校验（拒绝 alg=none）。
+# OIDC_JWKS_URI=https://idp.example.com/.well-known/jwks.json
+OIDC_CLIENT_ID=...
+OIDC_CLIENT_SECRET=...
+OIDC_REDIRECT_URL=https://watchtower.example.com/api/auth/oidc/callback
+OIDC_POST_LOGIN_REDIRECT_URL=https://watchtower.example.com/
+OIDC_CLAIM_EXTERNAL_ID=sub
+OIDC_CLAIM_EMPLOYEE_NO=employee_no
+OIDC_CLAIM_USERNAME=preferred_username
+OIDC_CLAIM_DISPLAY_NAME=name
+OIDC_CLAIM_DEPARTMENT=department
+OIDC_CLAIM_EMAIL=email
+AUTH_DEFAULT_WORKSPACE_CODES=planning_intel:viewer
+AUTH_DEPARTMENT_WORKSPACE_MAP=规划部:planning_intel:viewer,硬件部:hardware_intel:viewer
+SYNC_SERVICE_TOKENS=token-for-intranet-rollover-a,token-for-rollover-b
+```
+
+`SYNC_SERVICE_TOKENS` 为空时 extranet 必须启动失败；feed 端点只接受 Bearer token，
+不走登录 cookie。
+`AUTH_DEFAULT_WORKSPACE_CODES` 和 `AUTH_DEPARTMENT_WORKSPACE_MAP` 只补写本地
+membership，不授予 `super_admin`，也不会降级管理员手工授予的更高工作台角色。
 
 ## 6. 服务器目录
 
@@ -341,14 +441,16 @@ reverse proxy 会等 backend healthcheck 通过后再启动。
 
 ### 8.4 生产配置检查
 
-仓库提供生产 env 模板和部署检查脚本：
+仓库提供三份形态 env 模板和部署检查脚本：
 
 ```text
-deploy/env.production.example
+deploy/env.production.example   # standalone/cloud（默认 DEPLOY_MODE=cloud）
+deploy/env.intranet.example     # intranet
+deploy/env.extranet.example     # extranet
 scripts/check_prod_deploy.py
 ```
 
-上线前先复制模板并替换真实密钥：
+上线前先复制对应模板并替换真实密钥：
 
 ```text
 cp deploy/env.production.example /srv/infowatchtower/.env.production
@@ -363,15 +465,42 @@ python3 scripts/check_prod_deploy.py --env-file /srv/infowatchtower/.env.product
 
 检查内容包括：
 
+- `DEPLOY_MODE` 必填且合法，并按形态选择对应 compose 工件校验
+  （intranet → `docker-compose.intranet.yml`，extranet → `docker-compose.extranet.yml`）。
 - 生产 compose 必须包含 PostgreSQL、Redis、backend、worker、scheduler 和 reverse proxy。
-- PostgreSQL 和 Redis 不直接暴露主机端口。
-- Caddy 必须把 `/api/*` 转发到 backend，并保留 Vue history fallback。
-- `APP_ENV=production`，`ENABLE_DOCS=false`。
+- PostgreSQL 和 Redis 不直接暴露主机端口；intranet compose 不允许宿主机直接绑 80。
+- 前端 nginx 模板必须把 `/api/` 转发到 backend、保留 Vue history fallback、输出
+  `frame-ancestors ${EMBED_FRAME_ANCESTORS}` CSP，并清洗外部传入的身份头。
+- cloud/extranet 的 compose 必须带可选 caddy TLS profile，Caddyfile 从
+  `CADDY_DOMAIN` 读域名并转发到前端 nginx。
+- `APP_ENV=production`，`ENABLE_DOCS=false`；`AUTH_SESSION_SECRET` 等必填。
+- 拓扑组合校验对齐契约 `startup_failfast_rules`（如 extranet 缺
+  `SYNC_SERVICE_TOKENS` 直接报错）。
 - 生产密钥不能使用 `change_me`、`password`、`secret` 等开发默认值。
 - 规划部日报定时任务时区必须是 `Asia/Shanghai`。
 - backend 必须有 `/healthz` healthcheck；worker、scheduler、reverse proxy 依赖 backend healthy。
 
+健康探针分两个：`/healthz` 是存活探针（进程活着即 200）；`/readyz` 是就绪探针
+（数据库 `SELECT 1` 失败/未配置返回 503，body 附带 deploy_mode 与能力位供巡检定位），
+compose/网关健康检查应指向 `/readyz`。
+
 CI 也会运行该检查，避免生产部署文件和文档口径漂移。
+
+### 8.5 intranet 离线升级
+
+内网无 git pull / 本机构建能力，升级走离线包：
+
+```text
+# 在有外网与构建能力的机器上出包（docker save 全部镜像 + 迁移清单 + compose/env 样例 +
+# 门户反代样例 + sha256 校验和；前端默认以 VITE_BASE_PATH=/watchtower/ 构建）
+./scripts/export_offline_bundle.sh --version <tag>
+
+# 拷入内网主机后导入并升级（校验 sha256 -> docker load -> compose up；
+# backend 以 RUN_MIGRATIONS=true 启动自动执行 alembic upgrade）
+./scripts/upgrade_offline.sh --bundle <解压目录> [--env-file /srv/infowatchtower/.env.intranet]
+```
+
+数据库数据在 `/srv/infowatchtower/postgres_data`，跨版本保留；回滚先恢复备份再导入旧包。
 
 ## 9. 真正滚动或蓝绿发布
 

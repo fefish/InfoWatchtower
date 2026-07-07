@@ -2,13 +2,17 @@
 
 InfoWatchtower 要同时支持公网部署和公司内网部署。两边都要登录，但不能写两套业务权限系统。
 
+本文是身份接入专题，说明不同外部认证方式如何映射到本地用户。完整用户、角色、
+邀请、membership、权限矩阵和验收设计见 `docs/backend/identity-access-design.md`。
+部署形态合法组合见 `docs/deployment/deployment-topology.md`。
+
 机器可读配置在：
 
 - `config/contracts/auth_modes.json`
 
 公网安全加固、Google SSO 和公司 IDaaS code flow 的后续计划见：
 
-- `docs/auth-security-roadmap.md`
+- `docs/deployment/auth-security-roadmap.md`
 
 ## 1. 核心原则
 
@@ -58,14 +62,30 @@ class ExternalIdentity:
 - `public_password`：公网账号密码登录。
 - `intranet_header`：内网可信网关传工号姓名。
 
-预留：
+预留（契约中标注 `status: planned`，零实现，不是合法 `AUTH_MODE` 取值）：
 
-- `oidc` / `public_oidc`
+- `public_oidc`
 - `intranet_oidc`
 - `intranet_saml`
 
-当前代码已提供 `app/auth/oidc.py` 的 `OidcAdapter` Protocol；`AUTH_MODE=oidc`
-会返回 501，直到配置具体 provider。
+当前代码已实现通用 `AUTH_MODE=oidc`（当前合法 `AUTH_MODE` 集合为
+`local/public_password/oidc/intranet_header`）：`GET /api/auth/oidc/start` 生成
+state/nonce/PKCE code verifier 并跳转 IdP，`GET /api/auth/oidc/callback` 校验 state、
+交换 token、校验 id_token（一旦返回即整体校验：拒绝 `alg=none`；配置
+`OIDC_JWKS_URI` 或 discovery 有 `jwks_uri` 时验签 RS256/384/512，否则强校验
+iss/aud/exp/nonce）、读取 userinfo（或 id_token payload 兜底）、映射成本地
+`ExternalIdentity` 后签发现有 session cookie。需要配置 `OIDC_CLIENT_ID`，以及
+`OIDC_ISSUER` 或显式 `OIDC_AUTHORIZATION_ENDPOINT/OIDC_TOKEN_ENDPOINT`；可选
+`OIDC_JWKS_URI/OIDC_USERINFO_ENDPOINT/OIDC_PROVIDER/OIDC_POST_LOGIN_REDIRECT_URL`。当前已支持
+`OIDC_CLAIM_*` 配置化 claim 映射、`AUTH_DEFAULT_WORKSPACE_CODES` 默认工作台
+membership、`AUTH_DEPARTMENT_WORKSPACE_MAP` 部门到工作台 membership 映射，以及
+`/api/auth/oidc/start?next=/path` 站内相对路径回跳。OIDC 浏览器流失败统一回跳
+`/login?auth_error=<code>`，覆盖未配置、provider error、state 缺失/不匹配、token 交换失败、
+claims 解析失败和 membership 映射失败；登录页只展示固定友好文案，不暴露 provider 或后端
+原始错误。实现级规格见 `docs/deployment/deployment-topology.md` §4.4。
+
+`AUTH_MODE` 的合法取值还受部署形态约束：`DEPLOY_MODE=intranet` 强制
+`intranet_header`，四种形态的合法组合见 `config/contracts/deployment_modes.json`。
 
 ## 4. 同源接入流程
 
@@ -76,9 +96,14 @@ class ExternalIdentity:
 3. 不存在且允许自动开通时创建用户。
 4. 同步姓名、邮箱、部门等展示字段。
 5. 不自动覆盖角色。
-6. 统一签发 InfoWatchtower 自己的 session/JWT。
-7. 后续业务接口只看 session/JWT 里的本地 `user_id`。
-8. 权限判断走本地 RBAC。
+6. 按默认工作台和部门映射补写缺失的 `workspace_memberships`，只新增或升级，不降级人工已有角色。
+7. 统一签发 InfoWatchtower 自己的 session/JWT。
+8. 后续业务接口只看 session/JWT 里的本地 `user_id`。
+9. 权限判断走本地 RBAC。
+
+`AUTH_DEFAULT_WORKSPACE_CODES` 和 `AUTH_DEPARTMENT_WORKSPACE_MAP` 的脱敏摘要会通过
+`GET /api/meta/runtime.auth_membership_mapping` 下发给前端，只用于 `/users` 策略页只读展示，
+不包含 provider secret、token 或 cookie。
 
 ## 5. 公网部署
 
@@ -90,9 +115,11 @@ class ExternalIdentity:
 - 没有 bootstrap 密码且 `users` 表为空时，前端会进入 `/setup`，由 `POST /api/setup`
   创建首个 `super_admin`；已有任意用户后 `/api/setup` 返回 410。
 - 注册默认关闭，由超级管理员创建邀请链接。
-- 已实现登录限流、签名 cookie max-age、改密后旧 cookie 失效和 `AUTH_SESSION_SECRET`
-  启动自检；`APP_ENV=production` 还要求 `DATABASE_URL`。公网仍应由 HTTPS/Caddy 提供
-  Secure Cookie 传输环境。
+- 已实现登录限流（取 IP 只在直连 peer 属于 `AUTH_TRUSTED_PROXY_CIDRS` 时才采信
+  `X-Forwarded-For`，默认伪造 XFF 不能绕过限流窗口）、签名 cookie max-age、改密后旧
+  cookie 失效和 `AUTH_SESSION_SECRET` 启动自检（覆盖全部 auth mode，API/scheduler/
+  worker 三入口共用）；`APP_ENV=production` 还要求 `DATABASE_URL`。公网仍应由
+  HTTPS/Caddy 提供 Secure Cookie 传输环境。
 
 公网环境变量示例：
 
@@ -169,7 +196,37 @@ AUTH_DEFAULT_ROLE=viewer
 
 - `intranet_header` 只能部署在可信网关后面。
 - 后端服务不能直接暴露给用户绕过网关访问。
-- 网关必须覆盖并清洗这些身份 header，不能允许客户端自带 header 穿透。
+- 网关必须覆盖并清洗这些身份 header，不能允许客户端自带 header 穿透
+  （门户侧样例见 `deploy/nginx.portal.example.conf`；系统自带的
+  `frontend/nginx.conf` 也会在 `/api/` 反代处把外部传入的身份头置空）。
+- 进程内兜底（已实现）：`AUTH_TRUSTED_PROXY_CIDRS` 非空时身份头只信白名单直连
+  peer，不受信 peer 的请求按未登录处理（401）；未配置保持旧行为并打启动
+  warning，非法 CIDR 拒启。登录限流取 IP 共用同一判定，只有受信 peer 递来的
+  `X-Forwarded-For` 才被采信。
+
+### 6.1 内网门户 iframe 嵌入（已定稿）
+
+内网部署（`DEPLOY_MODE=intranet`）被公司门户 iframe 嵌入的方案已定稿，实现级规格见
+`docs/deployment/deployment-topology.md` §4：
+
+- **承载方式**：门户 nginx 同站路径反向代理（`https://portal.example.com/watchtower/`
+  代理到前端容器，`/watchtower/api/` 代理到 backend），iframe 的 src 与门户同源
+  （同站），SameSite=lax cookie 原样可用；**禁止**放开 SameSite=None。门户侧样例
+  配置见 `deploy/nginx.portal.example.conf`。
+- **frame-ancestors**：`EMBED_FRAME_ANCESTORS`（默认 `'self'`）经
+  SecurityHeadersMiddleware 输出 `Content-Security-Policy: frame-ancestors <白名单>`，
+  前端 nginx 镜像输出同一 header。
+- **CSRF 双提交 cookie**：登录成功/`GET /api/auth/me` 时下发非 HttpOnly 的
+  `infowatchtower_csrf` cookie；`AUTH_CSRF_ENABLED=true` 时非安全方法必须携带一致的
+  `X-CSRF-Token` 头，否则 403。豁免清单是精确列表：`/api/auth/login`、`/api/setup`、
+  `/api/sync/feed*`、`/api/exports/{id}/import-receipts/callback` 等 token 鉴权端点，
+  以及邀请链路里**仅匿名 accept 一个端点**
+  （`POST /api/auth/invites/{code}/accept`，匿名用户拿不到 CSRF cookie）；
+  `POST /api/auth/invites/{code}/revoke` 等其余邀请端点走正常 double-submit 校验，
+  不因路径前缀被整体豁免。intranet/extranet/cloud 默认开启，standalone 默认关闭。
+- **外层登录态复用**：iframe 同站承载后，`intranet_header` 的「网关注入工号/姓名/
+  部门头 → 自动建号 → 签发本地 cookie」链路原样可用，评论/点赞/评分自然携带外层
+  身份；评论数据留在 intranet 库，不回流公网。
 
 如果公司内部是 IDaaS，推荐后续接 `intranet_oidc`：
 

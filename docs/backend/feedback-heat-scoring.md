@@ -2,6 +2,10 @@
 
 本文档定义点赞、评论、用户评分、新闻热度、来源评分如何存储和进入推荐闭环。
 
+当前推荐准入、推荐 run、分数解释和候选选择的目标态事实源是
+`docs/backend/recommendation-scoring-design.md`。本文保留为反馈聚合、热度评分和来源评分
+的细节附录；评论/通知原始协作流见 `docs/backend/collaboration-notification-design.md`。
+
 ## 1. 反馈对象
 
 反馈可以挂在不同层级：
@@ -262,5 +266,16 @@ daily_report_items.adoption_status = 2
 -> 下一轮推荐 source_score
 ```
 
-这样系统不是只按抓取内容推荐，而是逐步学习“哪些新闻真的被用户和管理员认为有价值”。
+需求结论路径：
 
+```text
+requirements.metadata_json.recommendation_feedback 或 resolved/closed/rejected 状态
+-> editorial_actions(requirement.feedback_to_recommendation)
+-> recommendation_items.feedback_score
+-> recommendation_reason(requirement_feedback_positive/negative)
+-> 下一轮推荐
+```
+
+该路径只把内部需求结论作为后续推荐输入，不覆盖 `raw_items`、`news_items`、评论或已有成稿。
+
+这样系统不是只按抓取内容推荐，而是逐步学习“哪些新闻真的被用户和管理员认为有价值”。

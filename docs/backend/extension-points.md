@@ -1,6 +1,8 @@
 # 可插拔扩展点设计
 
 本文档固定 InfoWatchtower 后续加能力的位置，避免新功能直接侵入主链路。
+扩展进入系统前的治理流程、启停、版本、测试和回滚规则以
+`docs/backend/extension-governance-design.md` 为准；本文只保留接口和扩展点细节。
 
 机器可读契约：
 

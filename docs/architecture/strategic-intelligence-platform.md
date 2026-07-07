@@ -1,6 +1,8 @@
 # 规划部产业情报操作系统愿景
 
-本文是愿景展开附录，不是项目入口。项目唯一总纲是 `docs/00-system-design.md`；如果两者表述有冲突，以总纲为准。
+本文是愿景展开附录，不是项目入口。项目唯一总纲是 `docs/00-system-design.md`；
+Strategy Loop 的模块事实源是 `docs/backend/strategy-loop-design.md`。如果本文和总纲、
+模块设计或 `config/contracts/strategic_loop.json` 冲突，以后者为准，先同步修正文档再实现。
 
 InfoWatchtower 不能只被设计成 AI 新闻日报工具。它的长期定位是规划部的产业情报操作系统：持续收集外部产业信号，形成判断，沉淀专题，再内化成公司内部需求、任务和决策依据。
 

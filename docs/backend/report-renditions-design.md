@@ -1,5 +1,8 @@
 # 报告多版成稿与格式注册表设计（Report Renditions）
 
+本文是多版成稿和格式注册表细节附录。日报/周报采信、编辑覆盖、发布、锁定和版本的
+目标态事实源是 `docs/backend/reports-editorial-design.md`。
+
 状态：P1-P4 已实施（2026-07-02）。机器契约见 `config/contracts/report_renditions.json`。
 P4 的模型产出（insight prompt v2）已随生成链路接入，配置 MiniMax key 后自动生效；
 未配 key 时成稿走规则降级并在条目上标注「规则降级稿」。
@@ -74,7 +77,7 @@ report_renditions                     某报告按某格式渲染出的成稿（
 | report_type / report_id | `daily` \| `weekly` + 对应报告 id |
 | format_code | 引用格式注册表 |
 | status | `draft` / `ready`；报告 publish 时全部 rendition 定稿 |
-| title / summary_json | 标题、开头摘要块（板块分布、头条摘要、关键亮点，对齐快报头部） |
+| title / summary_json | 标题、开头摘要块（板块分布、头条摘要、关键亮点、summary_text，对齐快报头部） |
 | body_json | 渲染后的结构化正文（分组 → 条目 id 顺序 → 每条选用字段的快照） |
 | generated_at / generated_by | 生成时间与方式（model / rule_fallback） |
 
@@ -107,11 +110,15 @@ report_renditions                     某报告按某格式渲染出的成稿（
    - `tag_line`：板块 + 一级分类 + 专家路由首项。
 3. rendition 渲染是纯投影：读采信条目 + insight_json + 格式配置，产出 body_json；
    不回写任何生成稿字段。
+4. 周报摘要段 v1：后端按当前周报采信/候选条目生成 `weekly_reports.summary`，并在
+   `report_renditions.summary_json` 中写入 `summary_text`、`key_highlights`、
+   `top_groups` 和 `summary_generated_by=rule_weekly_summary_v1`。这是一条稳定的规则投影，
+   不是前端拼文案；后续 LLM 周报摘要模型必须复用同一字段结构。
 
 ## 5. 导出
 
 - Markdown：对齐 `周报文件/技术洞察日报-*.md` 结构——标题/覆盖周期头部、
-  `:::summary` 摘要块（板块分布、日报内容、关键亮点）、`## 今日头条` 锚点列表、
+  `:::summary` 摘要块（摘要、板块分布、关键亮点、头条摘要）、`## 今日头条` 锚点列表、
   按板块 `##` 分组、每条 `###` 标题 + 标签行 + 📋要点 + 📌总结 + 来源链接。
 - HTML：复刻同目录 `.html` 的版式（自包含单文件，便于内网直挂）。
 - 出口：`GET /api/reports/{report_id}/renditions/{format_code}/export?target=md|html`，
@@ -151,7 +158,7 @@ PATCH  /api/daily-report-items/{id}             （增加 is_headline）
 | P1 后端骨架 | business_boards taxonomy、insight_json + is_headline 模型、格式注册表模型/种子/API、rendition 生成（规则降级路径）、MD 导出 | pytest 全绿；对已导入的演示周数据能生成技术洞察版 MD，结构对齐样例文件 |
 | P2 编审体验 | 编审页双版 tab、头条勾选、HTML 导出 | 两版在页面可切换阅读，导出 HTML 可直接内网挂载 |
 | P3 自定义格式 | 格式管理面板（新建/编辑/启停自定义格式） | 不改代码注册第三种格式并出稿 |
-| P4 周报 + 生成升级 | 周报双版；配 MiniMax key 后 insight 字段切换为模型产出 | 周报双版可导出；模型产出的要点/总结质量对齐快报 |
+| P4 周报 + 生成升级 | 周报双版；配 MiniMax key 后 insight 字段切换为模型产出；周报摘要段先走 `rule_weekly_summary_v1`，后续可替换为模型摘要 | 周报双版可导出；模型产出的要点/总结质量对齐快报；摘要字段结构保持兼容 |
 
 ## 9. 风险与控制
 

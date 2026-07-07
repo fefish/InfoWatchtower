@@ -1,109 +1,382 @@
-# 文档地图
+# 文档地图与治理规则
 
-本文档说明 InfoWatchtower 文档如何阅读、如何维护，避免出现“总纲一套实现、模块文档另一套实现”。
+本文档只回答两件事：
 
-## 1. 阅读顺序
+1. InfoWatchtower 的设计文档谁是事实源。
+2. 修改某类能力时必须同步哪些文档和契约。
+
+它不承载目标架构本身，不承载实现状态流水账，也不替代
+`config/contracts/*.json` 的机器契约。
+
+## 1. 文档权威关系
+
+物理目录必须与设计层级一致：
+
+```text
+docs/
+  README.md                         文档地图和治理规则
+  00-system-design.md               目标态总纲，只放业务架构和硬约束
+
+  architecture/
+    README.md                         架构目录索引和主次关系
+    design-governance.md            设计分层、评审门禁
+    capability-map.md               已实现/缺口/证据
+    software-design-description.md  正式 SDD 总装版
+    target-state-spec.md            目标态增量工作包
+    strategic-intelligence-platform.md  长期愿景展开
+
+  product/
+    README.md                         前端产品目录索引
+    frontend-product-design.md      前端信息架构、页面地图、顶部栏、用户旅程
+    page-specs/
+      frontend-page-specs.md        前端逐页规格、已做/未做、测试看护
+
+  backend/
+    README.md                         后端模块目录索引、事实源和附录关系
+    backend-module-design.md        后端领域模块总图
+    identity-access-design.md       登录、SSO、用户、权限、邀请、membership
+    collaboration-notification-design.md  评论、点赞、评分、消息通知
+    data-ingestion-flow-storage-design.md
+    recommendation-scoring-design.md
+    pipeline-jobs-design.md
+    reports-editorial-design.md
+    workspace-configuration-design.md
+    strategy-loop-design.md
+    archive-knowledge-design.md
+    sync-conflict-distribution-design.md
+    export-compliance-design.md
+    audit-ops-observability-design.md
+    search-design.md
+    security-secrets-privacy-design.md
+    extension-governance-design.md
+    contract-test-governance-design.md
+    ingestion-adapter-dedup-spec.md
+    backend-capability-test-matrix.md
+    data-lineage-and-storage.md
+    data-format-mapping.md
+    report-renditions-design.md
+    feedback-heat-scoring.md
+    workspace-module-model.md
+    tech-insight-loop-fusion-plan.md
+    extension-points.md
+    extension-recipes.md
+
+  deployment/
+    README.md                         部署目录索引
+    deployment-topology.md
+    auth-unified-login.md
+    auth-security-roadmap.md
+    multi-environment-sync.md
+    deployment-ops.md
+    development-quickstart.md
+
+  implementation/
+    README.md                         实施目录索引
+    implementation-handoff.md
+    01-implementation-plan.md
+    api-and-ui-implementation.md
+    technical-debt-and-refactor-log.md
+
+  reference/
+    README.md                         参考材料目录索引
+    data-examples.md
+    legacy-system-spec.md
+    system-blueprint.md
+    ai-collaboration-engineering-case.md
+```
+
+子目录索引文件固定为：`architecture/README.md`、`product/README.md`、
+`backend/README.md`、`deployment/README.md`、`implementation/README.md`、
+`reference/README.md`。这些索引只说明目录内主次关系，不承载新的业务规则。
+
+新增或移动设计文档时，先判断它属于哪个目录；不要把专题文档重新放回
+`docs/` 根目录。根目录只保留本文和总纲。各子目录的 `README.md` 只做索引和主次关系说明，
+不是新的业务事实源。目录内也不能继续形成无主散文档：每个 `docs/**/*.md` 都必须被最近一层
+`README.md` 索引收住，并标明它是事实源、附录、状态图还是运行手册。移动文档或新增专题后必须
+运行 `make docs-check`，该命令会检查 `docs/` 根目录是否只保留 `README.md` 和
+`00-system-design.md`、每份文档是否已被所在层级索引，以及仓库内 `docs/...md` 引用是否指向真实文件。
+
+| 层级 | 主文档 | 回答的问题 | 不负责 |
+|---|---|---|---|
+| 设计治理 | `docs/architecture/design-governance.md` | 产品、前端、后端、契约、部署、验收如何分层 | 具体业务字段 |
+| 产品/业务总纲 | `docs/00-system-design.md` | 系统目标态、主链路、硬约束、部署目标 | 当前实现进度清单 |
+| 前端产品与页面 | `docs/product/frontend-product-design.md` | 页面地图、导航、顶部栏、用户旅程、页面能力出现规则 | 后端表结构和权限模型 |
+| 前端逐页规格 | `docs/product/page-specs/frontend-page-specs.md` | 每个页面的目标态、已做/未做、测试看护 | 后端字段和状态机事实源 |
+| 后端模块总图 | `docs/backend/backend-module-design.md` | 后端领域模块、数据归属、API/任务/事件边界 | 页面布局和视觉细节 |
+| 数据抓取/流转/存储 | `docs/backend/data-ingestion-flow-storage-design.md` | 数据源、抓取 run、raw、news、去重、覆盖率和追溯 | 推荐分和采信成稿 |
+| 推荐评分模块 | `docs/backend/recommendation-scoring-design.md` | 准入、评分、推荐 run、分数解释和反馈反哺 | 原始反馈写入和通知 |
+| 流水线与任务 | `docs/backend/pipeline-jobs-design.md` | 日更流水线、worker、scheduler、重试、幂等和任务状态 | 单个业务步骤的字段规则 |
+| 报告编审发布 | `docs/backend/reports-editorial-design.md` | 日报/周报、采信、编辑覆盖、发布、锁定、版本 | 多版成稿渲染细节 |
+| 工作台配置 | `docs/backend/workspace-configuration-design.md` | 工作台、sections、成员、label/feedback policy、domain pack | 数据主链实现 |
+| 身份权限模块 | `docs/backend/identity-access-design.md` | 用户、角色、SSO、邀请、membership、部署认证 | 顶部用户胶囊 UI |
+| 协作通知模块 | `docs/backend/collaboration-notification-design.md` | 点赞、评分、评论、活动事件、通知收件箱 | 顶部铃铛视觉 |
+| 战略闭环模块 | `docs/backend/strategy-loop-design.md` | insight、战略含义、需求、任务和外部信号追溯 | 日报/周报正文生成 |
+| 资料库与知识沉淀 | `docs/backend/archive-knowledge-design.md` | 历史报告、实体大事记、质量归档、旧资产导入验收 | 当前推荐和公司 SQL |
+| 审计运维可观测 | `docs/backend/audit-ops-observability-design.md` | 审计日志、健康、告警、备份恢复和运行证据 | 业务字段合同 |
+| 全局检索 | `docs/backend/search-design.md` | 检索对象、权限过滤、结果跳转和顶部搜索恢复条件 | 左侧导航 |
+| 同步冲突分发 | `docs/backend/sync-conflict-distribution-design.md` | sync feed/pull、inbox、conflict、resolve、人工包 fallback | 部署拓扑矩阵 |
+| 导出合规 | `docs/backend/export-compliance-design.md` | SQL 导出预检、门禁、任务、trace、下载权限 | SQL 字段映射明细 |
+| 安全密钥隐私 | `docs/backend/security-secrets-privacy-design.md` | secrets、cookie、CSRF、trusted header、sync redaction 和隐私边界 | 用户角色业务模型 |
+| 扩展治理 | `docs/backend/extension-governance-design.md` | adapter、domain pack、report format、auth provider 和可选页面的治理 | 扩展点接口细节 |
+| 契约与测试治理 | `docs/backend/contract-test-governance-design.md` | contract、schema、前后端测试、假控件拦截和 CI 门禁 | 单个模块字段定义 |
+| API/UI 对照 | `docs/implementation/api-and-ui-implementation.md` | 已有 API、页面与实现落点的对应关系 | 产品目标态定义 |
+| 部署拓扑 | `docs/deployment/deployment-topology.md` | standalone/cloud/extranet/intranet、能力开关、iframe、feed/pull | 前端页面信息架构 |
+| 同步专题 | `docs/deployment/multi-environment-sync.md` | 多库数据边界、feed/pull、手工包 fallback | 部署形态总矩阵 |
+| 能力地图 | `docs/architecture/capability-map.md` | 已实现、缺口、证据和优先级 | 重新定义目标架构 |
+| 实施任务 | `docs/implementation/implementation-handoff.md`、`docs/implementation/01-implementation-plan.md` | 开发顺序、验收命令、交接清单 | 覆盖总纲或模块设计 |
+| 机器契约 | `config/contracts/*.json` | 字段、枚举、流程、映射、接口边界 | 背景说明和产品叙事 |
+
+任何新增能力都必须先落到正确层级，再进入开发。前端控件不能单独定义后端能力，
+后端模块不能单独决定页面布局，contract 是二者之间的可测试边界。
+
+### 1.1 子目录主次关系
+
+每个子目录允许有一个 `README.md` 作为目录索引。索引只回答“这个目录有哪些文件、谁是事实源、
+谁是附录”，不得承载新的业务规则。
+
+| 目录 | 主事实源 | 附录或状态 |
+|---|---|---|
+| `docs/architecture/` | `design-governance.md`、`software-design-description.md` | `capability-map.md` 只记状态；`target-state-spec.md` 和 `strategic-intelligence-platform.md` 是附录 |
+| `docs/product/` | `frontend-product-design.md`、`page-specs/frontend-page-specs.md` | 目录 README 只索引页面设计 |
+| `docs/backend/` | `backend-module-design.md` 和各模块 `*-design.md` | `data-format-mapping.md`、`report-renditions-design.md`、`workspace-module-model.md` 等是模块附录 |
+| `docs/deployment/` | `deployment-topology.md`、`multi-environment-sync.md`、`auth-unified-login.md` | `deployment-ops.md` 和 `development-quickstart.md` 是运行手册 |
+| `docs/implementation/` | `implementation-handoff.md`、`01-implementation-plan.md` | `api-and-ui-implementation.md` 是实现对照；技术债单独记录 |
+| `docs/reference/` | 无目标态事实源 | 旧系统事实、历史蓝图和样例只作为参考 |
+
+## 2. 阅读顺序
 
 开发者或 AI 接手时：
 
-1. 先读 `AGENTS.md`。
-2. 再读 `docs/00-system-design.md`。
-3. 要全量实现或重写系统（含每个页面的元素规格、修改指南、用户扩展模型），读 `docs/system-blueprint.md`。
-4. 想快速掌握"有哪些能力、分布在哪、还差什么"，读 `docs/architecture-capability-map.md`。
-5. 要实施「账户登录 / 可扩展桌面 / 开箱部署」三个增量工作包，读 `docs/target-state-spec.md`（实现级规格与验收标准）。
-6. 再读 `docs/implementation-handoff.md`。
-7. 再读 `docs/01-implementation-plan.md`。
-8. 先读 `config/contracts/README.md`，理解 contracts 是什么。
-9. 写代码时查相关 `config/contracts/*.json` 和 `config/taxonomy/*.json`。
-10. 只在需要模块细节时阅读对应专题附录。
-11. 旧系统事实从私有参考仓查询；主仓说明见 `references/README.md`，不从旧代码直接继承新架构。
+1. 读 `AGENTS.md`，理解开发准则和不可破坏原则。
+2. 读 `docs/00-system-design.md`，理解系统目标态和主链路。
+3. 读 `docs/architecture/design-governance.md`，确认本次修改属于哪一层设计。
+4. 做前端页面/交互：读 `docs/product/frontend-product-design.md` 和 `docs/product/page-specs/frontend-page-specs.md`，必要时读 `docs/reference/system-blueprint.md` 的页面规格历史材料。
+5. 做后端模块：读 `docs/backend/backend-module-design.md`，并读对应模块设计文档。
+6. 做数据源、抓取、raw/news、去重、覆盖率：读 `docs/backend/data-ingestion-flow-storage-design.md`、`docs/backend/ingestion-adapter-dedup-spec.md`、`docs/backend/data-lineage-and-storage.md`。
+7. 做推荐、准入、评分、候选池解释：读 `docs/backend/recommendation-scoring-design.md`、`docs/backend/feedback-heat-scoring.md`。
+8. 做流水线、任务、scheduler、worker：读 `docs/backend/pipeline-jobs-design.md`。
+9. 做日报/周报编审发布：读 `docs/backend/reports-editorial-design.md`、`docs/backend/report-renditions-design.md`。
+10. 做工作台配置：读 `docs/backend/workspace-configuration-design.md`、`docs/backend/workspace-module-model.md`。
+11. 做登录、SSO、用户权限：读 `docs/backend/identity-access-design.md`、`docs/deployment/auth-unified-login.md`、`config/contracts/auth_modes.json`。
+12. 做评论、点赞、评分、通知：读 `docs/backend/collaboration-notification-design.md`、`docs/backend/feedback-heat-scoring.md`、`config/contracts/notifications.json`。
+13. 做洞察、需求、任务：读 `docs/backend/strategy-loop-design.md`、`config/contracts/strategic_loop.json`。
+14. 做历史归档、实体大事记、质量归档或旧资产导入：读 `docs/backend/archive-knowledge-design.md`、`docs/backend/tech-insight-loop-fusion-plan.md`、`config/contracts/archive_knowledge.json`、`config/contracts/tech_insight_loop_legacy_import.json`。
+15. 做审计、运行状态、告警、备份恢复：读 `docs/backend/audit-ops-observability-design.md`、`docs/deployment/deployment-ops.md`、`config/contracts/audit_ops.json`。
+16. 做顶部搜索或统一检索：读 `docs/backend/search-design.md`。
+17. 做公网/内网部署或联动同步：读 `docs/deployment/deployment-topology.md`、`docs/deployment/multi-environment-sync.md`、`docs/backend/sync-conflict-distribution-design.md`、`config/contracts/deployment_modes.json`、`config/contracts/sync_strategy.json`。
+18. 做安全、密钥、cookie、CSRF、trusted header 或同步脱敏：读 `docs/backend/security-secrets-privacy-design.md`。
+19. 做新 adapter、domain pack、report format、exporter、auth provider 或可选页面：读 `docs/backend/extension-governance-design.md`、`docs/backend/extension-points.md`、`config/contracts/extension_points.json`。
+20. 做公司 SQL 导出：读 `docs/backend/export-compliance-design.md`、`docs/backend/data-format-mapping.md`、`config/contracts/news_sql_mapping.json`。
+21. 写测试、修假控件、改 contract/schema/type：读 `docs/backend/contract-test-governance-design.md`。
+22. 查当前完成度和缺口：读 `docs/architecture/capability-map.md`。
+23. 写代码前读 `config/contracts/README.md` 和相关 `config/contracts/*.json`、`config/taxonomy/*.json`。
 
-当前进度：阶段 0-6 标准日报链路已完成可回填闭环。阶段 3 已完成旧种子源导入、共享数据源池、默认工作台源链接、工作台统一标签/新闻结构策略、adapter 框架、RSS/paper RSS/页面源抓取到 `raw_items`、工作台级 ingestion run API 和 Redis/RQ worker + scheduler 调度入口；规划部工作台 v1 默认 294 个共享源全部启用，CSV 状态/纳入建议只作为评分先验。阶段 4 已完成 raw 到 news 标准化、canonical URL、dedupe key、工作台隔离硬去重、winner/loser 回写和查询 API；阶段 5 已完成完整流水线 API、按 `day_key` 推荐 run、可解释推荐分、可选 MiniMax 中国区 OpenAI-compatible `generated_news`、日报草稿、发布、条目编辑和点赞/评分/评论最小 API；阶段 6 已实现已发布日报的公司 SQL 标准导出，`POST /api/exports/company-sql/daily-reports/{daily_report_id}` 只导出 `adoption_status = 2`、`generated_news.generation_status = ready` 且 `generated_by` 非 `rule_v1` 的采信项；`GET /api/exports/{export_job_id}/trace` 可按 SQL 语句追到日报条目、生成稿、news、raw 和数据源；MiniMax 未启用、超时或失败时只生成 `fallback_needs_review` 草稿，不直接写入标准 SQL。`planning_intel` 的成品新闻一级分类使用 `config/taxonomy/news_categories.json` 里的 AI 十分类，SQL category 默认使用同一个 `generated_news.category`；`config/taxonomy/source_tags.json` 是数据源侧方向标签，只用于源管理、覆盖分析和评分先验。`planning_intel/company_sql_v1` 生成稿必须带 `background/effects/eventSummary/technologyAndInnovation/valueAndImpact`；导出时 `content_json` 只保留这五个旧内网字段，`created_at` 必须严格对齐旧脚本和已验证合集 SQL 的列顺序与字面量样式，使用 `'YYYY-MM-DD HH:MM:SS'`，来源缺失发布时间时兜底为日报 `day_key 09:00:00`。所有 SQL 预览统一 `InfoWatchtower Company SQL Preview` 标题，且导入内网前必须通过 `python3 scripts/validate_company_sql.py` 逐字段校验。scheduler 开启后可按固定北京时间执行每日完整流水线：抓取、标准化/去重、推荐和日报草稿；生产推荐 `INGESTION_SCHEDULER_DAILY_TIME=09:00`、`INGESTION_SCHEDULER_TIMEZONE=Asia/Shanghai`、`DAILY_PIPELINE_DAY_OFFSET_DAYS=-1`，每天早上生成昨天日报。前端首页必须显示动态工作台状态；工作台壳和导航必须来自后端工作台配置；数据源页采用信息流式共享源列表和右侧标签/新闻结构 tab 面板；候选池页已接入 `dedupe_groups/news_items` 展示 winner/loser、重复来源、推荐分、日报采信状态和追溯 ID；推荐运行页已接入 recommendation runs 和分数拆解；抓取覆盖率页已接入 ingestion runs、RSS 窗口补采、sitemap/归档页/手工导入补采模式、目标日覆盖漏斗和每源链路详情；周报页已接入周报草稿、按一级标签形成板块、条目采信/剔除、板块内排序、编辑和发布；SQL 导出页已接入已发布日报、导出历史和条目追溯；日报页可按日期生成日报草稿，支持生成超时兜底、ready/fallback 状态展示和草稿生成稿重跑，并通过 brief 列表 + 详情弹窗完成正文查看、采信、编辑、点赞、评分、评论和追溯；本地恢复和演示补齐可用 `scripts/import_company_sql_preview_to_reports.py` 把已校验单日 SQL 预览回填为日报/周报工作台数据，且不改变公司 SQL 导出契约；需求、任务、同步、审计页已从路线图占位升级为真实 API 页面，同步页支持导出 zip 同步包、下载、导入幂等和核心对象 apply。`2026-05-21` 到 `2026-05-27` 的规划部日报已发布并导出 SQL；其中 5/27 通过当天 RSS/paper RSS 窗口补采新增 72 条 raw/news 后生成 6 条采信项。`planning_intel` 与 `ai_tools` 的默认标签策略必须保持后端隔离。
+## 3. 文档归位规则
 
-MiniMax 真实 key 验收命令已补齐并通过：`scripts/validate_minimax_generation_acceptance.py` 会调用同一条生成链路，检查十分类、五段 `content_json`、短关键词、技术洞察 `insight_json`、HTML 污染和来源未给出的百分比/P95/P99/倍数/延迟/显存数值；pytest 使用 `--fixture-response-json` 走同一套门禁，不需要提交密钥或模型输出。最新 live 证据为 `outputs/minimax/minimax_generation_acceptance.json`，原始模型响应保存在 `outputs/minimax/minimax_live_acceptance_20260703.response.txt`。
+### 3.1 总纲只放目标态
 
-蓝图 §9 全量业务验收已脚本化并在干净本地 Docker 环境通过：`scripts/run_full_acceptance.py`
-留存证据到 `outputs/acceptance/20260703T062259Z/`，覆盖 Setup 建号、邀请
-`editor_admin`、新建 `hardware_intel_*` 工作台、共享源+自建 RSS 源、自定义标签策略、
-自定义周报格式、日报流水线、日报双版 MD/HTML、周报 MD/HTML、公司 SQL 校验和备份。
+`docs/00-system-design.md` 是产品/业务总纲，只定义：
 
-Tech Insight Loop 第一轮融合补充：当前只迁入源治理和内容评分配置，不运行旧 `app.py`，不迁移旧 SQLite 的 articles/reports/entity_milestones。`POST /api/sources/import-tech-insight-loop` 从 `config/seeds/tech_insight_loop/sources_full_zh.csv` 导入 386 行源治理记录，其中 355 行有 RSS/URL/RSSHub 入口、31 行作为 `metadata_only/needs_entry` 待补入口；按 URL/RSS 去重后形成 363 个共享源，并保留源等级、渠道类型、专家路由、板块相关度和评分拆解。推荐层已接入 `config/scoring/content_scorer_v2.json`，在 `recommendation_items` 中保存 `admission_level/admission_score/admission_pool/noise_types/reject_reasons/scorer_breakdown/expert_routes`。这些字段只用于源治理、评分和前端解释，不改变 `generated_news.category`、公司 SQL category、五段 `content_json` 和导出筛选。
+- 系统定位和长期闭环。
+- 主数据流和硬约束。
+- 四种部署形态的目标行为。
+- 第一版范围和不可破坏边界。
 
-Tech Insight Loop 第二轮阶段 0 已完成只读资产盘点和历史素材/报告 dry-run：`scripts/tech_insight_loop_inventory.py` 只读读取 `references/参考工具/data/insight_loop.sqlite3`，本地输出 `outputs/tech_insight_loop/tech_insight_loop_inventory.{json,md}`，并用 `config/contracts/tech_insight_loop_legacy_import.json` 固化历史导入边界；`scripts/tech_insight_loop_legacy_dry_run.py` 输出 `outputs/tech_insight_loop/tech_insight_loop_legacy_dry_run.{json,md}`，确认 14834 条旧素材可作为历史 raw 归档候选，58 份 daily/weekly 报告可作为 `historical_reports` 归档候选，8 份 brief/brief_ppt 暂不进入本批归档。当前仍不写主库，不运行旧 `app.py`，不让历史资产进入当前推荐或公司 SQL。
+它不再承载详细实现状态、验收输出和每页 UI 元素。状态和证据归
+`docs/architecture/capability-map.md`，页面细节归 `docs/product/frontend-product-design.md`
+或 `docs/reference/system-blueprint.md` 的页面规格段。
 
-Tech Insight Loop 历史素材/报告真实导入脚本已实现：`scripts/tech_insight_loop_legacy_import.py` 默认不写库，只有显式 `--execute` 且配置 `DATABASE_URL` 后才写入；文章进入禁用的 `legacy_tech_insight_loop` 归档源和 `raw_items.raw_payload_json.legacy_tech_insight_loop`，报告进入 `historical_reports`，不直接写当前 `daily_reports/weekly_reports`，以避免旧库同一天/同周多报告和现有唯一键冲突。
+### 3.2 前端设计只管用户体验
 
-Tech Insight Loop 历史归档只读 API/UI 已实现：`GET /api/historical-reports/summary`、`GET /api/historical-reports`、`GET /api/historical-reports/{id}` 和前端 `/historical-reports` 可查看旧日报/周报归档、正文和引用解析/缺口。该页面只读，不触发导入、推荐或公司 SQL 导出。
+`docs/product/frontend-product-design.md` 只定义：
 
-Tech Insight Loop 实体大事记归档模型和导入脚本已实现：`tracked_entities/entity_milestones` 保存旧 `ai_entities/entity_milestones`，`scripts/tech_insight_loop_entity_import.py` 默认不写库，显式 `--execute` 且配置 `DATABASE_URL` 后才写入。事件会尽量解析到已导入的 `raw_items/historical_reports`；未解析旧引用保留在 `metadata_json.legacy_refs`。实体事件仍是历史/时间线资产，不进入当前推荐、日报或标准公司 SQL。
+- 信息架构、导航分组、顶部栏职责。
+- 每个页面的用户任务、空态、权限态、部署形态可用性。
+- 搜索、通知、账号入口等全局控件什么时候出现。
 
-Tech Insight Loop 实体大事记只读 API/UI 已实现：`GET /api/entity-timeline/summary`、`GET /api/tracked-entities`、`GET /api/entity-milestones`、`GET /api/entity-milestones/{id}` 和前端 `/entity-milestones` 可查看旧实体、事件时间线、重要等级和旧引用解析缺口。该页面只读，不触发导入、采信、推荐或公司 SQL 导出。
+它不能单独定义通知数据模型、SSO claims、viewer 是否能评论等后端策略。
 
-Tech Insight Loop 历史反馈和旧任务归档模型已实现：`historical_feedback_items/historical_job_runs` 保存旧 `feedback/article_quality_feedback/jobs`，`scripts/tech_insight_loop_quality_import.py` 默认不写库，显式 `--execute` 且配置 `DATABASE_URL` 后才写入。反馈会尽量解析到已导入的历史 `raw_items`；未解析旧引用保留在 `metadata_json.legacy_refs`。旧任务只保存统计、消息、失败原因和 details，不创建当前 `ingestion_runs`，也不迁移旧任务状态机。
+### 3.3 后端设计按领域模块组织
 
-Tech Insight Loop 质量归档只读 API/UI 已实现：`GET /api/quality-archive/summary`、`GET /api/historical-feedback-items`、`GET /api/historical-job-runs` 和前端 `/quality-archive` 可查看旧反馈、旧质量反馈、旧任务记录、失败源统计和反馈引用缺口。该页面只读，不触发导入，不创建当前评论/评分/抓取任务，不进入推荐、采信或公司 SQL。
+`docs/backend/backend-module-design.md` 是后端模块总图。模块细节拆到专题文档：
 
-Tech Insight Loop 导入验收 API/UI 已实现：`GET /api/legacy-import/summary` 和 `GET /api/legacy-import/gaps` 可按当前主库统计历史素材 raw、历史日报/周报、实体、实体大事记、历史反馈和旧任务导入覆盖率，并集中查看报告、实体事件和历史反馈的未解析引用。前端 `/historical-reports` 顶部展示导入验收面板。该入口只读，不执行导入脚本，不触发推荐、采信或公司 SQL。命令行执行验收脚本已补齐：`scripts/tech_insight_loop_import_verify.py --check-only` 只读核对当前库；小批量执行使用 `--execute --article-limit 20 --report-limit 5 --entity-limit 5 --milestone-limit 20`；如需同时导入历史反馈和旧任务归档，加 `--include-quality-archive --feedback-limit 4 --quality-feedback-limit 4 --job-limit 10`；全量执行必须显式加 `--confirm-full-import`。报告输出到 `outputs/tech_insight_loop/tech_insight_loop_import_execution_report.{json,md}`。本地隔离 PostgreSQL 全量验收已归档到 `outputs/tech_insight_loop/postgres_full_import_20260703T050653Z/`，7 项覆盖率 complete，30 个旧库断链引用已用 `outputs/tech_insight_loop/tech_insight_loop_import_accepted_gaps.json` 逐项归档并通过 validator；旧 PDF/二进制文本中的 NUL byte 会转义为 `\u0000` 标记并记录到 `legacy_import.nul_sanitized_fields`，避免 PostgreSQL text/JSONB 写入失败。生产全量导入后，仍需用同一条 `scripts/validate_tech_import_acceptance.py outputs/tech_insight_loop/tech_insight_loop_import_execution_report.json --accepted-gaps-json outputs/tech_insight_loop/tech_insight_loop_import_accepted_gaps.json` 做机器验收。
+- `docs/backend/data-ingestion-flow-storage-design.md`
+- `docs/backend/recommendation-scoring-design.md`
+- `docs/backend/pipeline-jobs-design.md`
+- `docs/backend/reports-editorial-design.md`
+- `docs/backend/workspace-configuration-design.md`
+- `docs/backend/identity-access-design.md`
+- `docs/backend/collaboration-notification-design.md`
+- `docs/backend/sync-conflict-distribution-design.md`
+- `docs/backend/export-compliance-design.md`
+- `docs/backend/strategy-loop-design.md`
+- `docs/backend/archive-knowledge-design.md`
+- `docs/backend/audit-ops-observability-design.md`
+- `docs/backend/search-design.md`
+- `docs/backend/security-secrets-privacy-design.md`
+- `docs/backend/extension-governance-design.md`
+- `docs/backend/contract-test-governance-design.md`
+- 采集、成稿、同步、导出等既有细节附录
 
-第三轮平台化与成稿融合补充（2026-07-02）：工作台自助扩展（`POST /api/workspaces` 自动配齐核心分区/标签策略/内置格式/成员，seed 不覆盖自建台）、自建信息源（`POST /api/sources` 入共享池并自动启用、同 URL 复用、`PATCH` 补入口）、抓取对齐旧系统（浏览器 UA + `max_items_per_source`）、「一次采信，多版成稿」P1-P4（`report_formats` 注册表、`report_renditions` 投影、`insight_json`、头条 Top6 可调、日报/周报双版视图与 MD/HTML 导出、日报页默认技术洞察版成品）、Apple Liquid Glass 视觉基线、六组垂直导航与晨报式今日速览。能力分块、分布架构与差距清单见 `docs/architecture-capability-map.md`。
+后端模块设计不能决定卡片、tab、顶部栏按钮等页面布局。
 
-SQL 时间口径补充：`created_at` 字面量按北京时间 `Asia/Shanghai` 渲染，和日报 `day_key` 的归属判断一致；字段格式仍为内网兼容的 `'YYYY-MM-DD HH:MM:SS'`，不得改成函数表达式或空值。
+### 3.4 部署同步要和业务能力解耦
 
-最近已验证：本地已生成 `2026-04-30` 单日日报 SQL 预览，`2026-05-01` 到 `2026-05-08` 批量日报和合并 SQL 预览，`2026-05-09` 到 `2026-05-14` 合并 SQL 预览，`2026-05-15` 到 `2026-05-20` 单日/合并 SQL 预览，以及 `2026-05-21` 到 `2026-05-27` 单日/合并 SQL 预览。当前还额外保留 `2026-05-09` 到 `2026-05-19`、`2026-05-09` 到 `2026-05-20` 总合集预览。预览文件放在 `outputs/sql/previews/`，该目录不进 Git。全部 SQL 预览已通过 `scripts/validate_company_sql.py`，0505 预览是字段校验基准。最近一次今天补采验证：`2026-05-27` RSS/paper RSS 当前窗口 289 个源中 221 个成功、68 个失败，抓取 10636 条，命中目标日 72 条并新增 raw/news，最终生成并发布 6 条采信项。演示/恢复库可用 `scripts/import_company_sql_preview_to_reports.py` 从已校验单日 SQL 预览回填日报和周报；本地已用 `2026-05-28` 到 `2026-06-12` 的 14 个单日预览回填 512 条日报采信项，并生成 3 个已发布周报草稿。当前已补历史补采前后端二期：`POST /api/ingestion/backfill-runs` 创建 `historical_backfill` run，支持 `rss_window/paper_api/archive_page/sitemap/manual_import` 模式，按目标日期窗口过滤 raw 入库，并在前端展示每源覆盖统计；`GET /api/ingestion/coverage` 已补目标日 raw/news/winner/recommendation/daily 漏斗。候选池已展示推荐分、日报采信状态和追溯 ID。周报前后端已提供草稿生成、条目采信编辑、排序和发布。需求、任务、同步和审计已提供真实列表/创建/状态更新页面；同步页已支持同步包导出、zip 下载、导入幂等和核心对象 apply；SQL 导出页已支持导出 trace。下一步优先深度历史补采、周报正文生成、部署登录硬化和真实环境备份恢复演练。
+`docs/deployment/deployment-topology.md` 定义部署形态和能力开关；
+`docs/deployment/multi-environment-sync.md` 定义数据边界和同步协议。
 
-给新工程师或 AI 的当前实现快照：
+内网部署不是另一套产品。它是同一代码在 `DEPLOY_MODE=intranet` 下禁用采集、
+启用 header 登录和 pull-only 同步。内网评论、点赞、评分、采信、需求、任务默认留在内网本地。
 
-- 已完成：本地可运行 monorepo、登录/RBAC、账户邀请/改密/重置/限流、首次运行 Setup、工作台 membership gate 和成员管理、三步建台向导、一键部署脚本、启动自动迁移、生产自检、备份/恢复脚本、hardware domain pack 样例、扩展配方文档、共享数据源池、Tech Insight Loop 源治理导入、Tech Insight Loop 旧资产只读盘点、历史导入 dry-run 和真实导入脚本、历史反馈/旧任务归档脚本、工作台统一标签策略、adapter 框架、抓取入 raw、标准化入 news、去重组、结构化内容准入评分、推荐、MiniMax 结构化生成、日报发布、公司 SQL 导出、周报采信项管理、需求/任务/同步/审计 v1。
-- 已可验收：`/sources` 管理共享源、Tech 源导入和工作台标签策略；`/ingestion-runs` 查看抓取/补采覆盖；`/news` 查看去重 winner、准入字段和推荐/日报追溯；`/daily-reports` 生成、编辑、发布日报；`/weekly-reports` 生成并管理周报候选；`/exports` 生成和下载 SQL。
-- 当前设计边界：成品新闻 category 仍使用规划部 AI 十分类；数据源方向标签只做源管理和评分先验；`adoption_status` 只属于日报/周报采信层；标准公司 SQL 只导出已发布日报中已采信且 MiniMax ready 的条目。
-- 当前主要缺口：更多同步 object_type 与冲突解决 UI、导出前字段长度/URL 长度/HTML 污染摘要、超出 RSS 当前窗口的深度历史补采、Tech Insight Loop 生产库实机全量导入验收、周报自动正文、从日报/周报沉淀 insight/requirement/task 的完整追溯、更多 domain pack 样例和快报 PPT 插件。
+## 4. 修改同步规则
 
-## 2. 单一事实源
+改主链路：
 
-- 总体目标、主链路、第一版边界：`docs/00-system-design.md`
-- 开发顺序和验收：`docs/implementation-handoff.md`
-- 阶段施工计划和验收命令：`docs/01-implementation-plan.md`
-- 开发准则和修改同步规则：`AGENTS.md`
-- 机器可读字段和流程：`config/contracts/*.json`
-- contracts 目录说明：`config/contracts/README.md`
-- AI 兼容标签和长期板块：`config/taxonomy/*.json`
-- 旧系统事实：`docs/legacy-system-spec.md` 与私有参考仓 `InfoWatchtower-References`
+- 更新 `docs/00-system-design.md`
+- 更新相关模块文档
+- 更新相关 `config/contracts/*.json`
+- 更新 `docs/architecture/capability-map.md` 的状态/缺口
 
-如果模块文档和总纲冲突，以总纲为准；如果自然语言文档和 JSON 契约冲突，开发前必须同时更新两者。
+改前端页面或顶部栏：
 
-## 3. 模块文档
+- 更新 `docs/product/frontend-product-design.md`
+- 更新 `docs/product/page-specs/frontend-page-specs.md` 的对应页面已做/未做和测试看护
+- 如果涉及 API 或页面实现落点，更新 `docs/implementation/api-and-ui-implementation.md`
+- 如果涉及后端能力，先更新对应后端模块文档和 contract
 
-- `docs/data-examples.md`：数据流样例。
-- `docs/software-design-description.md`：AI情报官 SDD 总装版，覆盖设计方法、架构、模块、DFX、时序和测试设计。
-- `docs/01-implementation-plan.md`：第一版施工顺序、阶段交付物和验收命令。
-- `docs/ingestion-adapter-dedup-spec.md`：采集、标准化和去重。
-- `docs/data-format-mapping.md`：信息源、业务字段、公司 SQL 三层映射。
-- `docs/data-lineage-and-storage.md`：存储、追溯、审计。
-- `docs/feedback-heat-scoring.md`：点赞、评论、评分、热度和来源评分。
-- `docs/api-and-ui-implementation.md`：后端 API、前端页面和验收。
-- `docs/auth-unified-login.md`：公网/内网统一登录。
-- `docs/auth-security-roadmap.md`：公网登录安全、Google SSO、公司 IDaaS 接入计划。
-- `docs/workspace-module-model.md`：工作台、共享数据源、候选池、标签和情报板块设计。
-- `docs/deployment-ops.md`：部署、备份、自动发布。
-- `docs/development-quickstart.md`：当前工程骨架的本地启动说明。
-- `docs/multi-environment-sync.md`：公网/内网多数据库同步。
-- `docs/extension-points.md`：可插拔扩展点。
-- `docs/strategic-intelligence-platform.md`：愿景展开附录。
-- `docs/technical-debt-and-refactor-log.md`：技术债务、微重构台账和后续治理计划。
-- `docs/ai-collaboration-engineering-case.md`：AI情报官协作研发案例总结。
+改后端模块：
 
-## 4. 修改规则
+- 更新 `docs/backend/backend-module-design.md`
+- 更新对应专题模块文档
+- 更新相关 contract、schema、测试
 
-改设计时按影响范围同步：
+改数据抓取、流转、存储：
 
-- 改主链路：更新 `docs/00-system-design.md`、`docs/implementation-handoff.md` 和相关 `config/contracts/*.json`。
-- 改某个模块：更新对应模块文档和相关 contract。
-- 改字段：更新 contract、模块文档、数据样例。
-- 改 SQL 导出：更新 `config/contracts/news_sql_mapping.json`、`docs/data-format-mapping.md`、`docs/data-examples.md`。
-- 改登录：更新 `config/contracts/auth_modes.json`、`docs/auth-unified-login.md`、`docs/auth-security-roadmap.md`、`docs/deployment-ops.md`。
-- 改工作台/模块/共享源：更新 `config/contracts/workspace_model.json`、`config/contracts/source_fields.json`、`docs/workspace-module-model.md`、`docs/00-system-design.md`。
-- 改标签体系：更新 `config/contracts/label_model.json`、`config/taxonomy/*.json`、对应模块文档和数据样例。
-- 改公网/内网同步：更新 `config/contracts/sync_strategy.json`、`docs/multi-environment-sync.md`。
-- 改前端工作台样式：更新 `docs/api-and-ui-implementation.md`，并确认 `AppShell.vue`、`SourcesPage.vue`、`base.css` 没有出现和高保真基线冲突的重复实现。
+- 更新 `docs/backend/data-ingestion-flow-storage-design.md`
+- 更新 `docs/backend/ingestion-adapter-dedup-spec.md` 或 `docs/backend/data-lineage-and-storage.md` 中的细节附录
+- 更新 `config/contracts/source_fields.json`、`config/contracts/adapter_pipeline.json`
+- 更新覆盖率、补采和追溯相关测试
 
-不要只改一处，让另一个文档保留旧逻辑。
+改推荐评分：
+
+- 更新 `docs/backend/recommendation-scoring-design.md`
+- 更新 `docs/backend/feedback-heat-scoring.md` 中的热度/来源评分细节
+- 更新评分配置、API schema 和前端解释字段
+
+改流水线/任务：
+
+- 更新 `docs/backend/pipeline-jobs-design.md`
+- 更新涉及的 run API、worker、scheduler、部署配置和测试
+- 确认部署形态能力开关仍覆盖 API、scheduler 和前端
+
+改报告编审发布：
+
+- 更新 `docs/backend/reports-editorial-design.md`
+- 更新 `docs/backend/report-renditions-design.md` 中的成稿投影细节
+- 更新采信、发布、锁定、版本和审计测试
+
+改工作台配置：
+
+- 更新 `docs/backend/workspace-configuration-design.md`
+- 更新 `docs/backend/workspace-module-model.md` 和 `config/contracts/workspace_model.json`
+- 同步 label/feedback policy、sections、members、source links 的前后端测试
+
+改登录/用户/权限/SSO：
+
+- 更新 `docs/backend/identity-access-design.md`
+- 更新 `docs/deployment/auth-unified-login.md`
+- 更新 `docs/deployment/deployment-topology.md` 中部署形态约束
+- 更新 `config/contracts/auth_modes.json`
+
+改评论/点赞/评分/通知：
+
+- 更新 `docs/backend/collaboration-notification-design.md`
+- 更新 `docs/backend/feedback-heat-scoring.md`
+- 若新增通知 contract，更新 `config/contracts/notifications.json`
+- 更新前端消息入口设计，避免出现无后端闭环的铃铛或红点
+
+改洞察/需求/任务：
+
+- 更新 `docs/backend/strategy-loop-design.md`
+- 更新 `config/contracts/strategic_loop.json`
+- 更新需求、任务、来源追溯和通知/审计测试
+
+改历史归档/实体大事记/质量归档：
+
+- 更新 `docs/backend/archive-knowledge-design.md`
+- 更新 `config/contracts/archive_knowledge.json`
+- 如涉及旧资产导入，再更新 `docs/backend/tech-insight-loop-fusion-plan.md` 或旧资产导入 contract
+- 更新归档只读、导入验收和“不得进入当前推荐/SQL”的测试
+
+改审计/运维/可观测：
+
+- 更新 `docs/backend/audit-ops-observability-design.md`
+- 更新 `config/contracts/audit_ops.json`
+- 更新 `docs/deployment/deployment-ops.md` 或部署验收脚本
+- 更新 audit action、健康检查、告警、备份恢复证据
+
+改顶部搜索或统一检索：
+
+- 更新 `docs/backend/search-design.md`
+- 更新 `docs/product/frontend-product-design.md`
+- 更新 `config/contracts/search.json`
+- 更新权限过滤、结果跳转和空态测试；没有 Search 后端时顶部搜索不得显示
+
+改公网/内网同步：
+
+- 更新 `docs/deployment/deployment-topology.md`
+- 更新 `docs/deployment/multi-environment-sync.md`
+- 更新 `docs/backend/sync-conflict-distribution-design.md`
+- 更新 `config/contracts/sync_strategy.json`
+
+改安全、密钥、cookie、CSRF、trusted header 或同步脱敏：
+
+- 更新 `docs/backend/security-secrets-privacy-design.md`
+- 更新 `docs/deployment/deployment-topology.md`、`docs/deployment/auth-unified-login.md` 或相关 contract
+- 更新 secret-like redaction、启动自检、CSRF、header 信任边界测试
+
+改扩展点、domain pack、adapter、report format 或可选页面：
+
+- 更新 `docs/backend/extension-governance-design.md`
+- 更新 `docs/backend/extension-points.md`
+- 更新 `config/contracts/extension_points.json` 或相关注册表测试
+
+改 contract、schema、前端测试或假控件问题：
+
+- 更新 `docs/backend/contract-test-governance-design.md`
+- 更新相关 contract、Pydantic schema、TypeScript API type、Vitest/pytest/Playwright
+- 已发现的假成功和点击无效问题必须进入回归测试
+
+改字段：
+
+- 更新对应 contract
+- 更新模块文档
+- 更新 `docs/reference/data-examples.md`
+
+改 SQL 导出：
+
+- 更新 `docs/backend/export-compliance-design.md`
+- 更新 `config/contracts/news_sql_mapping.json`
+- 更新 `docs/backend/data-format-mapping.md`
+- 更新 `docs/reference/data-examples.md`
+- 确认 `scripts/validate_company_sql.py` 仍覆盖新字段
+
+## 5. 设计进入开发门禁
+
+任何新增能力进入代码前必须回答：
+
+1. 它属于哪个后端模块？
+2. 它出现在哪些前端页面或全局壳位置？
+3. 它是否需要新增或修改 contract？
+4. 它如何验收，前端和后端各有哪些测试？
+5. 它在 standalone/cloud/extranet/intranet 四种部署形态下是否一致可用？
+
+以上问题没有明确答案前，不开发“看起来可用”的前端控件。
+
+## 6. 旧文档处理
+
+`docs/reference/system-blueprint.md` 仍保留为历史全量蓝图和页面规格来源，但不再作为唯一总纲。
+当它与当前分层文档冲突时，先按本 README 的权威关系修正冲突，再开发。
+
+旧系统事实仍以 `docs/reference/legacy-system-spec.md` 和私有参考仓 `InfoWatchtower-References`
+为准。参考仓是事实来源，不是新系统运行入口。

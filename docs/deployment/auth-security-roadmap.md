@@ -1,6 +1,9 @@
 # 登录安全与 SSO 改进计划
 
-本文说明当前登录实现、上线风险、Google SSO 和公司 IDaaS 接入方式。它补充 `docs/auth-unified-login.md`，不替代机器契约 `config/contracts/auth_modes.json`。
+本文说明当前登录实现、上线风险、Google SSO 和公司 IDaaS 接入方式。它补充
+`docs/deployment/auth-unified-login.md`，不替代机器契约 `config/contracts/auth_modes.json`。
+安全、密钥、cookie、CSRF、trusted header、同步脱敏和隐私边界的横切事实源是
+`docs/backend/security-secrets-privacy-design.md`。
 
 ## 1. 当前实现状态
 
@@ -17,7 +20,7 @@
 - 账户生命周期：管理员邀请建号、撤销邀请、改密、忘记密码恒定响应、管理员代重置临时密码。
 - 登录限流：`login_attempts` 记录同一账号+IP 成功/失败，15 分钟 5 次失败后返回 429。
 - 启动自检：`AUTH_MODE=public_password` 且缺 `AUTH_SESSION_SECRET` 时 API 启动失败。
-- OIDC 预留：`app/auth/oidc.py` 已定义 adapter Protocol，`AUTH_MODE=oidc` 未配置 provider 时返回 501。
+- OIDC：`AUTH_MODE=oidc` 已实现通用 authorization code flow + PKCE；未配置 `OIDC_CLIENT_ID` 或 issuer/显式端点时启动/请求失败。当前身份解析优先使用 provider userinfo，id_token payload 仅作为兜底。
 - 审计：登录、登出、角色变更写入 `audit_logs`。
 
 本地 Docker 开发账号：
@@ -40,7 +43,10 @@ POSTGRES_PASSWORD
 
 公网继续补强：
 
-- CSRF：cookie session 下，所有非 GET 请求需要 CSRF token。
+- CSRF：cookie session 下，所有非 GET 请求需要 CSRF token。方案已定稿为双提交
+  cookie 模式（非 HttpOnly `infowatchtower_csrf` cookie + `X-CSRF-Token` 头一致性
+  校验，`AUTH_CSRF_ENABLED` 按 `DEPLOY_MODE` 取默认值），见
+  `docs/deployment/deployment-topology.md` §4.3，随 P0-6 落地。
 - 服务端 session：signed cookie 无法主动踢下线，建议改成 Redis/DB session。
 - session 管理：补 session 列表和主动踢下线。
 - 密钥轮换：支持 `AUTH_SESSION_SECRET` 多版本轮换。
@@ -50,6 +56,42 @@ POSTGRES_PASSWORD
 - 默认管理员：首次初始化后禁用 bootstrap 密码，或者要求管理员立刻改密。
 
 ## 3. Google SSO 接入方案
+
+2026-07 升级：通用 `AUTH_MODE=oidc` 的 authorization code flow + PKCE 已实现，
+id_token 校验也已落地（如实描述：拒绝 `alg=none`；配置 `OIDC_JWKS_URI` 或
+discovery 有 `jwks_uri` 时对 RS256/384/512 验签，无 JWKS 时强校验
+iss/aud/exp/nonce；userinfo 主路径下 id_token nonce 依然强制校验）；
+本节与 §4 保留 provider 配置和 claims 字段映射说明。
+
+统一端点与流程（provider 无关）：
+
+```text
+GET  /api/auth/oidc/start      生成 state/nonce/PKCE code_verifier，302 到 IdP
+GET  /api/auth/oidc/callback   校验 state/nonce
+                               -> code + code_verifier 换 token
+                               -> 调 provider userinfo 获取 sub/email/name/department
+                               -> ExternalIdentity(provider=oidc, external_id=sub)
+                               -> 复用 AUTH_AUTO_PROVISION/AUTH_DEFAULT_ROLE 查/建用户
+                               -> 签发既有本地 session cookie
+```
+
+统一 env：
+
+```text
+OIDC_ISSUER
+OIDC_CLIENT_ID
+OIDC_CLIENT_SECRET
+OIDC_SCOPES
+OIDC_REDIRECT_URL
+OIDC_PROVIDER
+OIDC_POST_LOGIN_REDIRECT_URL
+OIDC_AUTHORIZATION_ENDPOINT
+OIDC_TOKEN_ENDPOINT
+OIDC_USERINFO_ENDPOINT
+```
+
+Google（本节）与公司 IDaaS（§4）是该通用 adapter 的两个 provider 特化，差异只在
+字段映射和 userinfo 获取方式。
 
 Google SSO 应使用 OpenID Connect Authorization Code Flow，避免前端直接持有长期 token。
 
@@ -69,7 +111,8 @@ GET  /api/auth/google/callback
 -> Google 回调 code
 -> 后端校验 state
 -> 后端用 code 换 token
--> 校验 ID token 的 issuer/audience/expiry/nonce/signature
+-> 校验 ID token（已实现：有 JWKS 验签 RS256/384/512；无 JWKS 强校验
+   issuer/audience/expiry/nonce；拒绝 alg=none）
 -> 生成 ExternalIdentity
 -> 查找或创建本地 user
 -> 签发 InfoWatchtower session
@@ -219,3 +262,8 @@ AUTH_MODE=intranet_header
 - backend 不直连用户。
 - 网关覆盖并清洗身份 header。
 - 用户自带 header 不能穿透。
+
+内网门户 iframe 嵌入方案已定稿（不再是零设计）：同站反向代理承载 + CSP
+frame-ancestors 白名单（`EMBED_FRAME_ANCESTORS`）+ CSRF 双提交 cookie，禁止放开
+SameSite=None；见 `docs/deployment/deployment-topology.md` §4 与
+`docs/deployment/auth-unified-login.md` §6.1。

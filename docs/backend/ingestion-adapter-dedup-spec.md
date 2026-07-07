@@ -2,6 +2,10 @@
 
 这份文档是后端采集与候选层的专题附录。项目入口是 `docs/00-system-design.md`；本文只展开多源数据如何进系统、怎么映射成统一结构、在哪里去重、去重规则是什么。
 
+当前数据抓取、流转、存储的目标态事实源是
+`docs/backend/data-ingestion-flow-storage-design.md`。本文保留为 Adapter、raw/news 和去重规则
+的细节附录。
+
 机器可读契约：
 
 - `config/contracts/adapter_pipeline.json`
@@ -18,8 +22,8 @@
 - 新闻到 SQL 映射：`config/contracts/news_sql_mapping.json`
 - 新闻一级标签：`config/taxonomy/news_categories.json`
 - 数据源方向标签：`config/taxonomy/source_tags.json`
-- 登录设计：`docs/auth-unified-login.md`
-- 旧系统规格：`docs/legacy-system-spec.md`
+- 登录设计：`docs/deployment/auth-unified-login.md`
+- 旧系统规格：`docs/reference/legacy-system-spec.md`
 
 当前仓库已经有可运行的 `backend/`、`frontend/`、数据库迁移和测试；采集侧已完成 adapter 框架、单源 RSS/paper RSS/page_manual/page_monitor 抓取、工作台级 ingestion run API，以及 Redis/RQ worker + scheduler 调度入口。标准化与去重侧已完成 `POST /api/news-items/normalize`、`GET /api/news-items`、`GET /api/dedupe-groups` 的阶段 4 闭环；推荐与日报侧已完成 `POST /api/pipeline/daily-runs`、`POST /api/recommendation/runs`、日报草稿、发布、条目编辑和点赞/评分/评论的阶段 5 可回填闭环。
 
@@ -45,19 +49,28 @@ Adapter 不负责：
 
 ## 3. 源类型与 Adapter
 
+11 类 source_type 均已有真适配器（实现状态与测试锚点汇总见
+`docs/backend/backend-capability-test-matrix.md` §3）：
+
 | source_type | Adapter | 说明 |
 | --- | --- | --- |
-| `wiseflow` | `WiseflowReadInfoAdapter` | 旧系统原始聚合源，必须走 `POST /read_info` 分页 |
+| `wiseflow` | `WiseflowReadInfoAdapter` | 对接 wiseflow 4.x 实例，走 `POST /read_info` 分页拉取（`GET /list_info` 每 focus 上限 12 条，禁止用于全量） |
 | `rss` | `RssFeedAdapter` | 普通 RSS/Atom |
 | `paper_rss` | `RssFeedAdapter + PaperMetadataEnricher` | 论文 RSS，后续补 arXiv/DOI/PDF/作者 |
 | `page_monitor` | `PageListingAdapter` | 列表页抓链接，再抓详情页 |
 | `page_manual` | `ManualPageAdapter` | 手工 seed URL |
-| `crawler` | `CustomCrawlerAdapter` | 自定义爬虫 |
-| `csv` | `CsvFileAdapter` | 本地/桌面 CSV 源，后续按 CSV schema 映射为 raw items |
-| `paper_api` | `PaperApiAdapter` | arXiv API、Semantic Scholar、OpenAlex、Crossref |
-| `paper_page` | `PaperPageAdapter` | Hugging Face Papers 等页面 |
-| `manual` | `ManualNewsAdapter` | 人工补录 |
-| `internal` | `InternalSourceAdapter` | 未来内部数据源 |
+| `crawler` | `CustomCrawlerAdapter` | 通用列表页爬虫：href 规则筛链接 + 复用 page 正文抽取 |
+| `csv` | `CsvFileAdapter` | 本地/远程 CSV 源，列映射与 manual-import 预览约定一致 |
+| `paper_api` | `PaperApiAdapter` | arXiv API v1、OpenAlex Works v1 和 Semantic Scholar bulk search v1 已落地；OpenReview、Crossref 后续扩展 |
+| `paper_page` | `PaperPageAdapter` | 会议 accepted papers / 实验室 publications 等论文列表页 |
+| `manual` | `ManualNewsAdapter` | 推入式：条目由 manual-import 写入，定时抓取如实返回 0 条新增（成功、非失败） |
+| `internal` | `InternalSourceAdapter` | 默认推入式；配置 `fetch_config.api_url` 后升级为通用 JSON API 拉取器 |
+
+run 层保留 `skipped_unimplemented` 显式语义作为安全网：任何未来注册但尚未实现的
+placeholder adapter 必须显式抛出未实现语义，run 的每源摘要写
+`status=skipped_unimplemented`，run 汇总写 `source_skipped_unimplemented`。这类源不算
+`source_succeeded`，也不算 `source_failed`，前端必须展示“尚未实现”，不能显示成功 0 条
+（`app/adapters/stubs.py` 仅供该语义的回归测试注册）。
 
 ## 4. 是删减还是补充
 
@@ -192,8 +205,9 @@ workspace ingestion run
 - 默认处理当前工作台已启用、且源本身启用的 `rss/paper_rss/page_manual/page_monitor/wiseflow`。
 - `ingestion_runs` 保存 run 参数、状态、处理源数量、成功/失败、拉取数、raw 新增数和 raw 更新数。
 - `summary_json.sources` 保存每个源的结果摘要。
+- `POST /api/ingestion/runs/{run_id}/retry-failed-sources` 已支持手动失败源重试：只抽取原 run 中失败源，按低并发长超时重跑，并在新 run 中记录 `retry_of_run_id` 和 `source_ids`。
 
-尚未实现：失败源重试队列。已实现并发抓取和 scheduler 触发 `ingestion -> normalize/dedupe -> recommendation -> daily_report_draft`；如需只抓取，可设置 `SCHEDULER_JOB_MODE=ingestion_only`。
+已实现并发抓取、手动失败源重试、失败源自动重试队列 v1、失败源站内告警投递 v1、近 14 日覆盖趋势和 scheduler 触发 `ingestion -> normalize/dedupe -> recommendation -> daily_report_draft`；如需只抓取，可设置 `SCHEDULER_JOB_MODE=ingestion_only`。尚未实现的是邮件/外部告警通道、生产 runbook 和更长周期趋势分析。
 
 ## 6.2 标准化与硬去重 API
 
@@ -237,7 +251,7 @@ workspace ingestion run
 - raw 是否满足标准化进入 `news_items` 的最低条件。
 - 去重后是否是 active winner。
 
-当前已经记录 `ingestion_runs.summary_json.sources`，并在前端 `/ingestion-runs` 展示运行历史、每源成功/失败、fetched、raw created/updated，以及历史补采的 in-range、out-of-range、missing published_at 和错误原因。下一阶段继续把这些信息和 raw/news/winner 联动统计产品化：
+当前已经记录 `ingestion_runs.summary_json.sources`，并在前端 `/ingestion-runs` 展示运行历史、每源成功/失败、fetched、raw created/updated，以及历史补采的 in-range、out-of-range、missing published_at 和错误原因。目标日覆盖漏斗与近 14 日趋势已经把这些信息和 raw/news/winner/recommendation/daily 统计产品化：
 
 ```text
 day_key
@@ -256,13 +270,15 @@ per_source_breakdown
 
 历史补采不能只靠普通 RSS。很多 RSS 只暴露最近 N 条，今天拉取不一定能还原 5 天前或 1 个月前的完整内容。需要为关键源逐步补：
 
-- 论文/API：arXiv、OpenAlex、Semantic Scholar、OpenReview、Hugging Face Papers 等可按日期回查的接口，优先用于恢复历史论文候选。
+- 论文/API：arXiv v1 已支持按 `target_day_start/target_day_end` 生成 submittedDate 查询并写入 raw；OpenAlex Works v1 已支持按 `publication_date` 日期窗口回查并保留完整 work payload；Semantic Scholar bulk search v1 已支持按 `publicationDateOrYear` 日期窗口回查并保留完整 paper payload；OpenReview、Hugging Face Papers 等可按日期回查的接口后续扩展，优先用于恢复历史论文候选。
 - 官方归档页：厂商技术博客、标准组织、云厂商、硬件厂商的 archive、sitemap、分页列表和详情页 crawler。
 - 页面监控增强：对已知页面源补 `since/until`、URL 发现和详情抽取，不能只依赖当前首页。
-- 失败源重试：对 timeout/403/connect error 按低并发、长超时、退避策略重试，并把失败原因写入 run summary。
-- 手工补录或 CSV/SQL 导入：作为最后兜底，必须仍然写入 `raw_items.raw_payload_json`，保留追溯。
+- 失败源重试：手动 v1 已按低并发、长超时重试上一轮失败源，并把失败原因写入 run summary；自动队列 v1 已支持 `INGESTION_FAILED_SOURCE_AUTO_RETRY_ENABLED`、指数退避、尝试上限、到期/阻塞摘要、scheduler 投递和站内告警；后续继续补邮件/外部告警通道和生产 runbook。
+- 手工补录或 CSV/SQL 导入：作为最后兜底，必须仍然写入 `raw_items.raw_payload_json`，保留追溯；当前
+  `/ingestion-runs` 已支持上传或粘贴 CSV/SQL、后端预览、逐行校验和错误报告下载。SQL v1 只支持带列名的
+  `INSERT ... VALUES ...` 文本，不做无列名 SQL 猜测。
 
-历史补采已经复用 `ingestion_runs`，入口是 `POST /api/ingestion/backfill-runs`，也可以从任务层调用 `run_historical_backfill_job`。当前支持 `rss_window/paper_api/archive_page/sitemap/manual_import`：`rss_window` 不是完整历史恢复承诺，只在目标日期仍出现在当前 feed 窗口时低成本补采；`paper_api` 依赖已注册 adapter；`archive_page` 和 `sitemap` 是轻量 URL 发现入口；`manual_import` 用于人工补录 raw 条目。超出这些能力的完整历史恢复仍要继续建设更强的论文 provider、厂商/标准组织分页归档 crawler 和失败源重试。
+历史补采已经复用 `ingestion_runs`，入口是 `POST /api/ingestion/backfill-runs`，也可以从任务层调用 `run_historical_backfill_job`。当前支持 `rss_window/paper_api/archive_page/sitemap/manual_import`：`rss_window` 不是完整历史恢复承诺，只在目标日期仍出现在当前 feed 窗口时低成本补采；`paper_api` 当前可通过 arXiv API 按 submittedDate 日期窗口回查，也可通过 OpenAlex Works API 按 publication_date 日期窗口回查，还可通过 Semantic Scholar bulk search 按 publicationDateOrYear 日期窗口回查，并保留论文元数据和完整 upstream payload；`archive_page` 和 `sitemap` 是轻量 URL 发现入口；`manual_import` 用于人工补录 raw 条目，要求每行归属到本次运行所选的已启用源，且至少包含标题、URL 或正文，原始行保存在 `raw_payload_json.payload`。`POST /api/ingestion/runs/{run_id}/retry-failed-sources` 可对 `workspace_fetch` 和非 `manual_import` 的 `historical_backfill` 运行做失败源手动重试；自动重试队列 v1 会跳过 `manual_import`，并对到期失败源按退避策略重放。超出这些能力的完整历史恢复仍要继续建设 OpenReview 等论文 provider、厂商/标准组织分页归档 crawler、邮件/外部告警通道和生产 runbook。
 
 补采 run 参数必须明确：
 

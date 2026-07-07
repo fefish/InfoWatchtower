@@ -7,8 +7,8 @@
 
 - 本文 = 系统级蓝图（产品定义、领域模型、管线、API 面、**每个页面的元素级规格与
   修改指南**、扩展模型、视觉系统）。
-- `docs/architecture-capability-map.md` = 现状与差距对照（哪些已实现，避免重做）。
-- `docs/target-state-spec.md` = 账户/部署/扩展加固三个增量工作包的实施细则。
+- `docs/architecture/capability-map.md` = 现状与差距对照（哪些已实现，避免重做）。
+- `docs/architecture/target-state-spec.md` = 账户/部署/扩展加固三个增量工作包的实施细则。
 - `config/contracts/*.json` = 字段与流程的机器合同，冲突时以合同为准。
 
 ## 1. 产品定义与租户模型
@@ -37,7 +37,7 @@ company_sql_v1 锁定格式、公司 SQL 导出合同。任何页面、服务、
 
 ## 2. 领域模型（表族与职责）
 
-详细字段见 `config/contracts/*.json` 与 `docs/data-lineage-and-storage.md`。
+详细字段见 `config/contracts/*.json` 与 `docs/backend/data-lineage-and-storage.md`。
 按能力族分组（表名 = SQLAlchemy `backend/app/models/` 中的定义）：
 
 ```text
@@ -80,7 +80,7 @@ company_sql_v1 锁定格式、公司 SQL 导出合同。任何页面、服务、
 
 ## 4. API 面
 
-全部端点清单与语义见 `docs/api-and-ui-implementation.md` §2（保持为唯一 API 目录）。
+全部端点清单与语义见 `docs/implementation/api-and-ui-implementation.md` §2（保持为唯一 API 目录）。
 分组速览：auth（+目标态 invites/password/setup）、workspaces（列表/创建/分区/标签策略）、
 sources（列表/自建/编辑/工作台链接/导入/抓取）、ingestion（runs/backfill/coverage）、
 news（normalize/list/dedupe-groups）、recommendation、reports（daily/weekly CRUD+publish+
@@ -281,8 +281,8 @@ iOS 开关、彩色语义胶囊（准入/状态）、等宽大数字。修改规
 
 ## 9. 全量实现的验收
 
-1. `docs/architecture-capability-map.md` §4 差距清单全部关闭或明确豁免。
-2. `docs/target-state-spec.md` §8 端到端走查通过（部署→建号→邀请→建台→自建源→
+1. `docs/architecture/capability-map.md` §4 差距清单全部关闭或明确豁免。
+2. `docs/architecture/target-state-spec.md` §8 端到端走查通过（部署→建号→邀请→建台→自建源→
    流水线→双版成稿导出→SQL 校验→备份）。
 3. 本文 §5 每个页面的元素清单与空态要求逐页核对。
 4. 后端 pytest 全绿；前端 build 通过；公司 SQL 校验脚本通过。

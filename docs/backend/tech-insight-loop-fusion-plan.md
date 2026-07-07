@@ -1,5 +1,10 @@
 # Tech Insight Loop 与 InfoWatchtower 融合方案
 
+> 定位：本文是 Tech Insight Loop 融合过程和旧资产迁移细节附录，不是资料库模块总设计。
+> Archive / Knowledge 模块事实源是 `docs/backend/archive-knowledge-design.md`；
+> 机器契约是 `config/contracts/tech_insight_loop_legacy_import.json`。
+> 如果本文与事实源冲突，先同步修正后再实现。
+
 ## 1. 当前输入和结论
 
 当前根目录只发现一个压缩包：
@@ -266,15 +271,15 @@ Tech Insight Loop 迁入资产
 - 新增 `scripts/tech_insight_loop_entity_import.py`，默认 no-write；只有传入 `--execute` 且配置目标 `DATABASE_URL` 时才写入 InfoWatchtower 主库。
 - 旧实体和事件完整原行进入 `metadata_json.legacy_tech_insight_loop`；事件会尽量解析到已导入的 `raw_items` 和 `historical_reports`，未解析旧 `article_id/report_id` 保留在 `metadata_json.legacy_refs`。
 - 导入幂等键为 `legacy_system + legacy_table + legacy_id`，不会修改 `raw_items/news_items/historical_reports`，也不会进入当前推荐、日报或公司 SQL。
-- 新增只读 API 和前端入口：`GET /api/entity-timeline/summary`、`GET /api/tracked-entities`、`GET /api/entity-milestones`、`GET /api/entity-milestones/{id}` 和 `/entity-milestones`，用于查看实体列表、事件时间线、重要等级、板块和旧引用解析缺口。
-- `/entity-milestones` 当前只读，不触发导入、不编辑事件、不写推荐、日报/周报采信或标准公司 SQL。
+- 新增 API 和前端入口：`GET /api/entity-timeline/summary`、`GET /api/tracked-entities`、`GET /api/entity-milestones`、`GET /api/entity-milestones/{id}` 和 `/entity-milestones`，用于查看实体列表、事件时间线、重要等级、板块和旧引用解析缺口；`PATCH /api/entity-milestones/{id}` 只治理当前系统新登记事件。
+- `/entity-milestones` 不触发导入、不写推荐、日报/周报采信或标准公司 SQL。旧导入事件只读；当前日报/周报条目登记出的 `legacy_system=current` 事件可编辑、确认、撤销，并可转成 requirement 来源。
 - 新增导入验收 API 和前端入口：`GET /api/legacy-import/summary`、`GET /api/legacy-import/gaps` 和 `/historical-reports` 顶部验收面板，用于核对历史 raw、报告、实体、事件覆盖率和未解析旧引用。
 - 新增命令行执行验收包装：`scripts/tech_insight_loop_import_verify.py`，复用同一套导入摘要和缺口统计；默认不写库，`--check-only` 只读核对当前库，`--execute` 配合 limit 做小批量导入，全量必须显式 `--confirm-full-import`。
 
 交付：
 
 - 配置 `DATABASE_URL` 后真实数据库小批量/全量执行历史和实体导入，并用现有导入验收入口和输出报告核对导入摘要、未解析旧引用和跳过原因。
-- 实体大事记页面后续补事件编辑和从日报/周报采信项继续沉淀实体事件；当前只读页面先用于核对旧库导入质量和引用缺口。
+- 实体大事记页面已补当前事件编辑、确认、撤销和从日报/周报采信项继续沉淀实体事件；历史导入事件仍用于核对旧库导入质量和引用缺口，不允许覆盖旧行。
 
 验收：
 
@@ -293,7 +298,7 @@ Tech Insight Loop 迁入资产
 - 旧反馈和质量反馈完整原行进入 `metadata_json.legacy_tech_insight_loop`，并尽量解析到已导入的历史 `raw_items`；未解析旧 `article_id` 保留在 `metadata_json.legacy_refs`。
 - 旧任务只作为统计型历史运行记录保存，不创建当前 `ingestion_runs`，不迁移旧任务状态机。
 - 导入验收摘要已扩展历史反馈和旧任务指标，`GET /api/legacy-import/gaps` 可展示历史反馈未解析素材引用。
-- 新增 `GET /api/quality-archive/summary`、`GET /api/historical-feedback-items`、`GET /api/historical-job-runs` 和前端 `/quality-archive`，用于只读查看旧反馈、质量反馈、旧任务统计和反馈引用缺口。
+- 新增 `GET /api/quality-archive/summary`、`GET /api/historical-feedback-items`、`GET /api/historical-job-runs` 和前端 `/quality-archive`，用于查看旧反馈、质量反馈、旧任务统计和反馈引用缺口；查询保持只读，workspace admin 可把单条历史反馈通过 `source_historical_feedback_item_id` 登记为当前 requirement 来源。
 - `scripts/tech_insight_loop_import_verify.py` 可通过 `--include-quality-archive` 显式把历史反馈和旧任务归档纳入小批量/全量执行验收。
 
 交付：
@@ -324,7 +329,7 @@ Tech Insight Loop 迁入资产
 
 1. 源融合：386 个源与当前 294 个源去重合并，保留源等级和专家路由。当前已完成第一轮导入能力。
 2. 评分器融合：迁入 `content_scorer_config`，让候选池和日报选择更稳。当前已完成结构化准入字段落库和前端展示。
-3. 历史报告和实体大事记只读导入：先能查历史日报/周报和实体时间线，不急着纳入 SQL 和新日报流水线。当前已完成只读盘点、dry-run、真实归档导入脚本、实体大事记导入脚本、`/historical-reports`、`/entity-milestones`、导入摘要/引用缺口只读查看入口和执行验收脚本，下一步是在配置真实 `DATABASE_URL` 后执行验收。
+3. 历史报告和实体大事记导入：先能查历史日报/周报和实体时间线，不急着纳入 SQL 和新日报流水线。当前已完成只读盘点、dry-run、真实归档导入脚本、实体大事记导入脚本、`/historical-reports`、`/entity-milestones`、导入摘要/引用缺口只读查看入口、当前事件治理和执行验收脚本，下一步是在配置真实 `DATABASE_URL` 后执行生产验收。
 
 这三步完成后，系统的可见收益最大：源更多、噪声更低、历史可查，同时不会破坏现有内网 SQL 合同。
 
@@ -342,7 +347,7 @@ Tech Insight Loop 迁入资产
 
 ## 11. 下一步建议
 
-阶段 0 只读盘点、第一轮源/评分融合、历史素材/报告 dry-run、真实归档导入脚本、实体大事记导入脚本、历史反馈/旧任务归档脚本、历史报告/实体大事记/质量归档只读查看入口、导入验收入口、执行验收脚本和验收报告断言器已经完成。本地隔离 PostgreSQL 全量验收已通过；下一步是在生产数据库复跑并留存同口径证据：
+阶段 0 只读盘点、第一轮源/评分融合、历史素材/报告 dry-run、真实归档导入脚本、实体大事记导入脚本、当前实体事件治理、历史反馈/旧任务归档脚本、历史报告/实体大事记/质量归档查看入口、导入验收入口、执行验收脚本和验收报告断言器已经完成。本地隔离 PostgreSQL 全量验收已通过；下一步是在生产数据库复跑并留存同口径证据：
 
 ```text
 读取 outputs/tech_insight_loop/tech_insight_loop_inventory.json
