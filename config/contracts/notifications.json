@@ -1,0 +1,506 @@
+{
+  "schema_version": "2026-07-05",
+  "description": "Collaboration activity events and in-app notification contract. Design doc: docs/backend/collaboration-notification-design.md",
+  "owned_by": "Collaboration / Feedback / Notifications",
+  "status": "minimal_in_app_inbox_v1",
+  "tables": {
+    "activity_events": {
+      "purpose": "Append-only facts emitted by collaboration actions.",
+      "required_fields": [
+        "id",
+        "workspace_code",
+        "domain_code",
+        "actor_user_id",
+        "event_type",
+        "object_type",
+        "object_id",
+        "target_object_type",
+        "target_object_id",
+        "summary",
+        "metadata_json",
+        "sync_policy",
+        "created_at"
+      ],
+      "sync_policy": {
+        "default": "local_only",
+        "allowed_values": [
+          "local_only",
+          "sync_allowed"
+        ],
+        "v1_rule": "Daily report feedback activity is local_only and must not enter extranet/intranet sync feed."
+      }
+    },
+    "notifications": {
+      "purpose": "Per-user local in-app inbox generated from activity events.",
+      "required_fields": [
+        "id",
+        "user_id",
+        "workspace_code",
+        "activity_event_id",
+        "status",
+        "priority",
+        "delivery_channel",
+        "read_at",
+        "created_at"
+      ],
+      "status_values": [
+        "unread",
+        "read",
+        "archived"
+      ],
+      "priority_values": [
+        "normal",
+        "important"
+      ],
+      "delivery_channel_values": [
+        "in_app"
+      ],
+      "sync_rule": "Notifications are local user inbox records and are never synchronized across deployment instances."
+    },
+        "notification_preferences": {
+            "purpose": "Per-user event-level notification switches scoped to a workspace.",
+            "required_fields": [
+                "id",
+        "user_id",
+        "workspace_code",
+        "event_type",
+        "in_app_enabled",
+        "email_enabled",
+        "created_at",
+        "updated_at"
+      ],
+      "unique_key": [
+        "user_id",
+        "workspace_code",
+        "event_type"
+            ],
+            "default_rule": "Missing preference rows mean in_app_enabled=true and email_enabled=false.",
+            "v1_rule": "Only in_app_enabled affects notification generation. email_enabled is stored as a reserved field until email delivery exists."
+        },
+        "object_watchers": {
+            "purpose": "Per-user local subscriptions to supported collaboration objects.",
+            "supported_object_types_v1": [
+                "daily_report_item",
+                "weekly_report_item",
+                "dedupe_group"
+            ],
+            "required_fields": [
+                "id",
+                "user_id",
+                "workspace_code",
+                "object_type",
+                "object_id",
+                "active",
+                "created_at",
+                "updated_at"
+            ],
+            "unique_key": [
+                "user_id",
+                "workspace_code",
+                "object_type",
+                "object_id"
+            ],
+            "sync_rule": "Object watchers are local user subscriptions and are never synchronized across deployment instances."
+        }
+    },
+  "implemented_event_types_v1": {
+    "daily_report_item_feedback": [
+      "reaction.created",
+      "reaction.removed",
+      "rating.created",
+      "rating.updated",
+      "comment.created",
+      "comment.replied",
+      "comment.mentioned"
+    ],
+    "sync_conflicts": [
+      "sync_conflict.created"
+    ],
+    "report_publishing": [
+      "daily_report.published",
+      "weekly_report.published"
+    ],
+    "weekly_report_items": [
+      "weekly_report_item.updated"
+    ],
+    "candidate_pool": [
+      "dedupe_group.adoption_changed"
+    ],
+    "task_assignment": [
+      "task.assigned"
+    ],
+        "requirements": [
+            "requirement.status_changed"
+        ],
+        "ingestion_operations": [
+            "ingestion.failed_source_retry_due",
+            "ingestion.failed_source_retry_blocked"
+        ]
+    },
+  "notification_generation_rules_v1": [
+    {
+      "event_types": [
+        "reaction.created",
+        "reaction.removed",
+        "rating.created",
+        "rating.updated"
+      ],
+      "creates_notification": false,
+      "reason": "Lightweight feedback affects activity and scoring but should not create noisy per-user notifications."
+    },
+    {
+      "event_types": [
+        "comment.created",
+        "comment.replied"
+      ],
+            "creates_notification": true,
+            "recipients": [
+                "existing visible commenters on the same daily_report_item except the actor",
+                "parent commenter for replies except the actor",
+                "active object watchers on the same daily_report_item except the actor and excluding users who already receive comment.mentioned for the same comment"
+            ],
+            "priority": "normal",
+            "delivery_channel": "in_app"
+    },
+    {
+      "event_types": [
+        "comment.mentioned"
+      ],
+      "creates_notification": true,
+      "recipients": [
+        "active enabled members of the same workspace whose username, employee_no or external_id appears as @identifier in the comment body",
+        "excluding the actor"
+      ],
+      "priority": "important",
+      "delivery_channel": "in_app",
+      "metadata": [
+        "comment_id",
+        "daily_report_item_id",
+        "mentioned_user_ids"
+      ]
+    },
+        {
+            "event_types": [
+                "sync_conflict.created"
+            ],
+            "creates_notification": true,
+      "recipients": [
+        "active super_admin users",
+        "workspace owner/admin members for the conflict workspace"
+      ],
+            "priority": "important",
+            "delivery_channel": "in_app"
+        },
+        {
+            "event_types": [
+                "ingestion.failed_source_retry_due",
+                "ingestion.failed_source_retry_blocked"
+            ],
+            "creates_notification": true,
+            "recipients": [
+                "active super_admin users",
+                "workspace owner/admin members for the failed ingestion run workspace"
+            ],
+            "priority": "important",
+            "delivery_channel": "in_app",
+            "metadata": [
+                "ingestion_run_id",
+                "run_key",
+                "run_type",
+                "failed_source_count",
+                "attempt_count",
+                "next_retry_at",
+                "latest_retry_run_id",
+                "alert_state"
+            ],
+            "idempotency_rule": "One event is emitted per base ingestion run, event type and attempt_count. A blocked alert is emitted once when max attempts are reached."
+        },
+        {
+            "event_types": [
+                "daily_report.published",
+        "weekly_report.published"
+      ],
+      "creates_notification": true,
+      "enabled_when": "workspaces.config_json.feedback_policy.notify_on_publish=true",
+      "recipients": [
+        "active members of the same workspace except the actor"
+      ],
+      "priority": "normal",
+      "delivery_channel": "in_app",
+      "idempotency_rule": "Publishing an already published report updates published_at but does not emit another publish notification."
+    },
+    {
+      "event_types": [
+        "weekly_report_item.updated"
+      ],
+            "creates_notification": true,
+            "recipients": [
+                "active members of the same workspace except the actor",
+                "active object watchers on the weekly_report_item except the actor"
+            ],
+            "priority": "normal",
+            "delivery_channel": "in_app",
+      "metadata": [
+        "weekly_report_item_id",
+        "weekly_report_id",
+        "week_key",
+        "changed_fields",
+        "before",
+        "after"
+      ],
+      "idempotency_rule": "A PATCH with no effective editor snapshot changes does not emit weekly_report_item.updated."
+    },
+    {
+      "event_types": [
+        "dedupe_group.adoption_changed"
+      ],
+      "creates_notification": true,
+      "recipients": [
+        "active object watchers on the dedupe_group except the actor"
+      ],
+      "priority": "normal",
+      "delivery_channel": "in_app",
+      "metadata": [
+        "dedupe_group_id",
+        "winner_news_item_id",
+        "daily_report_id",
+        "daily_report_item_id",
+        "generated_news_id",
+        "day_key",
+        "adoption_status",
+        "action_type"
+      ],
+      "idempotency_rule": "Candidate-pool bulk adopt/reject only emits this event when a daily_report_item is created or its adoption_status changes."
+    },
+    {
+      "event_types": [
+        "task.assigned"
+      ],
+      "creates_notification": true,
+      "recipients": [
+        "the active assignee when the assignee is an enabled member of the same workspace",
+        "excluding self-assignment by the actor"
+      ],
+      "priority": "normal",
+      "delivery_channel": "in_app",
+      "validation_rule": "Topic task create/update rejects assignee_user_id when the user is not an active enabled member of the task workspace."
+    },
+    {
+      "event_types": [
+        "requirement.status_changed"
+      ],
+      "creates_notification": true,
+      "recipients": [
+        "the active owner_user_id when the owner is an enabled member of the same workspace",
+        "excluding status changes made by the owner"
+      ],
+      "priority": "normal",
+      "delivery_channel": "in_app",
+      "validation_rule": "Requirement create/update rejects owner_user_id when the user is not an active enabled member of the requirement workspace."
+    }
+  ],
+  "preference_filtering_v1": {
+    "applies_to": [
+      "comment.created",
+            "comment.replied",
+            "comment.mentioned",
+            "sync_conflict.created",
+            "ingestion.failed_source_retry_due",
+            "ingestion.failed_source_retry_blocked",
+            "daily_report.published",
+      "weekly_report.published",
+      "weekly_report_item.updated",
+      "task.assigned",
+      "requirement.status_changed"
+    ],
+    "rule": "Before creating a Notification row, the backend checks notification_preferences for the recipient, workspace_code and event_type; in_app_enabled=false suppresses only future notifications of that event type.",
+    "does_not_delete_existing_notifications": true
+  },
+  "sync_boundary_v1": {
+    "rule": "Collaboration and notification objects are local user/workspace state in v1. They must not be listed by extranet feed manifest and direct GET /api/sync/feed requests for them must return 400, even if an activity event row is marked sync_allowed.",
+    "local_only_object_types": [
+      "comments",
+      "reactions",
+            "ratings",
+            "activity_events",
+            "notifications",
+            "notification_preferences",
+            "object_watchers"
+        ],
+        "negative_test": "backend/tests/test_deployment_modes.py::test_extranet_sync_feed_excludes_local_collaboration_notifications"
+    },
+  "api": {
+    "activity_events": [
+      {
+        "method": "GET",
+        "path": "/api/activity-events",
+        "required_query": [
+          "workspace_code"
+        ],
+        "optional_query": {
+          "limit": {
+            "default": 50,
+            "min": 1,
+            "max": 200
+          }
+        },
+        "permission": "workspace viewer+",
+        "response": "ActivityEventRead[]"
+      }
+    ],
+    "notification_preferences": [
+      {
+        "method": "GET",
+        "path": "/api/notification-preferences",
+        "required_query": [
+          "workspace_code"
+        ],
+        "permission": "workspace viewer+ for current user",
+        "response": "NotificationPreferenceRead[]"
+      },
+      {
+        "method": "PATCH",
+        "path": "/api/notification-preferences",
+        "permission": "workspace viewer+ for current user",
+        "request": "NotificationPreferenceUpdate",
+                "response": "NotificationPreferenceRead"
+            }
+        ],
+        "object_watchers": [
+            {
+                "method": "GET",
+                "path": "/api/object-watchers",
+                "required_query": [
+                    "object_type",
+                    "object_id"
+                ],
+                "permission": "workspace viewer+ for the target object workspace",
+                "response": "ObjectWatcherRead"
+            },
+            {
+                "method": "PATCH",
+                "path": "/api/object-watchers",
+                "permission": "workspace viewer+ for the target object workspace",
+                "request": "ObjectWatcherUpdate",
+                "response": "ObjectWatcherRead",
+                "supported_object_types_v1": [
+                    "daily_report_item",
+                    "weekly_report_item",
+                    "dedupe_group"
+                ]
+            }
+        ],
+        "notifications": [
+      {
+        "method": "GET",
+        "path": "/api/notifications",
+        "optional_query": {
+          "status": [
+            "unread",
+            "read",
+            "archived",
+            "all"
+          ],
+          "limit": {
+            "default": 20,
+            "min": 1,
+            "max": 100
+          }
+        },
+        "status_rule": "status=all returns active inbox notifications and excludes archived rows; status=archived lists archived notifications.",
+        "permission": "current authenticated user",
+        "response": "NotificationRead[]",
+        "response_target_fields": [
+          "target_label",
+          "target_path"
+        ]
+      },
+      {
+        "method": "GET",
+        "path": "/api/notifications/unread-count",
+        "permission": "current authenticated user",
+        "response": {
+          "unread_count": "integer"
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/api/notifications/{notification_id}/read",
+        "permission": "notification owner",
+        "response": "NotificationRead"
+      },
+      {
+        "method": "POST",
+        "path": "/api/notifications/{notification_id}/archive",
+        "permission": "notification owner",
+        "response": "NotificationRead",
+        "status_transition": "unread/read -> archived; unread archived notifications no longer count as unread"
+      },
+      {
+        "method": "POST",
+        "path": "/api/notifications/read-all",
+        "permission": "current authenticated user",
+        "response": {
+          "unread_count": 0
+        }
+      }
+    ]
+  },
+  "frontend_contract": {
+    "target_resolution_v1": {
+      "rule": "The backend resolves notification target_label and target_path from activity_event object_type, target_object_type and metadata_json. The frontend message page must render these fields instead of guessing route queries locally.",
+      "supported_targets": {
+        "daily_report_item": "/daily-reports?item_id={daily_report_item_id}[&comment_id={comment_id}]",
+        "daily_report": "/daily-reports?report_id={daily_report_id}",
+                "weekly_report_item": "/weekly-reports?item_id={weekly_report_item_id}",
+                "weekly_report": "/weekly-reports?report_id={weekly_report_id}",
+                "sync_conflict": "/sync?conflict_id={sync_conflict_id}",
+                "ingestion_run": "/ingestion-runs?run_id={ingestion_run_id}",
+                "topic_task": "/tasks?task_id={topic_task_id}",
+                "requirement": "/requirements?requirement_id={requirement_id}"
+            }
+    },
+    "topbar_notification_button": {
+      "enabled_when": [
+        "GET /api/notifications/unread-count exists",
+        "GET /api/notifications exists",
+        "POST /api/notifications/{notification_id}/read exists",
+        "POST /api/notifications/{notification_id}/archive exists"
+      ],
+      "must_not_fake": [
+        "red dot",
+        "unread number",
+        "message list"
+      ]
+    },
+    "page": "/notifications",
+    "v1_capabilities": [
+      "list unread/read/archived/all-active notifications",
+      "show unread count",
+      "mark one notification read",
+      "mark all unread notifications read",
+      "archive one notification and remove it from unread/read/all-active lists",
+      "link daily report item notifications to /daily-reports?item_id={id}",
+      "include comment_id query when the notification event object is a comment and highlight the matching comment in DailyReportsPage",
+      "show comment.mentioned as a configurable in-app preference labeled as a mention notification",
+      "link daily report publish notifications to /daily-reports?report_id={id}",
+      "link weekly report publish notifications to /weekly-reports?report_id={id}",
+            "link weekly report item notifications to /weekly-reports?item_id={id}",
+            "generate weekly_report_item.updated in-app notifications from weekly report item PATCH changes",
+            "link sync conflict notifications to /sync?conflict_id={id} and highlight the matching conflict row",
+            "link failed-source retry due/blocked notifications to /ingestion-runs?run_id={id} and select the matching ingestion run",
+            "link task assignment notifications to /tasks?task_id={id} and highlight the matching task row",
+            "link requirement status notifications to /requirements?requirement_id={id} and highlight the matching requirement row",
+            "show daily report item watcher state in the detail drawer and PATCH /api/object-watchers when users follow/unfollow an item",
+            "show weekly report item watcher state in the item action row and PATCH /api/object-watchers when users follow/unfollow an item",
+            "show dedupe group watcher state in the candidate details panel and PATCH /api/object-watchers when users follow/unfollow a candidate",
+            "link dedupe_group.adoption_changed notifications to /news?dedupe_group_id={id} and highlight the matching candidate",
+            "show current-workspace in-app notification preference switches",
+            "PATCH preference changes and state that they affect future notifications only"
+        ]
+    },
+    "known_gaps": [
+        "email delivery for email_enabled preferences",
+        "more mention-capable collaboration objects"
+    ]
+}

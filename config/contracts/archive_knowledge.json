@@ -1,0 +1,180 @@
+{
+  "name": "archive_knowledge",
+  "version": 1,
+  "scope": "Archive / Knowledge current-system contracts for tracked entities and entity milestones.",
+  "principles": [
+    "Historical import contracts remain in tech_insight_loop_legacy_import.json.",
+    "Current report-item entity milestones write only tracked_entities/entity_milestones.",
+    "Creating an entity milestone never mutates raw_items, news_items, generated_news, daily reports, weekly reports, recommendations, or company SQL exports.",
+    "Every current milestone created from a report item must preserve report item, generated news, news item, raw item, and data source trace when available."
+  ],
+  "objects": {
+    "tracked_entities": {
+      "current_identity": {
+        "legacy_system": "current",
+        "legacy_table": "tracked_entities",
+        "legacy_id_rule": "workspace_code + sha1(lower(entity_name)) prefix"
+      },
+      "required_fields": [
+        "workspace_code",
+        "domain_code",
+        "legacy_system",
+        "legacy_table",
+        "legacy_id",
+        "name",
+        "entity_type"
+      ],
+      "sync_policy": "outbox"
+    },
+    "entity_milestones": {
+      "current_identity": {
+        "legacy_system": "current",
+        "legacy_table": "report_item_entity_milestones",
+        "legacy_id_rule": "source_report_type + source_report_item_id + tracked_entity_id"
+      },
+      "required_fields": [
+        "workspace_code",
+        "domain_code",
+        "tracked_entity_id",
+        "legacy_entity_id",
+        "event_type",
+        "title",
+        "event_time",
+        "importance_level",
+        "event_dedupe_key",
+        "metadata_json.current_refs"
+      ],
+      "curation_status_values": [
+        "draft",
+        "confirmed",
+        "revoked",
+        "imported"
+      ],
+      "idempotency": "Posting the same report item and tracked entity updates the same milestone.",
+      "sync_policy": "outbox"
+    }
+  },
+  "apis": {
+    "create_daily_report_item_entity_milestone": {
+      "method": "POST",
+      "path": "/api/daily-report-items/{id}/entity-milestones",
+      "min_workspace_role": "member",
+      "request": "ReportItemEntityMilestoneCreate",
+      "response": "EntityMilestoneDetailRead",
+      "source_report_type": "daily"
+    },
+    "create_weekly_report_item_entity_milestone": {
+      "method": "POST",
+      "path": "/api/weekly-report-items/{id}/entity-milestones",
+      "min_workspace_role": "member",
+      "request": "ReportItemEntityMilestoneCreate",
+      "response": "EntityMilestoneDetailRead",
+      "source_report_type": "weekly"
+    },
+    "update_entity_milestone": {
+      "method": "PATCH",
+      "path": "/api/entity-milestones/{id}",
+      "min_workspace_role": "admin",
+      "request": "EntityMilestoneUpdate",
+      "response": "EntityMilestoneDetailRead",
+      "rule": "Only legacy_system=current milestones are editable; imported legacy milestones are immutable."
+    }
+  },
+  "request_fields": {
+    "ReportItemEntityMilestoneCreate": {
+      "required": {
+        "entity_name": "non-empty string"
+      },
+      "optional": {
+        "entity_type": "string, default company",
+        "entity_rank": "string",
+        "tracked_entity_id": "existing tracked entity in same workspace",
+        "event_title": "string; defaults to report item display title",
+        "event_type": "string, default report_signal",
+        "event_time": "datetime; defaults to news/raw/report item time",
+        "event_brief": "string; defaults to report item summary",
+        "impact_brief": "string; defaults to report item summary",
+        "board": "string; defaults to generated insight board or category",
+        "importance_level": "string, default medium",
+        "importance_score": "number 0..100, default 70",
+        "confidence_score": "number 0..1, default 0.8",
+        "source_note": "string",
+        "metadata_json": "object"
+      }
+    },
+    "EntityMilestoneUpdate": {
+      "optional": {
+        "event_title": "string",
+        "event_type": "string",
+        "event_time": "datetime",
+        "event_brief": "string",
+        "event_content": "string",
+        "impact_brief": "string",
+        "impact": "string",
+        "timeline_brief": "string",
+        "source_url": "string",
+        "source_name": "string",
+        "board": "string",
+        "selected_for_timeline": "boolean",
+        "importance_level": "string",
+        "importance_score": "number 0..100",
+        "confidence_score": "number 0..1",
+        "curation_status": "draft|confirmed|revoked",
+        "curation_note": "string",
+        "metadata_json": "object merged into existing metadata"
+      }
+    }
+  },
+  "metadata_current_refs": [
+    "source_report_type",
+    "source_report_id",
+    "source_report_item_id",
+    "daily_report_item_id",
+    "weekly_report_item_id",
+    "generated_news_id",
+    "news_item_id",
+    "raw_item_id",
+    "data_source_id"
+  ],
+  "frontend": {
+    "write_entry_pages": [
+      "/daily-reports",
+      "/weekly-reports"
+    ],
+    "timeline_page": "/entity-milestones",
+    "rules": [
+      "The write entry must require a user-entered entity name.",
+      "The timeline page remains the place to inspect entity events and legacy reference resolution.",
+      "The write entry must not imply import execution, recommendation, adoption, or SQL export.",
+      "Only current milestones show edit, confirm, revoke, and convert-to-requirement actions."
+    ]
+  },
+  "requirement_links": {
+    "field": "requirement_source_links.entity_milestone_id",
+    "shortcut_field": "source_entity_milestone_id",
+    "frontend_source_type": "entity_milestone",
+    "target_path": "/entity-milestones?milestone_id={id}",
+    "historical_report_field": "requirement_source_links.historical_report_id",
+    "historical_report_shortcut_field": "source_historical_report_id",
+    "historical_report_frontend_source_type": "historical_report",
+    "historical_report_target_path": "/historical-reports?id={id}",
+    "historical_feedback_field": "requirement_source_links.historical_feedback_item_id",
+    "historical_feedback_shortcut_field": "source_historical_feedback_item_id",
+    "historical_feedback_frontend_source_type": "historical_feedback",
+    "historical_feedback_target_path": "/quality-archive?feedback_id={id}",
+    "historical_feedback_rule": "Historical feedback can become an internal requirement source for source-quality复盘; it remains archive evidence and must not create current comments, ratings, recommendations, report adoption, or company SQL export rows."
+  },
+  "tests": {
+    "backend": [
+      "backend/tests/test_operations_api.py::test_report_items_create_entity_milestones_with_source_trace",
+      "backend/tests/test_operations_api.py::test_requirement_source_links_trace_historical_feedback"
+    ],
+    "frontend": [
+      "frontend/src/pages/EntityMilestonesPage.spec.ts",
+      "frontend/src/pages/QualityArchivePage.spec.ts",
+      "frontend/src/pages/RequirementsPage.spec.ts",
+      "frontend/src/pages/DailyReportsPage.spec.ts",
+      "frontend/src/pages/WeeklyReportsPage.spec.ts"
+    ]
+  }
+}
