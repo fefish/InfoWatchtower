@@ -31,6 +31,9 @@ export interface RuntimeRecord {
   instance_id: string;
   capabilities: RuntimeCapabilities;
   auth_mode: string;
+  // 游客登录开关（AUTH_GUEST_ENABLED）：登录页据此渲染「以游客身份浏览」按钮。
+  // 旧后端没有该字段时按 false 处理。
+  auth_guest_enabled?: boolean;
   auth_membership_mapping: AuthMembershipMapping;
   app_version: string;
 }

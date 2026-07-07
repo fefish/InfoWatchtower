@@ -368,6 +368,8 @@ describe("WeeklyReportsPage", () => {
 
     const input = wrapper.find(".inline-milestone-form input");
     expect(input.exists()).toBe(true);
+    // 登记事件提交按钮必须走 icon-button 基线样式，避免未定义的裸类导致无样式按钮
+    expect(wrapper.find(".inline-milestone-form button[type='submit']").classes()).toContain("icon-button");
     await input.setValue("OpenAI");
     await wrapper.find(".inline-milestone-form").trigger("submit");
     await flushPromises();

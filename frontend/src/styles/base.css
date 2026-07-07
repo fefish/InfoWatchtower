@@ -164,6 +164,66 @@ button {
   color: var(--color-primary);
 }
 
+/* 「发现工作台」入口与抽屉列表（组件：components/WorkspaceDiscovery.vue） */
+.workspace-discovery-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 0 4px 12px;
+  min-height: 32px;
+  border: 1px dashed var(--color-border);
+  border-radius: 8px;
+  padding: 0 12px;
+  background: transparent;
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.workspace-discovery-button:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.workspace-discovery-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.workspace-discovery-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.workspace-discovery-meta {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.workspace-discovery-meta small {
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.workspace-discovery-joined {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-primary);
+}
+
+.workspace-discovery-managed {
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
 .workspace-form-hint {
   margin: 0 0 14px;
   color: var(--color-muted);
@@ -330,6 +390,9 @@ button {
 }
 
 .topbar-subtitle {
+  /* flex 子项默认 min-width:auto，nowrap 会把 topbar 撑出横向滚动；必须允许收缩再省略 */
+  flex: 1 1 auto;
+  min-width: 0;
   margin: 0;
   color: var(--color-muted);
   font-size: 12px;
@@ -821,6 +884,7 @@ button {
 .source-stats-actions {
   display: flex;
   flex: 0 0 auto;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   margin-left: auto;
@@ -927,7 +991,9 @@ button {
 
 .module-actions {
   display: flex;
-  flex: 0 0 auto;
+  /* 允许收缩换行：flex-shrink 0 会在窄屏把动作条撑出卡片形成横滚 */
+  flex: 0 1 auto;
+  min-width: 0;
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
@@ -959,7 +1025,7 @@ button {
 
 .module-stats {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   gap: 12px;
 }
 
@@ -1015,11 +1081,17 @@ button {
   margin-bottom: 16px;
 }
 
+/* 标题列允许收缩，长 run_key / ID 类无空格标题在窄屏折行而不是撑破卡片 */
+.card-title-row > div {
+  min-width: 0;
+}
+
 .card-title-row h3 {
   margin: 0;
   color: var(--color-text);
   font-size: 21px;
   line-height: 1.2;
+  overflow-wrap: anywhere;
 }
 
 .module-split {
@@ -1439,6 +1511,8 @@ button {
 .recommendation-body,
 .detail-news-body {
   display: grid;
+  /* 显式锁单列为 minmax(0,1fr)：auto 列会取子项 max-content，长指标行在窄屏撑破卡片 */
+  grid-template-columns: minmax(0, 1fr);
   gap: 9px;
   min-width: 0;
 }
@@ -2430,8 +2504,47 @@ button {
   box-shadow: inset 0 0 0 1px rgba(10, 132, 255, 0.48), 0 10px 28px rgba(10, 132, 255, 0.16);
 }
 
-.topic-task-row {
+.topic-task-row,
+.requirement-row,
+.insight-row,
+.implication-row {
   grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.requirement-row,
+.insight-row,
+.implication-row {
+  align-items: flex-start;
+}
+
+.insight-row.anchored {
+  background: rgba(10, 132, 255, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(10, 132, 255, 0.36), var(--glass-stroke);
+}
+
+.insight-row label,
+.implication-row label {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 8px;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.insight-row input,
+.insight-row select,
+.insight-row textarea,
+.implication-row input,
+.implication-row select,
+.implication-row textarea {
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  padding: 9px 10px;
+  background: #fff;
+  color: #0f172a;
+  font: inherit;
 }
 
 .task-row-actions {
@@ -2923,14 +3036,16 @@ button {
 .coverage-metrics span {
   display: inline-flex;
   align-items: center;
+  max-width: 100%;
   min-height: 28px;
   border: 1px solid #e2e8f0;
   border-radius: 999px;
-  padding: 0 9px;
+  padding: 2px 9px;
   background: #f8fafc;
   color: #475569;
   font-size: 12px;
   font-weight: 800;
+  overflow-wrap: anywhere;
 }
 
 .coverage-metrics {
@@ -2947,7 +3062,9 @@ button {
   display: flex;
   gap: 6px;
   align-items: flex-start;
+  min-width: 0;
   margin: 0;
+  overflow-wrap: anywhere;
   border: 1px solid #fecaca;
   border-radius: 10px;
   padding: 8px 10px;
@@ -3294,6 +3411,30 @@ button {
   color: #166534;
   font-size: 14px;
   font-weight: 700;
+}
+
+.form-info {
+  max-width: 1200px;
+  margin: 0 auto 14px;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.form-warning {
+  max-width: 1200px;
+  margin: 0 auto 14px;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 14px;
+  font-weight: 600;
 }
 
 .summary-strip {
@@ -5292,7 +5433,9 @@ button {
   .data-table-wrap,
   .placeholder-panel,
   .form-error,
-  .form-success {
+  .form-success,
+  .form-info,
+  .form-warning {
     max-width: calc(100% - 40px);
   }
 
@@ -5342,35 +5485,96 @@ button {
     grid-template-columns: 1fr;
   }
 
+  /* 窄屏：侧边栏变为顶置横向工具条，可横向滚动，不再占满一屏高度 */
   .sidebar {
     position: sticky;
     top: 0;
     z-index: 2;
+    height: auto;
+    min-height: 0;
     flex-direction: row;
     align-items: center;
+    gap: 12px;
     overflow-x: auto;
-    padding: 12px;
+    overflow-y: hidden;
+    padding: 10px 12px;
+    border-right: 0;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .brand {
+    flex: 0 0 auto;
+    min-height: 0;
+    border-bottom: 0;
+    padding: 0;
   }
 
   .brand-name {
     display: none;
   }
 
-  .workspace-switcher {
-    min-width: 220px;
-  }
-
   .nav-list {
     display: flex;
+    align-items: center;
+    gap: 12px;
+    flex: 1 1 auto;
+    overflow: visible;
+  }
+
+  .workspace-switcher-row {
+    flex: 0 0 auto;
+    align-items: center;
+  }
+
+  .workspace-switcher {
+    min-width: 190px;
+    margin-bottom: 0;
+    padding: 0;
+  }
+
+  .workspace-switcher > span {
+    display: none;
+  }
+
+  .workspace-create-button,
+  .workspace-discovery-button {
+    flex: 0 0 auto;
+    margin: 0;
+    white-space: nowrap;
+  }
+
+  .nav-group {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex: 0 0 auto;
+  }
+
+  .nav-group-title {
+    display: none;
   }
 
   .nav-item {
     flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .sidebar-user {
+    flex: 0 0 auto;
+    grid-template-columns: 30px 32px 32px;
+    margin-top: 0;
+    border-top: 0;
+    padding: 0;
+  }
+
+  .sidebar-user > div:not(.user-avatar) {
+    display: none;
   }
 
   .sidebar-action {
-    width: auto;
+    width: 32px;
     margin-top: 0;
+    margin-left: 0;
   }
 
   .main-panel {
@@ -5399,6 +5603,8 @@ button {
   .run-command {
     align-items: stretch;
     flex-direction: column;
+    /* 基线的 flex-wrap:wrap 在纵向排布下会把溢出项挤成第二列并撑出横滚 */
+    flex-wrap: nowrap;
   }
 
   .source-stat-divider {
@@ -5517,6 +5723,12 @@ button {
     flex-direction: column;
   }
 
+  /* 纵向排布后 align-items:flex-start 会让子项取内容宽度并溢出，必须锁回容器宽 */
+  .topbar-title {
+    width: 100%;
+    max-width: 100%;
+  }
+
   .topbar-tools {
     width: 100%;
     flex-wrap: wrap;
@@ -5524,6 +5736,377 @@ button {
 
   .module-stats {
     grid-template-columns: 1fr;
+  }
+}
+
+/* ============================================================
+   工作台配置中心（/workspace-settings）与相关入口：仅布局属性，
+   表面样式沿用主题层的 module-card / policy-panel / switch-row。
+   ============================================================ */
+
+.workspace-switcher-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.workspace-switcher-row .workspace-switcher {
+  flex: 1;
+  min-width: 0;
+}
+
+.workspace-settings-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  color: var(--color-muted);
+}
+
+.sources-policy-note {
+  margin: 0;
+}
+
+.workspace-settings-page .settings-card {
+  scroll-margin-top: 88px;
+}
+
+.workspace-settings-page .policy-panel.settings-card {
+  width: auto;
+  max-width: none;
+}
+
+.settings-anchor-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  align-items: center;
+}
+
+.settings-anchor-nav a {
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.settings-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.settings-member-list,
+.settings-format-list,
+.settings-section-list {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-member-row,
+.settings-format-row,
+.settings-section-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+}
+
+.settings-member-copy,
+.settings-format-copy,
+.settings-section-copy {
+  display: grid;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-member-copy small,
+.settings-format-copy small,
+.settings-section-copy small {
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.settings-member-row select {
+  width: 110px;
+}
+
+.settings-switch-row {
+  align-items: flex-start;
+}
+
+.settings-switch-row span {
+  display: grid;
+  gap: 2px;
+}
+
+.settings-switch-row small {
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.settings-format-form {
+  display: grid;
+  gap: 12px;
+}
+
+.settings-checkbox-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+}
+
+.settings-checkbox-label {
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.settings-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+@media (max-width: 900px) {
+  .settings-member-row,
+  .settings-format-row,
+  .settings-section-row {
+    flex-wrap: wrap;
+  }
+}
+
+/* ============================================================
+   全页边距审计补类（2026-07）：为已在页面中使用但缺失定义的
+   布局类补齐既有视觉基线，不发明新视觉。
+   ============================================================ */
+
+/* 洞察研判：筛选工具条（module-card toolbar-card） */
+.toolbar-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.toolbar-card label {
+  display: grid;
+  gap: 6px;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.toolbar-card input,
+.toolbar-card select {
+  min-height: 38px;
+  min-width: 200px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  padding: 0 10px;
+  background: #fff;
+  color: #0f172a;
+  font: inherit;
+}
+
+/* 任务详情弹层：状态胶囊配色与正文滚动 */
+.headline-chip-row .category-chip.large {
+  padding: 5px 12px;
+  font-size: 13px;
+}
+
+.headline-chip-row .chip-blue {
+  background: rgba(10, 132, 255, 0.12);
+  color: #0a6ddd;
+}
+
+.headline-chip-row .chip-orange {
+  background: #fffbeb;
+  color: #b45309;
+}
+
+.task-detail-body {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* 日报/周报条目内联登记事件表单：按钮不整行拉伸 */
+.inline-milestone-form .icon-button {
+  justify-self: start;
+}
+
+/* 推荐页评分预览结果：沿用 scope-panel 视觉 */
+.preview-result {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.preview-result div {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #eef2f7;
+  border-radius: 10px;
+  padding: 11px;
+  background: #f8fafc;
+}
+
+.preview-result span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.preview-result strong {
+  color: var(--color-text);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.preview-result small {
+  color: #64748b;
+  font-size: 12px;
+}
+
+/* 数据源导入预览面板：指标行与分组列表 */
+.source-page-grid.single-column {
+  grid-template-columns: 1fr;
+}
+
+.preview-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin: 12px 0;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.preview-metrics strong {
+  color: #0f172a;
+  font-size: 15px;
+}
+
+.preview-list {
+  display: grid;
+  gap: 12px;
+}
+
+/* SQL 导出：导入回执表单与回执列表 */
+.receipt-form {
+  display: grid;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px;
+}
+
+/* 用户/邀请/组等裸 form-grid-two 表单：补齐 ops-form 同款输入基线 */
+.form-grid-two > label {
+  display: grid;
+  gap: 6px;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.form-grid-two input:not([type="checkbox"]),
+.form-grid-two select,
+.form-grid-two textarea {
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #fff;
+  color: #0f172a;
+  font: inherit;
+}
+
+.form-grid-two > .icon-button {
+  align-self: end;
+  justify-self: start;
+}
+
+.receipt-failure-editor {
+  display: grid;
+  gap: 10px;
+  border: 1px solid #eef2f7;
+  border-radius: 10px;
+  padding: 12px;
+  background: #fbfdff;
+}
+
+.receipt-failure-row {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr) 110px minmax(0, 1.6fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.receipt-failure-row .text-link {
+  margin-bottom: 11px;
+}
+
+.receipt-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.receipt-row {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #eef2f7;
+  border-radius: 10px;
+  padding: 11px;
+  background: #ffffff;
+}
+
+.receipt-row > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.receipt-row strong {
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.receipt-row span,
+.receipt-row small {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+@media (max-width: 900px) {
+  .receipt-failure-row {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .receipt-failure-row .text-link {
+    margin-bottom: 0;
+  }
+
+  .toolbar-card input,
+  .toolbar-card select {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .toolbar-card label {
+    flex: 1 1 100%;
   }
 }
 
@@ -5607,13 +6190,15 @@ button {
   padding: 9px 24px;
 }
 
-.workspace-create-button {
+.workspace-create-button,
+.workspace-discovery-button {
   border-radius: 999px;
   border-color: rgba(120, 130, 150, 0.35);
   transition: border-color 0.2s ease, color 0.2s ease, background-color 0.2s ease;
 }
 
-.workspace-create-button:hover {
+.workspace-create-button:hover,
+.workspace-discovery-button:hover {
   background: rgba(10, 132, 255, 0.08);
 }
 
@@ -6816,7 +7401,9 @@ button:focus-visible {
   font-size: 13px;
 }
 
-@media (max-width: 1120px) {
+/* 平板窄屏：图标栏侧边栏。仅作用于 901-1120px，
+   ≤900px 交回上方的横向顶置侧边栏规则，避免后置覆盖。 */
+@media (min-width: 901px) and (max-width: 1120px) {
   .app-shell {
     grid-template-columns: 76px minmax(0, 1fr);
   }
@@ -6964,6 +7551,7 @@ button:focus-visible {
 }
 
 .account-password-form .form-error,
+.account-password-form .form-success,
 .account-password-form .empty-state {
   grid-column: 1 / -1;
   margin: 0;
@@ -6974,4 +7562,56 @@ button:focus-visible {
   justify-self: end;
   width: auto;
   min-width: 140px;
+}
+
+/* --- 工作台配置中心：主题层表面追加（胶囊齿轮入口 + 卡内次级行 + 危险动作） --- */
+.workspace-settings-link {
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.6);
+  box-shadow: var(--glass-stroke), var(--shadow-soft);
+  transition: background-color 0.2s ease, color 0.2s ease, box-shadow 0.25s ease;
+}
+
+.workspace-settings-link:hover,
+.workspace-settings-link.router-link-active {
+  background: var(--color-primary-soft);
+  color: var(--color-primary-dark);
+  box-shadow: inset 0 0 0 1px var(--color-primary-edge);
+}
+
+.settings-member-row,
+.settings-format-row,
+.settings-section-row {
+  border-radius: 12px;
+  background: rgba(248, 250, 252, 0.72);
+  transition: background-color 0.2s ease;
+}
+
+.settings-member-row:hover,
+.settings-format-row:hover,
+.settings-section-row:hover {
+  background: rgba(255, 255, 255, 0.85);
+}
+
+.settings-anchor-nav a {
+  border-radius: 999px;
+  padding: 5px 12px;
+  background: rgba(255, 255, 255, 0.6);
+  color: var(--color-primary-dark);
+  box-shadow: var(--glass-stroke), var(--shadow-soft);
+  transition: background-color 0.2s ease, box-shadow 0.25s ease;
+}
+
+.settings-anchor-nav a:hover {
+  background: var(--color-primary-soft);
+}
+
+.table-action.danger {
+  color: #b3261e;
+  border-color: rgba(179, 38, 30, 0.3);
+}
+
+.table-action.danger:hover:not(:disabled) {
+  background: rgba(179, 38, 30, 0.08);
 }

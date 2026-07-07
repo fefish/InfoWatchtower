@@ -899,7 +899,7 @@ onMounted(() => {
                     实体名称
                     <input v-model="milestoneDrafts[item.id]" placeholder="公司、模型、产品或技术名" />
                   </label>
-                  <button type="submit" class="primary-button" :disabled="milestoneSavingId === item.id">
+                  <button type="submit" class="icon-button" :disabled="milestoneSavingId === item.id">
                     <Save :size="15" />
                     <span>{{ milestoneSavingId === item.id ? "登记中" : "保存事件" }}</span>
                   </button>

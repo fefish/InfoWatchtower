@@ -113,7 +113,7 @@ async function signOut() {
         <input v-model="form.confirmPassword" type="password" autocomplete="new-password" />
       </label>
       <p v-if="error" class="form-error">{{ error }}</p>
-      <p v-if="message" class="empty-state">{{ message }}</p>
+      <p v-if="message" class="form-success">{{ message }}</p>
       <button type="submit" class="icon-button" :disabled="session.loading">
         <Save :size="16" />
         <span>{{ session.loading ? "保存中" : "保存" }}</span>

@@ -648,7 +648,7 @@ onMounted(loadCandidatePool);
             <div class="candidate-heading">
               <div class="candidate-main-copy">
                 <div class="candidate-meta">
-                  <span class="status-pill">去重 {{ group.status }}</span>
+                  <span class="state-chip">去重 {{ group.status }}</span>
                   <span>{{ group.item_count }} 个来源</span>
                   <span>{{ displaySourceType(winnerNews(group)?.source_type ?? group.winner_source_type ?? undefined) }}</span>
                   <span>{{ formatDate(winnerNews(group)?.published_at ?? group.winner_published_at) }}</span>

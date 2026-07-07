@@ -466,6 +466,10 @@ describe("DailyReportsPage feedback policy", () => {
 
     const input = document.body.querySelector(".inline-milestone-form input") as HTMLInputElement | null;
     expect(input).toBeTruthy();
+    // 登记事件提交按钮必须走 icon-button 基线样式，避免未定义的裸类导致无样式按钮
+    expect(
+      document.body.querySelector(".inline-milestone-form button[type='submit']")?.classList.contains("icon-button")
+    ).toBe(true);
     input!.value = "OpenAI";
     input!.dispatchEvent(new Event("input", { bubbles: true }));
     document.body

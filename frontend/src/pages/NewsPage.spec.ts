@@ -269,6 +269,8 @@ describe("NewsPage", () => {
     expect(anchored.exists()).toBe(true);
     expect(anchored.attributes("aria-current")).toBe("true");
     expect(anchored.text()).toContain("搜索命中的候选新闻");
+    // 去重状态使用已定义的 state-chip 胶囊，而不是无样式的 status-pill
+    expect(wrapper.find(".candidate-meta .state-chip").text()).toContain("去重");
     expect(wrapper.text()).toContain("raw_item_id");
     expect(wrapper.text()).toContain("data_source_id");
     expect(wrapper.find('[aria-label="候选追溯链"]').text()).toContain("数据源");

@@ -58,6 +58,12 @@ export async function login(username: string, password: string): Promise<AuthRes
   });
 }
 
+// 游客登录（AUTH_GUEST_ENABLED）：签发共享只读 guest 会话，
+// 会话用户 external_provider === "guest"（session store 以此识别游客）。
+export async function guestLogin(): Promise<AuthResponse> {
+  return requestAuth("/api/auth/guest-login", { method: "POST" });
+}
+
 export function startOidcLogin(nextPath = ""): void {
   const nextQuery = nextPath ? `?next=${encodeURIComponent(nextPath)}` : "";
   window.location.assign(apiUrl(`/api/auth/oidc/start${nextQuery}`));

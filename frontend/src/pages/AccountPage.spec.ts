@@ -81,7 +81,7 @@ describe("AccountPage", () => {
 
     expect(authApi.changePassword).toHaveBeenCalledWith("old-password", "new-password-123");
     expect(routerReplace).toHaveBeenCalledWith("/dashboard");
-    expect(wrapper.text()).toContain("密码已更新");
+    expect(wrapper.find(".form-success").text()).toContain("密码已更新");
   });
 
   it("validates local password form before calling the API", async () => {

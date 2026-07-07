@@ -96,7 +96,7 @@ function setupErrorMessage(exc: unknown) {
       </div>
 
       <p v-if="error" class="form-error">{{ error }}</p>
-      <p v-if="notice" class="empty-state">{{ notice }}</p>
+      <p v-if="notice" class="form-success">{{ notice }}</p>
 
       <form class="login-form" @submit.prevent="submitSetup">
         <label>
