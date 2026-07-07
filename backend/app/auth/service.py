@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.auth.passwords import hash_password, verify_password
 from app.core.config import REPO_ROOT, Settings
+from app.core.privacy import redact_secret_like_values
 from app.models.feedback import AuditLog
 from app.models.identity import LoginAttempt, PasswordResetToken, Permission, Role, User, UserInvite
 from app.models.labels import Label, LabelSet
@@ -47,6 +48,8 @@ ROLE_PERMISSIONS = {
     "viewer": ["content:read"],
 }
 
+WORKSPACE_ROLE_RANK = {"viewer": 0, "member": 1, "admin": 2, "owner": 3}
+
 WORKSPACE_DEFINITIONS = {
     "planning_intel": {
         "name": "规划部情报工作台",
@@ -80,6 +83,15 @@ DEFAULT_WORKSPACE_LABEL_POLICY = {
     "default_category": "AI 应用",
     "fallback_category": "AI 应用",
     "tagging_stages": ["news_generation", "post_dedupe_labeling"],
+}
+
+DEFAULT_WORKSPACE_FEEDBACK_POLICY = {
+    "viewer_can_react": True,
+    "viewer_can_rate": True,
+    "viewer_can_comment": True,
+    "viewer_can_edit": False,
+    "notify_on_comment": True,
+    "notify_on_publish": False,
 }
 
 AI_TOOLS_PRIMARY_CATEGORIES = ["工具新功能", "工具新案例", "工具新技术"]
@@ -117,7 +129,8 @@ CORE_WORKSPACE_SECTIONS = [
     ("historical_reports", "历史报告库", "page", "/historical-reports", 52, "library"),
     ("entity_milestones", "实体大事记", "page", "/entity-milestones", 53, "library"),
     ("quality_archive", "质量归档", "page", "/quality-archive", 54, "library"),
-    ("requirements", "内部需求", "page", "/requirements", 55, "collab"),
+    ("strategic_insights", "洞察研判", "page", "/insights", 55, "collab"),
+    ("requirements", "内部需求", "page", "/requirements", 56, "collab"),
     ("topic_tasks", "指派任务", "page", "/tasks", 60, "collab"),
     ("sync", "同步", "page", "/sync", 68, "system"),
     ("exports", "SQL导出", "page", "/exports", 70, "system"),
@@ -189,6 +202,7 @@ def provision_workspace(
     workspace.config_json = {
         "sort_order": _next_workspace_sort_order(session),
         "label_policy": _default_workspace_label_policy(),
+        "feedback_policy": _default_workspace_feedback_policy(),
     }
     _ensure_workspace_sections(session, workspace, CORE_WORKSPACE_SECTIONS)
     _ensure_super_admin_workspace_memberships(session, {code: workspace})
@@ -329,6 +343,8 @@ def resolve_header_identity(
     identity: ExternalIdentity,
     default_role: str,
     allow_provision: bool,
+    default_workspace_codes: str = "",
+    department_workspace_map: str = "",
 ) -> User | None:
     user = session.scalar(
         select(User)
@@ -346,7 +362,7 @@ def resolve_header_identity(
             external_provider=identity.provider,
             external_id=identity.external_id,
             employee_no=identity.employee_no,
-            username=identity.username,
+            username=_unique_username(session, identity.username),
             display_name=identity.display_name,
             department=identity.department,
             email=identity.email,
@@ -360,6 +376,13 @@ def resolve_header_identity(
         user.display_name = identity.display_name
         user.department = identity.department
         user.email = identity.email
+    _apply_auto_workspace_memberships(
+        session,
+        user=user,
+        department=identity.department,
+        default_workspace_codes=default_workspace_codes,
+        department_workspace_map=department_workspace_map,
+    )
     return user
 
 
@@ -368,6 +391,7 @@ def mark_login(session: Session, user: User, action: str) -> None:
     session.add(
         AuditLog(
             user=user,
+            workspace_code="global",
             action=action,
             object_type="user",
             object_id=user.id,
@@ -382,15 +406,26 @@ def mark_login(session: Session, user: User, action: str) -> None:
 
 
 def write_audit(session: Session, user: User | None, action: str, object_type: str, object_id: str, detail):
+    workspace_code = _audit_workspace_code(detail)
+    safe_detail = redact_secret_like_values(detail if isinstance(detail, (dict, list)) else {})
     session.add(
         AuditLog(
             user=user,
+            workspace_code=workspace_code,
             action=action,
             object_type=object_type,
             object_id=object_id,
-            detail_json=detail,
+            detail_json=safe_detail,
         ),
     )
+
+
+def _audit_workspace_code(detail) -> str:
+    if isinstance(detail, dict):
+        value = detail.get("workspace_code")
+        if isinstance(value, str) and value:
+            return value
+    return "global"
 
 
 def set_user_roles(session: Session, target_user: User, role_codes: list[str]) -> None:
@@ -521,6 +556,153 @@ def hash_token(token: str) -> str:
 
 def generate_temporary_password() -> str:
     return secrets.token_urlsafe(18)
+
+
+def _unique_username(session: Session, desired: str) -> str:
+    base = (desired or "user").strip()[:96] or "user"
+    candidate = base
+    suffix = 2
+    while session.scalar(select(User.id).where(User.username == candidate)) is not None:
+        candidate = f"{base}_{suffix}"[:128]
+        suffix += 1
+    return candidate
+
+
+def _apply_auto_workspace_memberships(
+    session: Session,
+    *,
+    user: User,
+    department: str | None,
+    default_workspace_codes: str,
+    department_workspace_map: str,
+) -> None:
+    targets = {
+        target.code: target
+        for target in _auto_workspace_targets(
+            department=department,
+            default_workspace_codes=default_workspace_codes,
+            department_workspace_map=department_workspace_map,
+        )
+    }
+    for target in _stored_department_workspace_targets(session, department):
+        existing = targets.get(target.code)
+        if existing is None or WORKSPACE_ROLE_RANK[target.workspace_role] > WORKSPACE_ROLE_RANK[existing.workspace_role]:
+            targets[target.code] = target
+    if not targets:
+        return
+    for target in targets.values():
+        workspace = session.scalar(
+            select(Workspace).where(Workspace.code == target.code, Workspace.enabled.is_(True)),
+        )
+        if workspace is None:
+            raise ValueError(f"Unknown workspace in auth membership mapping: {target.code}")
+        membership = session.scalar(
+            select(WorkspaceMembership).where(
+                WorkspaceMembership.workspace_id == workspace.id,
+                WorkspaceMembership.user_id == user.id,
+            ),
+        )
+        if membership is None:
+            session.add(
+                WorkspaceMembership(
+                    workspace_id=workspace.id,
+                    user_id=user.id,
+                    workspace_role=target.workspace_role,
+                    enabled=True,
+                ),
+            )
+            continue
+        membership.enabled = True
+        current_rank = WORKSPACE_ROLE_RANK.get(membership.workspace_role, -1)
+        target_rank = WORKSPACE_ROLE_RANK.get(target.workspace_role, -1)
+        if target_rank > current_rank:
+            membership.workspace_role = target.workspace_role
+
+
+def _stored_department_workspace_targets(session: Session, department: str | None) -> list[WorkspaceInviteTarget]:
+    department = (department or "").strip()
+    if not department:
+        return []
+    targets: list[WorkspaceInviteTarget] = []
+    workspaces = session.scalars(select(Workspace).where(Workspace.enabled.is_(True))).all()
+    for workspace in workspaces:
+        raw_rows = ((workspace.config_json or {}).get("auth_membership_mapping") or {}).get("department_workspaces") or []
+        for row in raw_rows:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("department") or "").strip() != department:
+                continue
+            targets.append(_workspace_target(workspace.code, str(row.get("workspace_role") or "viewer")))
+    return targets
+
+
+def _auto_workspace_targets(
+    *,
+    department: str | None,
+    default_workspace_codes: str,
+    department_workspace_map: str,
+) -> list[WorkspaceInviteTarget]:
+    targets: dict[str, WorkspaceInviteTarget] = {}
+    for target in _parse_default_workspace_targets(default_workspace_codes):
+        targets[target.code] = target
+    department = (department or "").strip()
+    if department:
+        for target_department, target in _parse_department_workspace_targets(department_workspace_map):
+            if target_department != department:
+                continue
+            existing = targets.get(target.code)
+            if existing is None or WORKSPACE_ROLE_RANK[target.workspace_role] > WORKSPACE_ROLE_RANK[existing.workspace_role]:
+                targets[target.code] = target
+    return list(targets.values())
+
+
+def _parse_default_workspace_targets(raw: str) -> list[WorkspaceInviteTarget]:
+    targets = []
+    for item in [part.strip() for part in raw.split(",") if part.strip()]:
+        parts = [part.strip() for part in item.split(":")]
+        if len(parts) == 1:
+            code, role = parts[0], "viewer"
+        elif len(parts) == 2:
+            code, role = parts
+        else:
+            raise ValueError(f"Invalid AUTH_DEFAULT_WORKSPACE_CODES item: {item}")
+        targets.append(_workspace_target(code, role))
+    return targets
+
+
+def parse_default_workspace_targets(raw: str) -> list[WorkspaceInviteTarget]:
+    return _parse_default_workspace_targets(raw)
+
+
+def _parse_department_workspace_targets(raw: str) -> list[tuple[str, WorkspaceInviteTarget]]:
+    targets = []
+    for item in [part.strip() for part in raw.split(",") if part.strip()]:
+        parts = [part.strip() for part in item.split(":")]
+        if len(parts) == 2:
+            department, code = parts
+            role = "viewer"
+        elif len(parts) == 3:
+            department, code, role = parts
+        else:
+            raise ValueError(f"Invalid AUTH_DEPARTMENT_WORKSPACE_MAP item: {item}")
+        if not department:
+            raise ValueError(f"Invalid AUTH_DEPARTMENT_WORKSPACE_MAP department: {item}")
+        targets.append((department, _workspace_target(code, role)))
+    return targets
+
+
+def parse_department_workspace_targets(raw: str) -> list[tuple[str, WorkspaceInviteTarget]]:
+    return _parse_department_workspace_targets(raw)
+
+
+def _workspace_target(code: str, role: str) -> WorkspaceInviteTarget:
+    code = code.strip()
+    role = role.strip() or "viewer"
+    if not code:
+        raise ValueError("Workspace code cannot be empty in auth membership mapping")
+    if role not in WORKSPACE_ROLE_RANK:
+        raise ValueError(f"Invalid workspace role in auth membership mapping: {role}")
+    return WorkspaceInviteTarget(code=code, workspace_role=role)
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
@@ -655,10 +837,12 @@ def _ensure_workspaces(session: Session) -> dict[str, Workspace]:
             workspace.enabled = True
         existing_config = workspace.config_json or {}
         existing_policy = existing_config.get("label_policy")
+        existing_feedback_policy = existing_config.get("feedback_policy")
         workspace.config_json = {
             **existing_config,
             "sort_order": definition["sort_order"],
             "label_policy": _workspace_label_policy_for_seed(code, existing_policy),
+            "feedback_policy": _workspace_feedback_policy_for_seed(existing_feedback_policy),
         }
         _ensure_workspace_sections(
             session,
@@ -675,6 +859,17 @@ def _default_workspace_label_policy() -> dict:
         **DEFAULT_WORKSPACE_LABEL_POLICY,
         "allowed_primary_categories": taxonomy["categories"],
         "secondary_labels_by_primary": {},
+    }
+
+
+def _default_workspace_feedback_policy() -> dict:
+    return dict(DEFAULT_WORKSPACE_FEEDBACK_POLICY)
+
+
+def _workspace_feedback_policy_for_seed(existing_policy: dict | None) -> dict:
+    return {
+        **DEFAULT_WORKSPACE_FEEDBACK_POLICY,
+        **dict(existing_policy or {}),
     }
 
 

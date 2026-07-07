@@ -22,6 +22,7 @@ from app.models.content import (
     RecommendationItem,
     RecommendationRun,
 )
+from app.models.feedback import ActivityEvent, Notification
 from app.models.identity import LoginAttempt, PasswordResetToken, Role, User, UserInvite
 from app.models.reports import DailyReport, DailyReportItem, WeeklyReport, WeeklyReportItem
 from app.models.workspace import Workspace, WorkspaceMembership
@@ -185,9 +186,30 @@ def test_workspace_membership_controls_daily_item_edit(monkeypatch, tmp_path):
     assert viewer.post(f"/api/daily-reports/{bundle['daily_report_id']}/publish").status_code == 403
     viewer_patch = viewer.patch(f"/api/daily-report-items/{report_item_id}", json={"editor_title": "Nope"})
     assert viewer_patch.status_code == 403
-    assert viewer.post(f"/api/daily-report-items/{report_item_id}/reactions", json={"reaction_type": "like"}).status_code == 403
+    assert viewer.post(f"/api/daily-report-items/{report_item_id}/reactions", json={"reaction_type": "like"}).status_code == 200
+    assert viewer.post(f"/api/daily-report-items/{report_item_id}/ratings", json={"score": 4}).status_code == 200
+    assert viewer.post(f"/api/daily-report-items/{report_item_id}/comments", json={"body": "viewer feedback"}).status_code == 200
+    assert viewer.get("/api/notifications/unread-count").json()["unread_count"] == 0
     assert viewer.post("/api/report-formats", json=_report_format_payload()).status_code == 403
     assert viewer.get("/api/exports").status_code == 403
+
+    assert _login(admin).status_code == 200
+    disabled_feedback = admin.patch(
+        "/api/workspaces/planning_intel/feedback-policy",
+        json={
+            "viewer_can_react": False,
+            "viewer_can_rate": False,
+            "viewer_can_comment": False,
+            "viewer_can_edit": False,
+            "notify_on_comment": True,
+            "notify_on_publish": False,
+        },
+    )
+    assert disabled_feedback.status_code == 200
+    assert disabled_feedback.json()["viewer_can_comment"] is False
+    assert viewer.post(f"/api/daily-report-items/{report_item_id}/reactions", json={"reaction_type": "like"}).status_code == 403
+    assert viewer.post(f"/api/daily-report-items/{report_item_id}/ratings", json={"score": 3}).status_code == 403
+    assert viewer.post(f"/api/daily-report-items/{report_item_id}/comments", json={"body": "blocked"}).status_code == 403
 
     member = TestClient(create_app())
     assert member.post("/api/auth/login", json={"username": "member", "password": "password-123"}).status_code == 200
@@ -197,6 +219,25 @@ def test_workspace_membership_controls_daily_item_edit(monkeypatch, tmp_path):
     assert member.post(f"/api/daily-report-items/{report_item_id}/reactions", json={"reaction_type": "like"}).status_code == 200
     assert member.post(f"/api/daily-report-items/{report_item_id}/ratings", json={"score": 5}).status_code == 200
     assert member.post(f"/api/daily-report-items/{report_item_id}/comments", json={"body": "Looks good"}).status_code == 200
+    activity_events = member.get("/api/activity-events", params={"workspace_code": "planning_intel"})
+    assert activity_events.status_code == 200
+    assert {"reaction.created", "rating.created", "comment.created"}.issubset(
+        {event["event_type"] for event in activity_events.json()}
+    )
+    viewer_unread = viewer.get("/api/notifications/unread-count")
+    assert viewer_unread.status_code == 200
+    assert viewer_unread.json()["unread_count"] == 1
+    viewer_notifications = viewer.get("/api/notifications")
+    assert viewer_notifications.status_code == 200
+    notification_payload = viewer_notifications.json()[0]
+    assert notification_payload["activity_event"]["event_type"] == "comment.created"
+    assert notification_payload["activity_event"]["target_object_id"] == report_item_id
+    assert notification_payload["target_label"] == "进入日报"
+    assert notification_payload["target_path"] == f"/daily-reports?item_id={report_item_id}&comment_id={notification_payload['activity_event']['object_id']}"
+    marked_read = viewer.post(f"/api/notifications/{notification_payload['id']}/read")
+    assert marked_read.status_code == 200
+    assert marked_read.json()["status"] == "read"
+    assert viewer.get("/api/notifications/unread-count").json()["unread_count"] == 0
     assert member.patch(f"/api/weekly-report-items/{bundle['weekly_item_id']}", json={"editor_title": "Weekly"}).status_code == 200
     assert member.post(f"/api/daily-reports/{bundle['daily_report_id']}/publish").status_code == 200
     export = member.post(f"/api/exports/company-sql/daily-reports/{bundle['daily_report_id']}")
@@ -212,9 +253,364 @@ def test_workspace_membership_controls_daily_item_edit(monkeypatch, tmp_path):
     assert viewer.get("/api/exports", params={"workspace_code": "planning_intel"}).status_code == 200
     assert viewer.get(f"/api/exports/{export_job_id}/trace").status_code == 200
 
-    assert _login(admin).status_code == 200
     super_patch = admin.patch(f"/api/daily-report-items/{report_item_id}", json={"editor_title": "Admin"})
     assert super_patch.status_code == 200
+
+
+def test_notification_preferences_filter_in_app_notifications(monkeypatch, tmp_path):
+    _, engine = make_client(monkeypatch, tmp_path, AUTH_MODE="public_password")
+    bundle = _create_report_bundle(engine)
+    report_item_id = bundle["daily_item_id"]
+    _create_local_user(engine, "viewer", "password-123", workspace_role="viewer")
+    _create_local_user(engine, "member", "password-123", workspace_role="member")
+
+    viewer = TestClient(create_app())
+    assert viewer.post("/api/auth/login", json={"username": "viewer", "password": "password-123"}).status_code == 200
+    preferences = viewer.get("/api/notification-preferences", params={"workspace_code": "planning_intel"})
+    assert preferences.status_code == 200
+    comment_preference = next(item for item in preferences.json() if item["event_type"] == "comment.created")
+    assert comment_preference["in_app_enabled"] is True
+    assert comment_preference["email_enabled"] is False
+
+    disabled = viewer.patch(
+        "/api/notification-preferences",
+        json={
+            "workspace_code": "planning_intel",
+            "event_type": "comment.created",
+            "in_app_enabled": False,
+            "email_enabled": False,
+        },
+    )
+    assert disabled.status_code == 200
+    assert disabled.json()["in_app_enabled"] is False
+
+    invalid = viewer.patch(
+        "/api/notification-preferences",
+        json={
+            "workspace_code": "planning_intel",
+            "event_type": "unknown.event",
+            "in_app_enabled": False,
+        },
+    )
+    assert invalid.status_code == 400
+
+    assert viewer.post(f"/api/daily-report-items/{report_item_id}/comments", json={"body": "viewer context"}).status_code == 200
+    member = TestClient(create_app())
+    assert member.post("/api/auth/login", json={"username": "member", "password": "password-123"}).status_code == 200
+    assert member.post(f"/api/daily-report-items/{report_item_id}/comments", json={"body": "member reply"}).status_code == 200
+
+    assert viewer.get("/api/notifications/unread-count").json()["unread_count"] == 0
+    listed = viewer.get("/api/notifications", params={"status": "all"})
+    assert listed.status_code == 200
+    assert listed.json() == []
+    activity_events = member.get("/api/activity-events", params={"workspace_code": "planning_intel"})
+    assert "comment.created" in {event["event_type"] for event in activity_events.json()}
+
+
+def test_comment_mentions_create_important_notifications(monkeypatch, tmp_path):
+    _, engine = make_client(monkeypatch, tmp_path, AUTH_MODE="public_password")
+    bundle = _create_report_bundle(engine)
+    report_item_id = bundle["daily_item_id"]
+    mentioned = _create_local_user(engine, "mention-viewer", "password-123", workspace_role="viewer")
+    _create_local_user(engine, "mention-member", "password-123", workspace_role="member")
+
+    viewer = TestClient(create_app())
+    assert viewer.post(
+        "/api/auth/login",
+        json={"username": mentioned.username, "password": "password-123"},
+    ).status_code == 200
+    preferences = viewer.get("/api/notification-preferences", params={"workspace_code": "planning_intel"})
+    assert preferences.status_code == 200
+    assert any(item["event_type"] == "comment.mentioned" for item in preferences.json())
+
+    member = TestClient(create_app())
+    assert member.post(
+        "/api/auth/login",
+        json={"username": "mention-member", "password": "password-123"},
+    ).status_code == 200
+    comment = member.post(
+        f"/api/daily-report-items/{report_item_id}/comments",
+        json={"body": "请 @mention-viewer 复核这条情报"},
+    )
+    assert comment.status_code == 200
+    comment_id = comment.json()["id"]
+
+    assert viewer.get("/api/notifications/unread-count").json()["unread_count"] == 1
+    notifications = viewer.get("/api/notifications", params={"status": "all"})
+    assert notifications.status_code == 200
+    notification = notifications.json()[0]
+    assert notification["priority"] == "important"
+    assert notification["activity_event"]["event_type"] == "comment.mentioned"
+    assert notification["activity_event"]["object_type"] == "comment"
+    assert notification["activity_event"]["object_id"] == comment_id
+    assert notification["activity_event"]["metadata_json"]["comment_id"] == comment_id
+    assert notification["activity_event"]["metadata_json"]["mentioned_user_ids"] == [mentioned.id]
+    assert notification["target_path"] == f"/daily-reports?item_id={report_item_id}&comment_id={comment_id}"
+
+
+def test_report_publish_notifications_follow_policy_and_preferences(monkeypatch, tmp_path):
+    admin, engine = make_client(monkeypatch, tmp_path, AUTH_MODE="public_password")
+    bundle = _create_report_bundle(engine)
+    _create_local_user(engine, "viewer", "password-123", workspace_role="viewer")
+    _create_local_user(engine, "member", "password-123", workspace_role="member")
+
+    assert _login(admin).status_code == 200
+    policy = admin.patch(
+        "/api/workspaces/planning_intel/feedback-policy",
+        json={
+            "viewer_can_react": True,
+            "viewer_can_rate": True,
+            "viewer_can_comment": True,
+            "viewer_can_edit": False,
+            "notify_on_comment": True,
+            "notify_on_publish": True,
+        },
+    )
+    assert policy.status_code == 200
+    assert policy.json()["notify_on_publish"] is True
+
+    viewer = TestClient(create_app())
+    assert viewer.post("/api/auth/login", json={"username": "viewer", "password": "password-123"}).status_code == 200
+    member = TestClient(create_app())
+    assert member.post("/api/auth/login", json={"username": "member", "password": "password-123"}).status_code == 200
+    assert viewer.get("/api/notifications/unread-count").json()["unread_count"] == 0
+
+    daily_published = member.post(f"/api/daily-reports/{bundle['daily_report_id']}/publish")
+    assert daily_published.status_code == 200
+    assert viewer.get("/api/notifications/unread-count").json()["unread_count"] == 1
+    daily_notifications = viewer.get("/api/notifications", params={"status": "all"})
+    assert daily_notifications.status_code == 200
+    daily_notification = daily_notifications.json()[0]
+    assert daily_notification["activity_event"]["event_type"] == "daily_report.published"
+    assert daily_notification["activity_event"]["target_object_id"] == bundle["daily_report_id"]
+    assert daily_notification["target_label"] == "进入日报"
+    assert daily_notification["target_path"] == f"/daily-reports?report_id={bundle['daily_report_id']}"
+
+    archived = viewer.post(f"/api/notifications/{daily_notification['id']}/archive")
+    assert archived.status_code == 200
+    assert archived.json()["status"] == "archived"
+    assert viewer.get("/api/notifications/unread-count").json()["unread_count"] == 0
+    archived_list = viewer.get("/api/notifications", params={"status": "archived"})
+    assert archived_list.status_code == 200
+    assert archived_list.json()[0]["id"] == daily_notification["id"]
+    active_list = viewer.get("/api/notifications", params={"status": "all"})
+    assert active_list.status_code == 200
+    assert active_list.json() == []
+
+    repeated_daily_publish = member.post(f"/api/daily-reports/{bundle['daily_report_id']}/publish")
+    assert repeated_daily_publish.status_code == 200
+    assert viewer.get("/api/notifications/unread-count").json()["unread_count"] == 0
+
+    disabled_weekly = viewer.patch(
+        "/api/notification-preferences",
+        json={
+            "workspace_code": "planning_intel",
+            "event_type": "weekly_report.published",
+            "in_app_enabled": False,
+            "email_enabled": False,
+        },
+    )
+    assert disabled_weekly.status_code == 200
+    weekly_published = member.post(f"/api/weekly-reports/{bundle['weekly_report_id']}/publish")
+    assert weekly_published.status_code == 200
+    assert viewer.get("/api/notifications/unread-count").json()["unread_count"] == 0
+
+    activity_events = member.get("/api/activity-events", params={"workspace_code": "planning_intel"})
+    assert activity_events.status_code == 200
+    event_types = {event["event_type"] for event in activity_events.json()}
+    assert {"daily_report.published", "weekly_report.published"}.issubset(event_types)
+
+
+def test_notification_payload_resolves_weekly_report_item_target(monkeypatch, tmp_path):
+    _, engine = make_client(monkeypatch, tmp_path, AUTH_MODE="public_password")
+    bundle = _create_report_bundle(engine)
+    viewer = _create_local_user(engine, "weekly-item-viewer", "password-123", workspace_role="viewer")
+
+    Session = sessionmaker(bind=engine)
+    with Session() as session:
+        event = ActivityEvent(
+            workspace_code="planning_intel",
+            domain_code="ai",
+            actor_user_id=None,
+            event_type="weekly_report_item.updated",
+            object_type="weekly_report_item",
+            object_id=bundle["weekly_item_id"],
+            target_object_type="weekly_report_item",
+            target_object_id=bundle["weekly_item_id"],
+            summary="周报条目需要复核",
+            metadata_json={"weekly_report_item_id": bundle["weekly_item_id"]},
+            sync_policy="local_only",
+        )
+        session.add(event)
+        session.flush()
+        session.add(
+            Notification(
+                user_id=viewer.id,
+                workspace_code="planning_intel",
+                activity_event_id=event.id,
+                status="unread",
+            ),
+        )
+        session.commit()
+
+    viewer_client = TestClient(create_app())
+    assert viewer_client.post(
+        "/api/auth/login",
+        json={"username": viewer.username, "password": "password-123"},
+    ).status_code == 200
+
+    notifications = viewer_client.get("/api/notifications", params={"status": "all"})
+    assert notifications.status_code == 200
+    payload = notifications.json()[0]
+    assert payload["activity_event"]["target_object_type"] == "weekly_report_item"
+    assert payload["target_label"] == "进入周报条目"
+    assert payload["target_path"] == f"/weekly-reports?item_id={bundle['weekly_item_id']}"
+
+
+def test_weekly_report_item_update_notifies_workspace_members_with_preference_filter(monkeypatch, tmp_path):
+    _, engine = make_client(monkeypatch, tmp_path, AUTH_MODE="public_password")
+    bundle = _create_report_bundle(engine)
+    _create_local_user(engine, "weekly-editor", "password-123", workspace_role="member")
+    viewer = _create_local_user(engine, "weekly-viewer", "password-123", workspace_role="viewer")
+    muted = _create_local_user(engine, "weekly-muted", "password-123", workspace_role="viewer")
+
+    editor_client = TestClient(create_app())
+    assert editor_client.post(
+        "/api/auth/login",
+        json={"username": "weekly-editor", "password": "password-123"},
+    ).status_code == 200
+    viewer_client = TestClient(create_app())
+    assert viewer_client.post(
+        "/api/auth/login",
+        json={"username": viewer.username, "password": "password-123"},
+    ).status_code == 200
+    muted_client = TestClient(create_app())
+    assert muted_client.post(
+        "/api/auth/login",
+        json={"username": muted.username, "password": "password-123"},
+    ).status_code == 200
+
+    preferences = viewer_client.get("/api/notification-preferences", params={"workspace_code": "planning_intel"})
+    assert preferences.status_code == 200
+    assert any(item["event_type"] == "weekly_report_item.updated" for item in preferences.json())
+    muted_preference = muted_client.patch(
+        "/api/notification-preferences",
+        json={
+            "workspace_code": "planning_intel",
+            "event_type": "weekly_report_item.updated",
+            "in_app_enabled": False,
+            "email_enabled": False,
+        },
+    )
+    assert muted_preference.status_code == 200
+
+    updated = editor_client.patch(
+        f"/api/weekly-report-items/{bundle['weekly_item_id']}",
+        json={"adoption_status": 1, "editor_title": "需要复核的周报条目"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["editor_title"] == "需要复核的周报条目"
+
+    assert editor_client.get("/api/notifications/unread-count").json()["unread_count"] == 0
+    assert muted_client.get("/api/notifications/unread-count").json()["unread_count"] == 0
+    assert viewer_client.get("/api/notifications/unread-count").json()["unread_count"] == 1
+    notifications = viewer_client.get("/api/notifications", params={"status": "all"})
+    assert notifications.status_code == 200
+    notification = notifications.json()[0]
+    assert notification["activity_event"]["event_type"] == "weekly_report_item.updated"
+    assert notification["activity_event"]["metadata_json"]["weekly_report_item_id"] == bundle["weekly_item_id"]
+    assert notification["activity_event"]["metadata_json"]["changed_fields"] == [
+        "adoption_status",
+        "editor_title",
+    ]
+    assert notification["target_label"] == "进入周报条目"
+    assert notification["target_path"] == f"/weekly-reports?item_id={bundle['weekly_item_id']}"
+
+    assert viewer_client.post("/api/notifications/read-all").status_code == 200
+    unchanged = editor_client.patch(
+        f"/api/weekly-report-items/{bundle['weekly_item_id']}",
+        json={"adoption_status": 1, "editor_title": "需要复核的周报条目"},
+    )
+    assert unchanged.status_code == 200
+    assert viewer_client.get("/api/notifications/unread-count").json()["unread_count"] == 0
+
+
+def test_object_watcher_receives_daily_report_comment_notifications(monkeypatch, tmp_path):
+    _, engine = make_client(monkeypatch, tmp_path, AUTH_MODE="public_password")
+    bundle = _create_report_bundle(engine)
+    watcher = _create_local_user(engine, "daily-watcher", "password-123", workspace_role="viewer")
+    _create_local_user(engine, "daily-commenter", "password-123", workspace_role="member")
+    _create_local_user(engine, "daily-outsider", "password-123", workspace_role=None)
+
+    watcher_client = TestClient(create_app())
+    assert watcher_client.post(
+        "/api/auth/login",
+        json={"username": watcher.username, "password": "password-123"},
+    ).status_code == 200
+    commenter_client = TestClient(create_app())
+    assert commenter_client.post(
+        "/api/auth/login",
+        json={"username": "daily-commenter", "password": "password-123"},
+    ).status_code == 200
+    outsider_client = TestClient(create_app())
+    assert outsider_client.post(
+        "/api/auth/login",
+        json={"username": "daily-outsider", "password": "password-123"},
+    ).status_code == 200
+
+    status = watcher_client.get(
+        "/api/object-watchers",
+        params={"object_type": "daily_report_item", "object_id": bundle["daily_item_id"]},
+    )
+    assert status.status_code == 200
+    assert status.json()["watching"] is False
+    assert status.json()["watcher_count"] == 0
+
+    outsider_watch = outsider_client.patch(
+        "/api/object-watchers",
+        json={"object_type": "daily_report_item", "object_id": bundle["daily_item_id"], "watching": True},
+    )
+    assert outsider_watch.status_code == 403
+
+    watched = watcher_client.patch(
+        "/api/object-watchers",
+        json={"object_type": "daily_report_item", "object_id": bundle["daily_item_id"], "watching": True},
+    )
+    assert watched.status_code == 200
+    assert watched.json()["watching"] is True
+    assert watched.json()["watcher_count"] == 1
+
+    first_comment = commenter_client.post(
+        f"/api/daily-report-items/{bundle['daily_item_id']}/comments",
+        json={"body": "请关注这条后续"},
+    )
+    assert first_comment.status_code == 200
+    assert watcher_client.get("/api/notifications/unread-count").json()["unread_count"] == 1
+    notifications = watcher_client.get("/api/notifications", params={"status": "all"})
+    assert notifications.status_code == 200
+    notification = notifications.json()[0]
+    assert notification["activity_event"]["event_type"] == "comment.created"
+    assert notification["activity_event"]["target_object_id"] == bundle["daily_item_id"]
+    assert notification["target_path"] == (
+        f"/daily-reports?item_id={bundle['daily_item_id']}"
+        f"&comment_id={notification['activity_event']['object_id']}"
+    )
+
+    assert watcher_client.post("/api/notifications/read-all").status_code == 200
+    unwatched = watcher_client.patch(
+        "/api/object-watchers",
+        json={"object_type": "daily_report_item", "object_id": bundle["daily_item_id"], "watching": False},
+    )
+    assert unwatched.status_code == 200
+    assert unwatched.json()["watching"] is False
+    assert unwatched.json()["watcher_count"] == 0
+
+    second_comment = commenter_client.post(
+        f"/api/daily-report-items/{bundle['daily_item_id']}/comments",
+        json={"body": "取消关注后不应通知"},
+    )
+    assert second_comment.status_code == 200
+    assert watcher_client.get("/api/notifications/unread-count").json()["unread_count"] == 0
 
 
 def test_workspace_admin_can_manage_sources_and_report_formats(monkeypatch, tmp_path):
