@@ -1,4 +1,4 @@
-import { createRouter, createWebHistory } from "vue-router";
+import { createRouter, createWebHistory, type Router, type RouterHistory, type RouteRecordRaw } from "vue-router";
 
 import AccountPage from "../pages/AccountPage.vue";
 import AppShell from "../layouts/AppShell.vue";
@@ -10,9 +10,11 @@ import EntityMilestonesPage from "../pages/EntityMilestonesPage.vue";
 import ExportsPage from "../pages/ExportsPage.vue";
 import HistoricalReportsPage from "../pages/HistoricalReportsPage.vue";
 import IngestionRunsPage from "../pages/IngestionRunsPage.vue";
+import InsightsPage from "../pages/InsightsPage.vue";
 import InvitePage from "../pages/InvitePage.vue";
 import LoginPage from "../pages/LoginPage.vue";
 import NewsPage from "../pages/NewsPage.vue";
+import NotificationsPage from "../pages/NotificationsPage.vue";
 import QualityArchivePage from "../pages/QualityArchivePage.vue";
 import RecommendationsPage from "../pages/RecommendationsPage.vue";
 import RequirementsPage from "../pages/RequirementsPage.vue";
@@ -23,12 +25,29 @@ import SetupPage from "../pages/SetupPage.vue";
 import TopicTasksPage from "../pages/TopicTasksPage.vue";
 import UsersPage from "../pages/UsersPage.vue";
 import WeeklyReportsPage from "../pages/WeeklyReportsPage.vue";
+import WorkspaceSettingsPage from "../pages/WorkspaceSettingsPage.vue";
+import { useRuntimeStore } from "../stores/runtime";
 import { useSessionStore } from "../stores/session";
 import { useSetupStore } from "../stores/setup";
+import { useWorkspaceStore } from "../stores/workspace";
 
-export const router = createRouter({
-  history: createWebHistory(),
-  routes: [
+// viewer（游客）可访问的阅读路由前缀：日报/周报/历史报告/实体大事记 + 个人页。
+// 管理路由（数据源/抓取/候选池/推荐/导出/用户/审计/同步/运营等）对 viewer 整组
+// 重定向到 /daily-reports（与工作台分区 min_role 口径一致，搜索在顶栏不占路由）。
+const VIEWER_PATH_PREFIXES = [
+  "/daily-reports",
+  "/weekly-reports",
+  "/historical-reports",
+  "/entity-milestones",
+  "/account",
+  "/notifications"
+];
+
+function isViewerReadablePath(path: string) {
+  return VIEWER_PATH_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+}
+
+export const routes: RouteRecordRaw[] = [
     {
       path: "/login",
       name: "login",
@@ -66,6 +85,11 @@ export const router = createRouter({
           path: "account",
           name: "account",
           component: AccountPage
+        },
+        {
+          path: "notifications",
+          name: "notifications",
+          component: NotificationsPage
         },
         {
           path: "sources",
@@ -138,6 +162,11 @@ export const router = createRouter({
           component: RequirementsPage
         },
         {
+          path: "insights",
+          name: "insights",
+          component: InsightsPage
+        },
+        {
           path: "tasks",
           name: "tasks",
           component: TopicTasksPage
@@ -148,48 +177,83 @@ export const router = createRouter({
           component: SyncRunsPage
         },
         {
+          path: "workspace-settings",
+          name: "workspace-settings",
+          component: WorkspaceSettingsPage
+        },
+        {
           path: "audit-logs",
           name: "audit-logs",
           component: AuditLogsPage
         }
       ]
     }
-  ]
-});
+];
 
-router.beforeEach(async (to) => {
-  const setup = useSetupStore();
-  if (!setup.checked) {
-    await setup.loadStatus();
-  }
-  if (setup.needsSetup) {
-    return to.path === "/setup" ? true : "/setup";
-  }
-  if (to.path === "/setup") {
-    return "/login";
-  }
+export function installRouterGuards(appRouter: Router) {
+  appRouter.beforeEach(async (to) => {
+    const setup = useSetupStore();
+    if (!setup.checked) {
+      await setup.loadStatus();
+    }
+    const runtime = useRuntimeStore();
+    if (!runtime.checked) {
+      await runtime.load();
+    }
+    if (setup.needsSetup) {
+      return to.path === "/setup" ? true : "/setup";
+    }
+    if (to.path === "/setup") {
+      return "/login";
+    }
 
-  const session = useSessionStore();
-  if (!session.checked) {
-    await session.loadCurrentUser();
-  }
+    const session = useSessionStore();
+    if (!session.checked) {
+      await session.loadCurrentUser();
+    }
 
-  if (to.path === "/login") {
-    return session.isAuthenticated ? "/dashboard" : true;
-  }
+    if (to.path === "/login") {
+      return session.isAuthenticated ? "/dashboard" : true;
+    }
 
-  if (to.path.startsWith("/invite/")) {
+    if (to.path.startsWith("/invite/")) {
+      return true;
+    }
+
+    if (!session.isAuthenticated) {
+      return {
+        path: "/login",
+        query: { redirect: to.fullPath }
+      };
+    }
+    if (session.user?.status === "must_change_password" && to.path !== "/account") {
+      return "/account";
+    }
+
+    // viewer（游客）阅读视角：当前工作台角色是 viewer（且非 super_admin /
+    // editor_admin）时默认落地 /daily-reports，访问管理路由一律重定向回日报。
+    const globalRoles = session.user?.roles ?? [];
+    const hasGlobalAdminRole = globalRoles.includes("super_admin") || globalRoles.includes("editor_admin");
+    if (!hasGlobalAdminRole && !isViewerReadablePath(to.path)) {
+      const workspace = useWorkspaceStore();
+      await workspace.ensureLoaded();
+      if (workspace.currentRole === "viewer") {
+        return "/daily-reports";
+      }
+    }
     return true;
-  }
+  });
+}
 
-  if (!session.isAuthenticated) {
-    return {
-      path: "/login",
-      query: { redirect: to.fullPath }
-    };
-  }
-  if (session.user?.status === "must_change_password" && to.path !== "/account") {
-    return "/account";
-  }
-  return true;
-});
+// history base 跟随构建期 VITE_BASE_PATH（vite.config.ts 注入 import.meta.env.BASE_URL），
+// 支撑门户子路径部署（如 /watchtower/）。
+export function createInfoWatchtowerRouter(history: RouterHistory = createWebHistory(import.meta.env.BASE_URL)) {
+  const appRouter = createRouter({
+    history,
+    routes
+  });
+  installRouterGuards(appRouter);
+  return appRouter;
+}
+
+export const router = createInfoWatchtowerRouter();

@@ -1,56 +1,110 @@
-# InfoWatchtower
+# InfoWatchtower（AI情报官）
 
-规划部全自动热点追踪与情报生产系统。
+**多工作台的产业情报操作系统。** 一套代码把「信息源接入 → 原始数据入库 → 标准化去重 →
+可解释推荐准入 → 结构化成稿 → 日报/周报编审发布 → 多格式分发」做成共享流水线：任何团队
+可以自助开一个工作台、接自己的信息源、配自己的标签策略，产出可追溯的日报、周报、洞察、
+需求和任务；规划部是第一个租户（对接公司内网 SQL 硬合同），同一套系统支持本地一键
+Docker、云主机官方站、公网采集发布和内网门户 iframe 嵌入四种部署形态，不分叉代码。
 
-当前状态：阶段 0-6 已完成可回填闭环。阶段 3 已完成旧种子源导入、补充信息源台账导入、共享数据源池、默认工作台源链接、工作台统一标签策略、adapter 框架、RSS/paper RSS/页面源抓取到 `raw_items`、工作台级 ingestion run API，以及 Redis/RQ worker + scheduler 调度入口；规划部工作台 v1 默认 294 个共享源全部启用。阶段 4 已完成 `raw_items -> news_items -> dedupe_groups`：可按工作台标准化 raw、生成 canonical URL 与 dedupe key、执行工作台隔离硬去重，并查询 winner/loser。阶段 5 已完成完整日报流水线、内容准入等级、可解释推荐分、可选 MiniMax 结构化生成、`generated_news`、日报草稿、发布、日报条目编辑和点赞/评分/评论最小 API；`planning_intel` 推荐默认技术情报优先，提升 AI 软件、AI 基础设施、模型工程、推理/训练、Agent、硬件厂商技术路线和通信系统信号，降权泛商业新闻、营销、财报、消费硬件和弱相关内容。阶段 6 已完成已发布日报的公司 SQL 标准导出，导出只取 `adoption_status = 2`、`generation_status = ready` 且非 `rule_v1` 的采信项，`content_json` 只保留旧系统五段字段，`created_at` 使用旧内网可导入的 `'YYYY-MM-DD HH:MM:SS'` 字面量并在缺失发布时间时兜底到日报 `day_key 09:00:00`。所有 SQL 预览必须通过 `scripts/validate_company_sql.py`，0505 预览是字段校验基准。前端已包含浅色工作台壳、数据源管理、候选池、推荐运行、抓取覆盖率、日报、SQL 导出和用户权限页面。scheduler 开启后默认执行每日完整流水线：抓取、标准化/去重、推荐和日报草稿。`planning_intel` 与 `ai_tools` 的标签策略已在后端隔离。下一步进入候选质量治理、历史补采、周报/需求/任务后端 API、公网/内网同步骨架和部署硬化。
+## 15 分钟上手
 
-## 接手入口
+前置：Docker（含 docker compose）和 openssl。
 
-任何工程师或 AI 接手时，先读：
+```bash
+# 1. 拉代码
+git clone <this-repo> && cd <repo-dir>
 
-1. `AGENTS.md`：开发准则和修改同步规则。
-2. `docs/00-system-design.md`：唯一总纲，包含愿景、主链路、扩展方式、部署方向。
-3. `docs/implementation-handoff.md`：第一版开发任务书和验收标准。
-4. `docs/01-implementation-plan.md`：第一版施工顺序、阶段交付物和验收命令。
-5. `docs/README.md`：文档地图和修改规则。
-6. `config/contracts/README.md`：解释 contracts 和 AGENTS 的区别。
-7. `config/contracts/*.json`：机器可读契约，写代码时必须遵守。
+# 2. 一键安装（生成 env + 构建 + 起容器，默认 full 预设）
+cd deploy && ./install.sh --local
 
-其他 `docs/*.md` 是专题附录，按需阅读；`references/legacy-auto-sync-20260412/` 是旧系统参考资料，不是新系统运行入口。
+# 3. 打开 http://localhost:5173 ，首次访问进入 /setup 创建第一个管理员
 
-完整旧系统参考资料不提交主仓，放在私有仓 `InfoWatchtower-References`。需要旧资料时看 `references/README.md`。
+# 4. 建工作台：侧边栏「新建工作台」三步向导（或直接用内置 planning_intel，
+#    默认已启用 294 个共享源）
 
-## 仓库内容
+# 5. 抓一轮数据：进入「抓取与覆盖」页点抓取（或等 scheduler 按
+#    INGESTION_SCHEDULER_DAILY_TIME 每天自动跑完整流水线：
+#    抓取 → 标准化/去重 → 推荐 → 成稿 → 日报自动发布）
 
-- `config/seeds/legacy/`：新系统可导入的旧种子源。
-- `config/taxonomy/`：AI 兼容标签和长期产业情报板块。
-- `config/contracts/`：数据源、adapter、SQL、登录、工作台、标签、扩展点、战略闭环、同步策略契约。
-- `config/domain_packs/`：后续扩展硬件、半导体、政策、竞品等板块的配置包。
-- `docs/`：总纲和专题附录。
-- `references/README.md`：私有参考仓拉取说明。
-- `config/env.example`：环境变量样例。
-- `docs/development-quickstart.md`：当前工程骨架的本地启动说明。
+# 6. 看日报：进入「日报」页直接读当天成稿；管理员可继续采信/编辑/修订，
+#    viewer 打开即是阅读视角
+```
 
-本地旧 `.env` 已复制到 `config/.env` 以便复用，但不会进入 Git。
+日常起停（安装过一次之后，在仓库根）：
 
-当前种子源统计：旧 113 个种子源 + 补充 CSV 台账 248 条导入记录，按 `source_type + url` 去重后形成 294 个共享源；规划部工作台 v1 默认全部启用。`config/taxonomy/source_tags.json` 是数据源侧方向标签，只用于源管理、覆盖分析和评分先验，不进入成品新闻一级标签或公司 SQL category。
+```bash
+make up      # 启动（复用 deploy/.env）
+make down    # 停止
+make build   # 改依赖后重建镜像
+make logs    # 跟日志
+```
 
-当前数据库骨架：40 张业务表，覆盖用户/RBAC、工作台、共享数据源、标签、raw/news、去重、推荐、日报/周报、互动反馈、SQL 导出、同步回流和战略需求闭环。任意日报条目应能沿外键追回 `raw_items.raw_payload_json`。
+## 四种部署形态 × 三种启动预设
 
-当前登录能力：支持 `local/public_password/intranet_header` 三种入口，统一落到本地 `users` 和 `roles`；本地 Docker 默认开发账号为 `admin/password`，生产环境必须替换 `AUTH_SESSION_SECRET` 和 `AUTH_BOOTSTRAP_ADMIN_PASSWORD`。
+同一套代码按 `DEPLOY_MODE` 收敛能力，差异只由环境变量、认证 adapter、同步角色和网关
+决定（契约：`config/contracts/deployment_modes.json`；规格：
+`docs/deployment/deployment-topology.md`）：
 
-当前工作台模型：工作台列表和页面已由数据库 `workspaces/workspace_sections` 控制；所有工作台复用数据源管理、候选池、日报、周报和导出主链路。工作台自己的 `config_json.label_policy` 是模型生成新闻结构和去重后标签定稿的统一标签策略；`planning_intel` 默认使用旧公司 SQL 的 10 个一级标签，`ai_tools` 默认使用“工具新功能、工具新案例、工具新技术”以及每个一级下的 `cursor/claude code/opencode/codex` 二级标签。`workspace_source_links` 只决定每个工作台如何启用某个共享源，以及该源在当前工作台的权重和日限。
+| 形态 | 用途 | 采集 | 同步角色 | 登录 |
+|---|---|---:|---|---|
+| `standalone` | 本地一键 Docker，自用或小团队 | 是 | 可不启用 | local / public_password |
+| `cloud` | 云主机官方站，团队看结果 | 是 | 可不启用 | public_password / oidc |
+| `extranet` | 公网采集发布者 | 是 | publisher（开放 `GET /api/sync/feed`） | oidc 优先 |
+| `intranet` | 内网门户同站反代 iframe 嵌入 | 否 | consumer（pull-only） | intranet_header |
 
-## 当前启动方式
+安装入口都是 `deploy/install.sh`，并支持三种启动预设：
 
-后端：
+```bash
+cd deploy
+./install.sh --local                       # 本地，默认 --preset full（全量能力）
+./install.sh --local  --preset rss-only    # 只抓 RSS 类信息源（INGESTION_SOURCE_TYPES=rss,paper_rss）
+./install.sh --local  --preset mirror      # 镜像站：本地不采集，只从外部部署拉取成果
+./install.sh --domain example.com          # 生产（cloud 形态），同样支持 --preset
+```
+
+`mirror` 预设需要外部部署的 `SYNC_REMOTE_BASE_URL/SYNC_REMOTE_TOKEN`；intranet/extranet
+形态按 `deploy/env.intranet.example` / `deploy/env.extranet.example` 手工准备 env 后使用
+对应 compose 文件。预设与 env 组合矩阵见 `docs/deployment/deployment-ops.md` §1.1/§1.2。
+
+## 能力速览
+
+| 能力块 | 现状 |
+|---|---|
+| 信息源接入 | 12 类 `source_type` 全部有真适配器：`rss / paper_rss / page_monitor / page_manual / crawler / csv / paper_api（arXiv/OpenAlex/Semantic Scholar）/ paper_page / wiseflow / manual / internal / wechat`（微信公众号自研 adapter，rsshub 主路径 + 文章 URL 定点抓取）；共享源池 + 工作台启用/权重/日限；密钥只用 `credential_ref` 引用 |
+| 处理主链 | `raw_items` 完整保留原始 payload → `news_items` 标准化 → 工作台隔离硬去重，全链路可追溯回原始报文 |
+| 推荐评分 | ContentScorer v2 准入 P0-P3/R，分数可解释（质量/主题/新鲜度/反馈/来源/热度拆解），用户反馈和需求结论反哺评分 |
+| 生成成稿 | MiniMax 五段结构化生成（未配 key 走规则降级并标注）；一次采信、多版成稿：`company_sql_v1` / `tech_insight_v1` / 自定义格式注册表，Markdown/HTML 导出 |
+| 编审发布 | 日报/周报采信、头条、编辑覆盖（不污染生成稿）、每日自动发布（工作台 `report_policy.auto_publish_daily`）与发布后修订 |
+| 协作 | 工作台可见性与自助订阅（`internal_public` 发现工作台）、用户组批量入台、任务指派与站内通知、评论/点赞/评分策略、游客只读浏览（`AUTH_GUEST_ENABLED`） |
+| 分发集成 | 公司 SQL 4 表硬合同（`scripts/validate_company_sql.py` 校验 + 语句级追溯 + 内网导入回执）；extranet feed / intranet 定时 pull 单向同步，内网反馈永不回流 |
+| 平台底座 | 四形态能力开关与启动自检、local/public_password/OIDC(PKCE)/intranet_header 统一登录、RBAC + workspace membership、工作台配置中心（标签/报告/反馈策略、导航分区、成员）、审计、备份/恢复脚本 |
+| 资料库 | 历史报告库、实体大事记、质量归档、insight → requirement → task 战略闭环，旧系统 14834 素材/66 报告导入验收链路 |
+
+## 文档导航
+
+接手或深入之前，按这个顺序读：
+
+1. `AGENTS.md` — 开发准则、修改同步规则、不可破坏的设计原则。
+2. `docs/00-system-design.md` — 唯一总纲：愿景、主链路、硬约束、部署方向。
+3. `docs/README.md` — 文档地图与权威关系（architecture/product/backend/deployment/implementation/reference 六层）。
+4. `docs/architecture/capability-map.md` — 当前实现状态、证据路径和差距列表。
+5. `docs/backend/backend-capability-test-matrix.md` — 四形态 × 能力 × 必跑测试矩阵。
+6. `docs/deployment/development-quickstart.md` — 本地开发启动细节；`docs/deployment/deployment-ops.md` — 生产部署与运维。
+7. `config/contracts/README.md` 与 `config/contracts/*.json` — 机器可读契约，写代码必须遵守。
+
+旧系统完整参考资料在私有仓 `InfoWatchtower-References`（说明见 `references/README.md`），
+不是新系统运行入口。
+
+## 本地开发与测试
+
+后端（Python 3.11+）：
 
 ```bash
 cd backend
 python -m venv .venv
 source .venv/bin/activate
 pip install ".[dev]"
-DATABASE_URL="" pytest
+DATABASE_URL="" pytest            # sqlite 内存跑测试；严禁在仓库根跑 pytest
 DATABASE_URL="" uvicorn app.main:app --reload
 ```
 
@@ -59,47 +113,33 @@ DATABASE_URL="" uvicorn app.main:app --reload
 ```bash
 cd frontend
 npm install
-npm run dev
+npm run dev        # http://localhost:5173
+npx vitest run     # 组件/页面测试
 ```
 
-更多说明见 `docs/development-quickstart.md`。
-
-Docker 本地启动：
+全量门禁（与 CI 同口径）：
 
 ```bash
-make up
+make test              # docs/前端控件治理校验 + 后端 pytest + 前端 vitest + 前端 build
+make migration-check   # alembic 迁移干净门禁
+make docs-check        # 文档治理校验
+make e2e               # Playwright smoke（可选，首次需下载 chromium）
 ```
 
-首次构建或改依赖：
+公司 SQL 导出预览在导入内网前必须通过：
 
 ```bash
-make build
+python3 scripts/validate_company_sql.py
 ```
 
-## 当前能力验收
+## 不可破坏的硬边界
 
-```bash
-make test
-make migration-check
-make build
-```
+完整清单见 `AGENTS.md`，最关键的几条：
 
-浏览器访问 `http://127.0.0.1:5173/sources`，使用 `admin/password` 登录。验收点：
-
-- 首页显示当前阶段为阶段 5。
-- 数据源页标题为“数据源管理”，共享源列表标题为“活跃数据源”。
-- 数据源页右侧展示工作台统一标签策略，规划部默认使用旧系统兼容的 10 个一级标签，AI 工具桌面默认使用独立工具标签；一级/二级标签都支持新增、重命名、删除，且不在单个源里维护标签。
-- 数据源页每个源都有“配置”入口，可设置当前工作台启用状态、权重和日限；配置开关文案为“启用”。
-- 左侧导航来自数据库，不出现工具目录、工具任务或独立热点专题。
-- 数据源页显示共享源 294、规划部工作台默认全部启用。
-- 数据源列表和右侧标签策略在桌面宽度下不应被横向截断；其他占位页应使用统一内容容器，不出现显示不全。
-- 对任意启用的 `rss`、`paper_rss`、`page_manual` 或 `page_monitor` 源点击“抓取”，成功后会提示拉取、新增、更新数量。
-- 重复抓取同一个 RSS 源时，`raw_items` 不重复插入，应表现为新增 0、更新大于 0。
-- `POST /api/ingestion/runs` 可创建工作台级抓取 run；scheduler/worker 默认关闭，设置 `INGESTION_SCHEDULER_ENABLED=true` 后按环境变量定时执行每日完整流水线。
-- `POST /api/news-items/normalize` 可把当前工作台已启用源的 raw 标准化为 news，并重建去重组。
-- `GET /api/news-items?workspace_code=planning_intel` 可看到标准化新闻和 `raw_item_id` 追溯 ID。
-- `GET /api/dedupe-groups?workspace_code=planning_intel` 可看到去重 winner/loser。
-- `/daily-reports` 页面可选择日期并点击“生成日报草稿”，调用 `POST /api/pipeline/daily-runs`，执行抓取、标准化/去重、推荐、结构化稿和日报草稿。
-- `/daily-reports` 页面可按日报正文阅读，支持发布、采信/备选/剔除切换、编辑标题/摘要/要点、点赞、评分、评论和查看 raw/news/source 追溯 ID。
-- `/exports` 页面可选择已发布日报，生成、预览和下载公司 SQL。
-- 所有本地 SQL 预览导入内网前必须通过 `scripts/validate_company_sql.py`；需要统一标题时先运行 `scripts/validate_company_sql.py --fix-headers`。
+- 原始数据完整保存在 `raw_items.raw_payload_json`，下游永不回写。
+- 去重发生在 `news_items` 之后、推荐之前；`adoption_status` 只属于日报/周报采信层。
+- 标准公司 SQL 只导出已发布日报中 `adoption_status=2`、生成稿 ready 且非规则兜底的条目，
+  且必须通过 `scripts/validate_company_sql.py`。
+- `planning_intel` 成品新闻一级标签必须是旧系统约定的 10 个 AI 标签。
+- 密钥、token、cookie 和 `.env` 不进入 Git，不进入同步包。
+- 内网用户评论、点赞、评分、需求和任务永不回流公网。

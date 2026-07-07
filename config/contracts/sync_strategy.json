@@ -3,10 +3,13 @@
   "description": "Multi-environment and multi-database synchronization strategy.",
   "recommended_default": "single_codebase_multi_env_app_level_sync",
   "environment_types": [
-    "public",
+    "standalone",
+    "cloud",
     "intranet",
-    "local_dev"
+    "extranet"
   ],
+  "environment_types_note": "Aligned with config/contracts/deployment_modes.json DEPLOY_MODE values. Legacy terms in older documents map as: public -> extranet, local_dev -> standalone.",
+  "direction_invariant": "Machine sync direction is one-way extranet -> intranet and this is a hard invariant (mirrors deployment_modes.json invariants). Intranet user feedback (comments/reactions/ratings/adoption/requirements/tasks/notifications) never flows back to extranet through any channel.",
   "identity_fields": {
     "instance_id": "Unique ID for each deployment instance.",
     "global_id": "Stable UUID/ULID for objects that may sync across instances.",
@@ -36,25 +39,25 @@
       ]
     },
     "app_level_outbox_inbox": {
-      "description": "Recommended for public plus intranet. Each app writes local DB; selected objects sync through signed export/import packages or internal API.",
-      "best_for": "Clear security boundaries, one-way or controlled two-way sync, auditability.",
+      "description": "Recommended for extranet plus intranet. Each app writes its local DB; intranet pulls selected public objects from an extranet GET feed, while signed export/import packages remain the manual fallback channel.",
+      "best_for": "Clear security boundaries, one-way extranet-to-intranet sync, auditability, and replayable pull-only intranet deployments.",
       "core_tables": [
         "sync_outbox",
         "sync_inbox",
         "sync_runs",
-        "sync_conflicts"
+        "sync_conflicts",
+        "sync_cursors"
       ]
     }
   },
-  "recommended_flow": {
-    "public_to_intranet": [
+    "recommended_flow": {
+    "extranet_to_intranet_feed": [
       "data_sources public-safe config",
       "raw_items from public sources",
       "news_items",
-      "dedupe_groups",
-      "recommendation_items",
-      "generated_news if not sensitive",
-      "export manifests and processing metadata"
+      "generated_news ready/fallback review state and source lineage",
+      "daily_reports with embedded daily_report_items",
+      "weekly_reports with embedded weekly_report_items"
     ],
     "intranet_only": [
       "users",
@@ -67,19 +70,51 @@
       "intranet-only source credentials",
       "company SQL export jobs"
     ],
-    "intranet_to_public": [
-      "non-sensitive data_source config changes if explicitly approved",
-      "taxonomy/domain pack updates if managed outside Git",
-      "aggregate source quality scores without user details if explicitly approved"
-    ]
+    "intranet_to_public": {
+      "status": "planned_manual_only_not_implemented",
+      "rule": "No intranet -> extranet machine channel exists or is planned in the feed. If this channel is ever built it is a manually exported, admin-approved package limited to the candidate items below; it must never carry user feedback objects (see direction_invariant) and must never enter GET /api/sync/feed.",
+      "candidate_items": [
+        "non-sensitive data_source config changes if explicitly approved",
+        "taxonomy/domain pack updates if managed outside Git",
+        "aggregate source quality scores without user details if explicitly approved"
+      ]
+    }
   },
   "sync_safety_rules": [
     "Objects with visibility_scope = restricted must never sync automatically.",
     "Objects with visibility_scope = internal must not sync to public by default.",
-    "Secrets, tokens, cookies and credentials must be referenced by credential_ref and never included in sync packages.",
-    "Public-to-intranet sync is allowed for public raw/news/recommendation data.",
-    "Intranet-to-public sync requires explicit admin approval and must be aggregate or non-sensitive config only."
+    "Secrets, tokens, cookies and credentials must be referenced by credential_ref and never included in sync packages or feed payloads.",
+    "Secret-like keys are detected through the shared privacy rule: token, secret, password, cookie, authorization, api_key, .env, client_secret and session.",
+    "Extranet-to-intranet sync is allowed for public source/raw/news/generated/report data.",
+    "Intranet feedback objects never sync back to extranet under any condition (hard invariant). A hypothetical intranet-to-public config/aggregate channel is planned_manual_only_not_implemented: manual package, explicit admin approval, never the feed.",
+        "Requirements, topic tasks, comments, reactions, ratings, activity events, notifications, notification preferences, object watchers and editorial decisions must not appear in extranet feed object_types."
   ],
+  "feed_boundary_v1": {
+    "allowed_object_types": [
+      "data_sources",
+      "raw_items",
+      "news_items",
+      "generated_news",
+      "daily_reports",
+      "weekly_reports"
+    ],
+    "forbidden_object_types": [
+      "requirements",
+      "topic_tasks",
+      "comments",
+      "reactions",
+      "ratings",
+            "activity_events",
+            "notifications",
+            "notification_preferences",
+            "object_watchers",
+            "export_jobs"
+        ],
+    "negative_tests": [
+      "backend/tests/test_deployment_modes.py::test_extranet_sync_feed_excludes_strategy_loop_private_objects",
+      "backend/tests/test_deployment_modes.py::test_extranet_sync_feed_excludes_local_collaboration_notifications"
+    ]
+  },
   "implementation_contract": {
     "tables": {
       "sync_outbox": [
@@ -104,12 +139,15 @@
         "source_instance_id",
         "event_id",
         "object_type",
-        "object_global_id",
+        "object_id",
         "payload_hash",
+        "record_json",
         "status",
-        "received_at",
-        "applied_at",
-        "error_message"
+        "error_message",
+        "attempt_count",
+        "last_attempt_at",
+        "created_at",
+        "updated_at"
       ],
       "sync_runs": [
         "id",
@@ -126,16 +164,104 @@
         "id",
         "sync_run_id",
         "object_type",
-        "object_global_id",
+        "object_id",
         "local_revision",
         "incoming_revision",
-        "local_json",
-        "incoming_json",
+        "field_name",
+        "local_value_json",
+        "incoming_value_json",
         "conflict_reason",
-        "resolution_status",
-        "resolved_by",
+        "status",
+        "resolution_json",
+        "resolved_by_user_id",
         "resolved_at"
+      ],
+      "sync_cursors": [
+        "object_type",
+        "cursor",
+        "last_pulled_at",
+        "last_status",
+        "last_error"
       ]
+    },
+    "feed_api": {
+      "publisher_role": "DEPLOY_MODE=extranet or CAPABILITY_SYNC_PUBLISHER=true",
+      "consumer_role": "DEPLOY_MODE=intranet or CAPABILITY_SYNC_CONSUMER=true",
+      "authentication": "Authorization: Bearer token from SYNC_SERVICE_TOKENS; feed endpoints never use cookie session. Entries may be 'name:token' to name the consumer for audit/rotation, or a bare token (consumer recorded as token-<position>).",
+      "access_audit": "Every manifest/page read writes an audit log (actions sync_feed.manifest / sync_feed.read) recording the consumer identity, object_type, cursor range, record_count and has_more; cursors are opaque waterlines and contain no secrets.",
+      "manifest_endpoint": "GET /api/sync/feed/manifest",
+      "page_endpoint": "GET /api/sync/feed?object_type=<type>&cursor=<opaque>&limit=<n>",
+      "cursor_rule": "Keyset cursor over updated_at/id with a strictly-greater-than filter; the publisher stays stateless and every page is replayable. next_cursor is derived from the last row scanned on the page, including rows filtered out by the secret/visibility redline, so records may be empty while next_cursor is non-null. null only means the request scanned no rows at all.",
+      "pull_endpoint": "POST /api/sync/pull-runs",
+      "consumer_pull_rules": {
+        "replay_lookback": "To compensate for publisher-side long transactions committing rows with older updated_at than an already-advanced waterline, the consumer rewinds the persisted cursor by SYNC_PULL_REPLAY_LOOKBACK_SECONDS (300) on the first page of each object type per pull round. Duplicate events in the overlap window are absorbed by sync_inbox event_id idempotency (settled statuses applied/skipped/conflict). In-round pagination cursors never rewind, so a round strictly advances and cannot loop.",
+        "conflict_does_not_block_cursor": "Pages that produce conflicts still advance the cursor and do not abort remaining object types. conflict is a settled inbox status: the feed event_id is a deterministic hash of object_type|global_id|revision, so the same object version is judged for conflict exactly once and resolution goes through the sync_conflicts APIs, not through re-pulling.",
+        "conflict_dedupe": "Open conflicts are idempotent per (object_type, object_id): a repeated judgment refreshes the existing open row (seen_count/last_seen_at) instead of inserting a duplicate or re-sending notifications.",
+        "transport_failure": "Manifest or page transport errors (unreachable extranet, invalid token, 4xx/5xx, invalid JSON) never raise out of the pull: they persist a SyncRun with status=failed (errors summary, per_object transport_failed) and set sync_cursors.last_status=failed for page-level failures, so GET /api/sync/health surfaces the failure immediately."
+      },
+      "scheduler_rule": "When capability_sync_consumer and SYNC_PULL_ENABLED are true, scheduler enqueues sync_pull every SYNC_PULL_INTERVAL_SECONDS even when ingestion is disabled. If SYNC_FAILED_INBOX_AUTO_RETRY_ENABLED is true, the same scheduler loop also enqueues due failed-inbox retries through the local apply handler."
+    },
+    "health_api": {
+      "endpoint": "GET /api/sync/health",
+      "authentication": "Cookie session plus super_admin. This endpoint is for local operators and never uses sync service tokens.",
+      "status_enum": [
+        "ok",
+        "warning",
+        "critical",
+        "inactive"
+      ],
+      "status_inputs": [
+        "runtime sync_publisher/sync_consumer capabilities",
+        "sync_cursors last_pulled_at/last_status/last_error",
+        "latest sync_runs status and counts_json",
+        "open sync_conflicts count",
+        "failed sync_inbox count and object_type breakdown",
+        "failed sync_inbox retry policy, due count, blocked-by-max-attempts count and next retry time"
+      ],
+      "threshold_rule": "warning if cursor age exceeds max(60, SYNC_PULL_INTERVAL_SECONDS) * 2; critical if cursor age exceeds max(60, SYNC_PULL_INTERVAL_SECONDS) * 6. Failed cursor status or error text is critical. Failed inbox records are critical because they require retry or operator inspection. Open conflicts are warning. A consumer with missing cursors is warning until the first successful pull creates waterlines.",
+      "response_fields": [
+        "status",
+        "generated_at",
+        "sync_role",
+        "summary",
+        "thresholds",
+        "cursor_count",
+        "missing_cursor_count",
+        "stale_cursor_count",
+        "failed_cursor_count",
+        "failed_inbox_count",
+        "failed_inbox_by_object_type",
+        "failed_inbox_retry_due_count",
+        "failed_inbox_retry_blocked_count",
+        "failed_inbox_next_retry_at",
+        "failed_inbox_retry_policy",
+        "open_conflict_count",
+        "recent_failed_run_count",
+        "last_run",
+        "cursors",
+        "alerts"
+      ]
+    },
+    "retry_api": {
+      "endpoint": "POST /api/sync/inbox/retry-failed",
+      "authentication": "Cookie session plus super_admin. This is a local operator action and never uses sync service tokens.",
+      "query_params": {
+        "object_type": "Optional sync feed object type filter.",
+        "limit": "Maximum failed inbox rows to retry, default 100, max 500."
+      },
+      "behavior": "Select sync_inbox rows with status=failed, replay their stored record_json through the same apply handlers, update status/error_message/attempt_count/last_attempt_at, and write a SyncRun with direction=inbox_retry.",
+      "audit_action": "sync_inbox.retry_failed",
+      "auto_retry": {
+        "enabled_env": "SYNC_FAILED_INBOX_AUTO_RETRY_ENABLED",
+        "default": "Same as sync_pull_effective on sync consumer deployments.",
+        "base_delay_env": "SYNC_FAILED_INBOX_RETRY_BASE_SECONDS, default 300.",
+        "max_delay_env": "SYNC_FAILED_INBOX_RETRY_MAX_SECONDS, default 3600.",
+        "max_attempts_env": "SYNC_FAILED_INBOX_RETRY_MAX_ATTEMPTS, default 5.",
+        "limit_env": "SYNC_FAILED_INBOX_RETRY_LIMIT, default 50.",
+        "direction": "inbox_auto_retry",
+        "selection_rule": "Only sync_inbox rows with status=failed, attempt_count < max attempts, and last_attempt_at + min(max_delay, base_delay * 2^(attempt_count-1)) <= now are selected. Manual retry-failed keeps the operator override and can retry failed rows immediately.",
+        "behavior": "Auto retry creates a SyncRun with direction=inbox_auto_retry and reuses the same apply handler and counts_json shape as manual retry. It does not use sync service tokens and does not bypass secret/restricted/conflict checks."
+      }
     },
     "package_format": {
       "archive": "zip",
@@ -165,10 +291,15 @@
       ]
     },
     "first_phase_api": [
+      "GET /api/sync/feed/manifest",
+      "GET /api/sync/feed",
+      "POST /api/sync/pull-runs",
+      "GET /api/sync/health",
+      "POST /api/sync/inbox/retry-failed",
       "POST /api/sync/packages/export",
       "GET /api/sync/packages/{package_id}/download",
       "POST /api/sync/packages/import",
-      "GET /api/sync/runs",
+      "GET /api/sync-runs",
       "GET /api/sync/conflicts",
       "POST /api/sync/conflicts/{id}/resolve"
     ],
@@ -176,11 +307,22 @@
       "supported_object_types": [
         "data_sources",
         "raw_items",
-        "news_items"
+        "news_items",
+        "generated_news",
+        "daily_reports",
+        "weekly_reports"
       ],
-      "idempotency": "sync_inbox.event_id is the package-level idempotency key; supported business objects upsert by object_global_id/global_id.",
-      "conflict_rule": "If local revision is newer than incoming, or the same revision has a different content_hash, write sync_conflicts and do not overwrite the local object.",
-      "safety_rule": "Payloads with restricted visibility or secret-like fields such as token/password/secret/cookie/.env are not applied.",
+      "idempotency": "sync_inbox.event_id is the feed/package-level idempotency key; supported business objects upsert by object_global_id/global_id. Existing inbox rows with settled status (applied/skipped/conflict) are skipped, while failed rows keep record_json and may be replayed through POST /api/sync/inbox/retry-failed after dependency order is fixed.",
+      "conflict_rule": "If local revision is newer than incoming, or the same revision has a different content_hash, write sync_conflicts and do not overwrite the local object. conflict settles the inbox event (deterministic event_id means one judgment per object version); the pull keeps advancing the cursor, and repeated judgments refresh the existing open conflict row instead of duplicating it.",
+      "conflict_resolution_v1": "GET /api/sync/conflicts lists open/resolved/use_incoming/manual_merge/ignored/retry_after_dependency conflicts. POST /api/sync/conflicts/{id}/resolve records keep_local, ignored, or retry_after_dependency decisions with resolved_by_user_id/resolved_at and audit log. use_incoming applies the incoming payload through the same object apply handler. manual_merge is enabled for data_sources, daily_reports, and weekly_reports, requires merged_json, writes max(local_revision,incoming_revision)+1, and still uses the same object apply handler.",
+      "resolution_strategies": {
+        "keep_local": "Close the conflict as resolved without changing the business object.",
+        "ignored": "Mark the conflict ignored with a reason.",
+        "retry_after_dependency": "Mark the conflict for dependency retry.",
+        "use_incoming": "Apply incoming_value_json through object handlers, bypassing only the original revision/hash conflict check.",
+        "manual_merge": "For data_sources/daily_reports/weekly_reports, merge incoming_value_json with merged_json and apply a new revision through object handlers."
+      },
+      "safety_rule": "Payloads with restricted visibility or secret-like fields such as token/secret/password/cookie/authorization/api_key/.env/client_secret/session are not applied. Feed and manual sync package export must exclude such payloads instead of serializing them.",
       "unsupported_object_types": "Unsupported object types fail the record and remain auditable in sync_runs.counts_json.errors instead of being silently applied."
     }
   },
@@ -188,7 +330,7 @@
     "raw_items": "append_or_upsert_by_global_id_and_content_hash",
     "news_items": "upsert_by_global_id",
     "data_sources": "revision_with_human_conflict_review",
-    "users_and_feedback": "do_not_sync_from_intranet_to_public_by_default",
-    "requirements_and_tasks": "intranet_only_by_default"
+    "users_and_feedback": "never_sync_from_intranet_to_public",
+    "requirements_and_tasks": "intranet_only_never_in_feed"
   }
 }

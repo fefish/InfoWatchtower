@@ -6,6 +6,178 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
+class RequirementSourceLinkRead(BaseModel):
+    id: str
+    link_type: str
+    note: str
+    insight_id: str | None
+    daily_report_item_id: str | None
+    weekly_report_item_id: str | None
+    entity_milestone_id: str | None
+    historical_report_id: str | None
+    historical_feedback_item_id: str | None
+    news_item_id: str | None
+    raw_item_id: str | None
+    source_object_type: str
+    source_title: str
+    source_url: str | None
+    data_source_name: str | None
+    created_at: datetime
+
+
+class RequirementSourceLinkCreate(BaseModel):
+    insight_id: str | None = None
+    daily_report_item_id: str | None = None
+    weekly_report_item_id: str | None = None
+    entity_milestone_id: str | None = None
+    historical_report_id: str | None = None
+    historical_feedback_item_id: str | None = None
+    news_item_id: str | None = None
+    raw_item_id: str | None = None
+    link_type: str = "evidence"
+    note: str = ""
+
+
+class InsightRead(BaseModel):
+    id: str
+    workspace_code: str
+    domain_code: str
+    news_item_id: str
+    raw_item_id: str | None
+    title: str
+    summary: str
+    insight_type: str
+    status: str
+    source_report_type: str
+    source_report_id: str | None
+    source_report_item_id: str | None
+    source_title: str
+    source_url: str | None
+    data_source_name: str | None
+    implication_count: int = 0
+    confidence_score: float
+    metadata_json: dict[str, Any]
+    created_at: datetime
+    updated_at: datetime
+
+
+class InsightCreate(BaseModel):
+    workspace_code: str
+    domain_code: str = "ai"
+    news_item_id: str
+    raw_item_id: str | None = None
+    title: str = Field(min_length=1)
+    summary: str = ""
+    insight_type: str = "trend"
+    status: str = "draft"
+    source_report_type: str = ""
+    source_report_id: str | None = None
+    source_report_item_id: str | None = None
+    confidence_score: float = Field(default=0.7, ge=0, le=1)
+    metadata_json: dict[str, Any] = Field(default_factory=dict)
+
+
+class InsightUpdate(BaseModel):
+    title: str | None = None
+    summary: str | None = None
+    insight_type: str | None = None
+    status: str | None = None
+    confidence_score: float | None = Field(default=None, ge=0, le=1)
+    metadata_json: dict[str, Any] | None = None
+
+
+class StrategicImplicationRead(BaseModel):
+    id: str
+    workspace_code: str
+    domain_code: str
+    insight_id: str
+    insight_title: str | None = None
+    title: str
+    description: str
+    implication_type: str
+    metadata_json: dict[str, Any]
+    created_at: datetime
+    updated_at: datetime
+
+
+class StrategicImplicationCreate(BaseModel):
+    insight_id: str
+    title: str = Field(min_length=1)
+    description: str = ""
+    implication_type: str = "opportunity"
+    metadata_json: dict[str, Any] = Field(default_factory=dict)
+
+
+class StrategicImplicationUpdate(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    implication_type: str | None = None
+    metadata_json: dict[str, Any] | None = None
+
+
+class ReportItemStrategyLoopCreate(BaseModel):
+    insight_title: str | None = None
+    insight_summary: str | None = None
+    insight_type: str = "trend"
+    confidence_score: float = Field(default=0.8, ge=0, le=1)
+    implication_title: str | None = None
+    implication_description: str | None = None
+    implication_type: str = "opportunity"
+    requirement_title: str | None = None
+    requirement_description: str | None = None
+    requirement_priority: str = "medium"
+    requirement_status: str = "draft"
+    requirement_due_at: datetime | None = None
+    owner_user_id: str | None = None
+    source_note: str = ""
+    create_task: bool = False
+    task_title: str | None = None
+    task_description: str | None = None
+    task_status: str = "open"
+    task_due_at: datetime | None = None
+    task_assignee_user_id: str | None = None
+    metadata_json: dict[str, Any] = Field(default_factory=dict)
+
+
+class ReportItemEntityMilestoneCreate(BaseModel):
+    entity_name: str = Field(min_length=1)
+    entity_type: str = "company"
+    entity_rank: str = ""
+    tracked_entity_id: str | None = None
+    event_title: str | None = None
+    event_type: str = "report_signal"
+    event_time: datetime | None = None
+    event_brief: str | None = None
+    impact_brief: str | None = None
+    board: str | None = None
+    importance_level: str = "medium"
+    importance_score: float = Field(default=70.0, ge=0, le=100)
+    confidence_score: float = Field(default=0.8, ge=0, le=1)
+    source_note: str = ""
+    metadata_json: dict[str, Any] = Field(default_factory=dict)
+
+
+class EntityMilestoneUpdate(BaseModel):
+    event_title: str | None = None
+    event_type: str | None = None
+    event_time: datetime | None = None
+    event_brief: str | None = None
+    event_content: str | None = None
+    impact_brief: str | None = None
+    impact: str | None = None
+    timeline_brief: str | None = None
+    source_url: str | None = None
+    source_name: str | None = None
+    board: str | None = None
+    selected_for_timeline: bool | None = None
+    importance_level: str | None = None
+    importance_score: float | None = Field(default=None, ge=0, le=100)
+    confidence_score: float | None = Field(default=None, ge=0, le=1)
+    curation_status: str | None = None
+    curation_note: str | None = None
+    metadata_json: dict[str, Any] | None = None
+
+
 class RequirementRead(BaseModel):
     id: str
     workspace_code: str
@@ -18,6 +190,7 @@ class RequirementRead(BaseModel):
     owner_user_id: str | None
     owner_name: str | None
     source_count: int = 0
+    source_links: list[RequirementSourceLinkRead] = Field(default_factory=list)
     task_count: int = 0
     metadata_json: dict[str, Any]
     created_at: datetime
@@ -34,6 +207,15 @@ class RequirementCreate(BaseModel):
     due_at: datetime | None = None
     owner_user_id: str | None = None
     metadata_json: dict[str, Any] = Field(default_factory=dict)
+    source_daily_report_item_id: str | None = None
+    source_weekly_report_item_id: str | None = None
+    source_entity_milestone_id: str | None = None
+    source_historical_report_id: str | None = None
+    source_historical_feedback_item_id: str | None = None
+    source_news_item_id: str | None = None
+    source_raw_item_id: str | None = None
+    source_insight_id: str | None = None
+    source_note: str = ""
 
 
 class RequirementUpdate(BaseModel):
@@ -56,8 +238,12 @@ class TopicTaskRead(BaseModel):
     description: str
     status: str
     due_at: datetime | None
+    is_overdue: bool = False
+    blocked_reason: str = ""
     assignee_user_id: str | None
     assignee_name: str | None
+    requirement_source_count: int = 0
+    requirement_source_links: list[RequirementSourceLinkRead] = Field(default_factory=list)
     metadata_json: dict[str, Any]
     created_at: datetime
     updated_at: datetime
@@ -83,6 +269,25 @@ class TopicTaskUpdate(BaseModel):
     due_at: datetime | None = None
     assignee_user_id: str | None = None
     metadata_json: dict[str, Any] | None = None
+
+
+class TopicTaskBatchUpdate(BaseModel):
+    workspace_code: str
+    task_ids: list[str] = Field(min_length=1, max_length=100)
+    status: str | None = None
+    blocked_reason: str | None = None
+
+
+class TopicTaskBatchUpdateRead(BaseModel):
+    updated_count: int
+    tasks: list[TopicTaskRead] = Field(default_factory=list)
+
+
+class ReportItemStrategyLoopRead(BaseModel):
+    insight: InsightRead
+    implication: StrategicImplicationRead
+    requirement: RequirementRead
+    task: TopicTaskRead | None = None
 
 
 class SyncRunRead(BaseModel):
@@ -138,6 +343,7 @@ class AuditLogRead(BaseModel):
     id: str
     user_id: str | None
     user_name: str | None
+    workspace_code: str
     action: str
     object_type: str
     object_id: str
@@ -275,6 +481,7 @@ class EntityMilestoneListItem(BaseModel):
     source_name: str
     board: str
     selected_for_timeline: bool
+    curation_status: str
     importance_score: float
     importance_level: str
     article_ref_resolved: bool | None
@@ -292,6 +499,102 @@ class EntityMilestoneDetailRead(EntityMilestoneListItem):
     event_dedupe_key: str
     legacy_refs: dict[str, Any]
     metadata_json: dict[str, Any]
+
+
+class TrackedEntityCreate(BaseModel):
+    workspace_code: str
+    domain_code: str = "ai"
+    name: str = Field(min_length=1)
+    entity_type: str = "company"
+    rank: str = ""
+    aliases: list[str] = Field(default_factory=list)
+    notes: str = ""
+    influence_score: float = Field(default=0.0, ge=0)
+
+
+class TrackedEntityUpdate(BaseModel):
+    name: str | None = None
+    entity_type: str | None = None
+    rank: str | None = None
+    aliases: list[str] | None = None
+    notes: str | None = None
+    influence_score: float | None = Field(default=None, ge=0)
+
+
+class EntityMilestoneManualCreate(BaseModel):
+    tracked_entity_id: str
+    event_title: str = Field(min_length=1)
+    event_type: str = "manual"
+    event_time: datetime | None = None
+    event_brief: str = ""
+    impact_brief: str = ""
+    source_url: str | None = None
+    source_name: str = ""
+    board: str = ""
+    importance_level: str = "medium"
+    importance_score: float = Field(default=70.0, ge=0, le=100)
+    confidence_score: float = Field(default=1.0, ge=0, le=1)
+    news_item_id: str | None = None
+    note: str = ""
+    metadata_json: dict[str, Any] = Field(default_factory=dict)
+
+
+class EntityTimelineMonthGroupRead(BaseModel):
+    month: str
+    milestone_count: int
+    candidate_count: int
+    milestones: list[EntityMilestoneListItem]
+
+
+class TrackedEntityTimelineRead(BaseModel):
+    entity: TrackedEntityListItem
+    total_milestones: int
+    candidate_count: int
+    confirmed_count: int
+    groups: list[EntityTimelineMonthGroupRead]
+
+
+class ReportArchiveSourceStat(BaseModel):
+    name: str
+    count: int
+
+
+class ReportArchiveListItem(BaseModel):
+    id: str
+    origin: str
+    report_type: str
+    workspace_code: str
+    title: str
+    date_key: str
+    month: str
+    status: str
+    published_at: datetime | None
+    item_count: int
+    adopted_count: int
+    headline_count: int
+    adoption_rate: float
+    top_sources: list[ReportArchiveSourceStat]
+    detail_kind: str
+    detail_id: str
+    content_excerpt: str = ""
+
+
+class ReportArchiveMonthBucket(BaseModel):
+    month: str
+    count: int
+
+
+class ReportArchiveSummaryRead(BaseModel):
+    workspace_code: str
+    total: int
+    published_daily: int
+    published_weekly: int
+    legacy_reports: int
+    total_items: int
+    total_adopted: int
+    average_adoption_rate: float
+    months: list[ReportArchiveMonthBucket]
+    latest_published_at: datetime | None
 
 
 class QualityArchiveSummaryRead(BaseModel):

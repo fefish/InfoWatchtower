@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -102,3 +103,41 @@ class UserPatchRequest(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=128)
     department: str | None = Field(default=None, max_length=128)
     email: str | None = Field(default=None, max_length=255)
+
+
+class PermissionChangeDiffRead(BaseModel):
+    field: str
+    label: str
+    before: Any = None
+    after: Any = None
+    explanation: str
+
+
+class PermissionChangeRead(BaseModel):
+    id: str
+    action: str
+    object_type: str
+    object_id: str
+    actor_name: str | None = None
+    created_at: datetime
+    scope: str
+    title: str
+    summary: str
+    rollback_available: bool
+    rollback_reason: str | None = None
+    diffs: list[PermissionChangeDiffRead] = Field(default_factory=list)
+
+
+class PermissionRollbackRequest(BaseModel):
+    audit_log_ids: list[str] = Field(min_length=1, max_length=20)
+    confirm_dangerous_change: bool = False
+
+
+class PermissionRollbackResultItem(BaseModel):
+    audit_log_id: str
+    status: str
+    message: str
+
+
+class PermissionRollbackRead(BaseModel):
+    results: list[PermissionRollbackResultItem]

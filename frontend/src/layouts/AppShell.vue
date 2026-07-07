@@ -17,6 +17,7 @@ import {
   Plus,
   Radio,
   Search,
+  Settings,
   ShieldCheck,
   SquareStack,
   GitCompareArrows,
@@ -25,9 +26,11 @@ import {
   Users,
   X
 } from "lucide-vue-next";
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 
+import { fetchUnreadNotificationCount } from "../api/notifications";
+import { searchWorkspace, type SearchResultRecord } from "../api/search";
 import {
   createSource,
   fetchSources,
@@ -38,12 +41,25 @@ import {
   updateWorkspaceLabelPolicy,
   type WorkspaceLabelPolicyUpdate
 } from "../api/workspaces";
+import WorkspaceDiscovery from "../components/WorkspaceDiscovery.vue";
+import { useRuntimeStore } from "../stores/runtime";
 import { useSessionStore } from "../stores/session";
 import { useWorkspaceStore } from "../stores/workspace";
 
 const router = useRouter();
 const session = useSessionStore();
 const workspace = useWorkspaceStore();
+const runtime = useRuntimeStore();
+
+const metaErrorMessage = computed(() => {
+  if (runtime.metaErrorKind === "stale-backend") {
+    return "后端版本过旧（缺少 /api/meta/runtime）：前端代码已更新但后端进程/镜像未更新，请重启或重建后端后重试。";
+  }
+  if (runtime.metaErrorKind === "unreachable") {
+    return "后端不可达：请确认后端服务已启动，再点重试。";
+  }
+  return `运行时信息加载失败${runtime.metaErrorStatus ? `（HTTP ${runtime.metaErrorStatus}）` : ""}，功能已保守禁用。`;
+});
 
 const canCreateWorkspace = computed(
   () => session.user?.roles.some((role) => role === "super_admin" || role === "editor_admin") ?? false
@@ -56,6 +72,17 @@ const wizardFinished = ref(false);
 const wizardSources = ref<DataSourceRecord[]>([]);
 const loadingWizardSources = ref(false);
 const selectedWizardSourceIds = ref<Set<string>>(new Set());
+const notificationUnreadCount = ref(0);
+const searchQuery = ref("");
+const searchResults = ref<SearchResultRecord[]>([]);
+const recentSearchResults = ref<SearchResultRecord[]>([]);
+const searchLoading = ref(false);
+const searchError = ref("");
+const searchPanelOpen = ref(false);
+const activeSearchResultIndex = ref(-1);
+let searchRequestId = 0;
+const recentSearchLimit = 6;
+const recentSearchStoragePrefix = "infowatchtower:search:recent";
 const workspaceForm = reactive({
   code: "",
   name: "",
@@ -266,22 +293,59 @@ const sectionIcons = {
   historical_reports: Archive,
   entity_milestones: GitBranch,
   quality_archive: ClipboardCheck,
+  strategic_insights: GitBranch,
   requirements: ListChecks,
   topic_tasks: SquareStack,
   sync: GitCompareArrows,
   exports: Database,
+  workspace_settings: Settings,
   users: Users,
   audit_logs: ShieldCheck
 } as const;
 
+const workspaceRoleRank: Record<string, number> = {
+  viewer: 0,
+  member: 1,
+  admin: 2,
+  owner: 3
+};
+
+// 当前工作台的有效角色：super_admin / editor_admin 全局角色视同 owner；
+// 其余取 membership 角色，未知时按 viewer 保守处理。
+const effectiveWorkspaceRole = computed(() => {
+  const globalRoles = session.user?.roles ?? [];
+  if (globalRoles.includes("super_admin") || globalRoles.includes("editor_admin")) {
+    return "owner";
+  }
+  return workspace.currentRole ?? "viewer";
+});
+
+// 工作台配置中心入口（切换器旁齿轮）：admin/owner 可见，与
+// workspace_settings 分区的 min_role=admin 口径一致。
+const canOpenWorkspaceSettings = computed(
+  () =>
+    Boolean(workspace.currentCode) &&
+    (workspaceRoleRank[effectiveWorkspaceRole.value] ?? 0) >= workspaceRoleRank.admin
+);
+
 const navItems = computed(() =>
-  workspace.sections.map((section) => ({
-    key: section.section_key,
-    label: section.name,
-    icon: sectionIcons[section.section_key as keyof typeof sectionIcons] ?? SquareStack,
-    path: section.route_path,
-    group: section.group || "system"
-  }))
+  workspace.sections
+    // 采集能力关闭（如 intranet 形态）时隐藏「抓取与覆盖」入口。
+    .filter((section) => runtime.canIngest || section.section_key !== "ingestion_coverage")
+    // 数据驱动的角色过滤：viewer（游客）只看到 min_role=viewer 的阅读分区
+    // （日报/周报/历史报告/实体大事记），管理分区整组隐藏。
+    .filter(
+      (section) =>
+        (workspaceRoleRank[effectiveWorkspaceRole.value] ?? 0) >=
+        (workspaceRoleRank[section.min_role ?? "member"] ?? 1)
+    )
+    .map((section) => ({
+      key: section.section_key,
+      label: section.name,
+      icon: sectionIcons[section.section_key as keyof typeof sectionIcons] ?? SquareStack,
+      path: section.route_path,
+      group: section.group || "system"
+    }))
 );
 
 const navGroupMeta = [
@@ -302,8 +366,235 @@ const navGroups = computed(() =>
     .filter((group) => group.items.length > 0)
 );
 
+const objectTypeLabels: Record<string, string> = {
+  daily_report: "日报",
+  daily_report_item: "日报条目",
+  weekly_report: "周报",
+  weekly_report_item: "周报条目",
+  news_item: "候选新闻",
+  generated_news: "成品新闻",
+  data_source: "数据源",
+  tracked_entity: "实体",
+  entity_milestone: "大事记",
+  historical_report: "历史报告",
+  requirement: "需求",
+  topic_task: "任务",
+  comment: "评论",
+  export_job: "导出任务",
+  export_job_item: "导出 trace",
+  sync_run: "同步运行",
+  sync_conflict: "同步冲突"
+};
+
+const trimmedSearchQuery = computed(() => searchQuery.value.trim());
+const searchReady = computed(() => runtime.capabilities.search && Boolean(workspace.currentCode));
+const hasSearchTerm = computed(() => trimmedSearchQuery.value.length >= 2);
+const displayedSearchResults = computed(() =>
+  hasSearchTerm.value ? searchResults.value : recentSearchResults.value
+);
+const groupedSearchResults = computed(() => {
+  const groups = new Map<string, { objectType: string; label: string; items: { result: SearchResultRecord; index: number }[] }>();
+  displayedSearchResults.value.forEach((result, index) => {
+    const existing = groups.get(result.object_type);
+    if (existing) {
+      existing.items.push({ result, index });
+      return;
+    }
+    groups.set(result.object_type, {
+      objectType: result.object_type,
+      label: searchResultTypeLabel(result.object_type),
+      items: [{ result, index }]
+    });
+  });
+  return Array.from(groups.values());
+});
+const recentSearchStorageKey = computed(() => {
+  const userId = session.user?.id || "anonymous";
+  const workspaceCode = workspace.currentCode || "none";
+  return `${recentSearchStoragePrefix}:${userId}:${workspaceCode}`;
+});
+const showRecentSearchResults = computed(
+  () => !hasSearchTerm.value && recentSearchResults.value.length > 0
+);
+
+watch(
+  () => [trimmedSearchQuery.value, workspace.currentCode, runtime.capabilities.search] as const,
+  () => {
+    void runGlobalSearch();
+  }
+);
+
+watch(
+  () => [workspace.currentCode, session.user?.id] as const,
+  () => {
+    loadRecentSearchResults();
+    if (!hasSearchTerm.value) {
+      activeSearchResultIndex.value = recentSearchResults.value.length > 0 ? 0 : -1;
+    }
+  },
+  { immediate: true }
+);
+
+async function runGlobalSearch() {
+  const query = trimmedSearchQuery.value;
+  const currentWorkspace = workspace.currentCode;
+  const requestId = ++searchRequestId;
+  if (!searchReady.value || query.length < 2) {
+    searchResults.value = [];
+    searchError.value = "";
+    searchLoading.value = false;
+    if (recentSearchResults.value.length === 0) {
+      searchPanelOpen.value = false;
+    }
+    activeSearchResultIndex.value = recentSearchResults.value.length > 0 ? 0 : -1;
+    return;
+  }
+  searchLoading.value = true;
+  searchError.value = "";
+  searchPanelOpen.value = true;
+  try {
+    const payload = await searchWorkspace(currentWorkspace, query, undefined, 10);
+    if (requestId !== searchRequestId) {
+      return;
+    }
+    searchResults.value = payload.results;
+    activeSearchResultIndex.value = payload.results.length > 0 ? 0 : -1;
+  } catch (exc) {
+    if (requestId !== searchRequestId) {
+      return;
+    }
+    searchResults.value = [];
+    activeSearchResultIndex.value = -1;
+    searchError.value = exc instanceof Error ? exc.message : "搜索失败";
+  } finally {
+    if (requestId === searchRequestId) {
+      searchLoading.value = false;
+    }
+  }
+}
+
+function openSearchPanel() {
+  if (hasSearchTerm.value || showRecentSearchResults.value) {
+    searchPanelOpen.value = true;
+    if (displayedSearchResults.value.length > 0 && activeSearchResultIndex.value < 0) {
+      activeSearchResultIndex.value = 0;
+    }
+  }
+}
+
+function closeSearchPanel() {
+  searchPanelOpen.value = false;
+}
+
+function submitSearch() {
+  openActiveSearchResult();
+}
+
+function moveSearchSelection(delta: number) {
+  if (!searchPanelOpen.value && (hasSearchTerm.value || showRecentSearchResults.value)) {
+    searchPanelOpen.value = true;
+  }
+  const count = displayedSearchResults.value.length;
+  if (count === 0) {
+    activeSearchResultIndex.value = -1;
+    return;
+  }
+  const current = activeSearchResultIndex.value;
+  activeSearchResultIndex.value = current < 0 ? (delta > 0 ? 0 : count - 1) : (current + delta + count) % count;
+}
+
+function openActiveSearchResult() {
+  const result = displayedSearchResults.value[activeSearchResultIndex.value] ?? displayedSearchResults.value[0];
+  if (result) {
+    void openSearchResult(result);
+  }
+}
+
+async function openSearchResult(result: SearchResultRecord) {
+  searchPanelOpen.value = false;
+  rememberSearchResult(result);
+  await router.push(result.route);
+}
+
+function searchResultTypeLabel(type: string) {
+  return objectTypeLabels[type] ?? type;
+}
+
+function searchResultDomId(index: number) {
+  return `global-search-result-${index}`;
+}
+
+function loadRecentSearchResults() {
+  if (typeof window === "undefined") {
+    recentSearchResults.value = [];
+    return;
+  }
+  try {
+    const raw = window.localStorage.getItem(recentSearchStorageKey.value);
+    const parsed = raw ? JSON.parse(raw) : [];
+    recentSearchResults.value = Array.isArray(parsed) ? parsed.filter(isSearchResultRecord).slice(0, recentSearchLimit) : [];
+  } catch {
+    recentSearchResults.value = [];
+  }
+}
+
+function rememberSearchResult(result: SearchResultRecord) {
+  if (typeof window === "undefined" || !workspace.currentCode) {
+    return;
+  }
+  const next = [
+    result,
+    ...recentSearchResults.value.filter(
+      (item) => item.object_type !== result.object_type || item.object_id !== result.object_id
+    )
+  ].slice(0, recentSearchLimit);
+  recentSearchResults.value = next;
+  try {
+    window.localStorage.setItem(recentSearchStorageKey.value, JSON.stringify(next));
+  } catch {
+    // localStorage can be unavailable in restricted browser contexts; search still works without recents.
+  }
+}
+
+function isSearchResultRecord(value: unknown): value is SearchResultRecord {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const item = value as Record<string, unknown>;
+  return (
+    typeof item.object_type === "string" &&
+    typeof item.object_id === "string" &&
+    typeof item.title === "string" &&
+    typeof item.summary === "string" &&
+    typeof item.highlight === "string" &&
+    typeof item.route === "string" &&
+    typeof item.score === "number" &&
+    (typeof item.updated_at === "string" || item.updated_at === null) &&
+    Array.isArray(item.matched_fields)
+  );
+}
+
+async function loadNotificationUnreadCount() {
+  try {
+    const result = await fetchUnreadNotificationCount();
+    notificationUnreadCount.value = result.unread_count;
+  } catch {
+    notificationUnreadCount.value = 0;
+  }
+}
+
+function onNotificationUpdate() {
+  void loadNotificationUnreadCount();
+}
+
 onMounted(() => {
   void workspace.loadWorkspaces();
+  void loadNotificationUnreadCount();
+  window.addEventListener("infowatchtower:notifications-updated", onNotificationUpdate);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("infowatchtower:notifications-updated", onNotificationUpdate);
 });
 
 async function logout() {
@@ -321,17 +612,28 @@ async function logout() {
       </div>
 
       <nav class="nav-list" aria-label="主导航">
-        <label class="workspace-switcher">
-          <span>工作台</span>
-          <select
-            :value="workspace.currentCode"
-            @change="workspace.setWorkspace(($event.target as HTMLSelectElement).value)"
+        <div class="workspace-switcher-row">
+          <label class="workspace-switcher">
+            <span>工作台</span>
+            <select
+              :value="workspace.currentCode"
+              @change="workspace.setWorkspace(($event.target as HTMLSelectElement).value)"
+            >
+              <option v-for="item in workspace.options" :key="item.code" :value="item.code">
+                {{ item.name }}
+              </option>
+            </select>
+          </label>
+          <RouterLink
+            v-if="canOpenWorkspaceSettings"
+            class="workspace-settings-link"
+            to="/workspace-settings"
+            aria-label="工作台配置"
+            title="工作台配置"
           >
-            <option v-for="item in workspace.options" :key="item.code" :value="item.code">
-              {{ item.name }}
-            </option>
-          </select>
-        </label>
+            <Settings :size="16" />
+          </RouterLink>
+        </div>
         <button
           v-if="canCreateWorkspace"
           type="button"
@@ -342,6 +644,7 @@ async function logout() {
           <Plus :size="14" />
           <span>新建工作台</span>
         </button>
+        <WorkspaceDiscovery />
 
         <div v-for="group in navGroups" :key="group.key" class="nav-group">
           <p class="nav-group-title">{{ group.label }}</p>
@@ -377,10 +680,69 @@ async function logout() {
       <header class="topbar">
         <div class="topbar-title">
           <h1>{{ workspace.current?.name || "工作台" }}</h1>
+          <span v-if="runtime.deployModeBadge" class="deploy-badge">{{ runtime.deployModeBadge }}</span>
           <p class="topbar-subtitle">{{ workspace.error || workspace.current?.description || "" }}</p>
         </div>
 
         <div class="topbar-tools">
+          <form
+            v-if="runtime.capabilities.search"
+            class="global-search"
+            role="search"
+            @submit.prevent="submitSearch"
+          >
+            <label class="global-search-input">
+              <Search :size="16" />
+              <input
+                v-model="searchQuery"
+                type="search"
+                placeholder="搜索情报对象"
+                aria-label="搜索情报对象"
+                aria-controls="global-search-panel"
+                :aria-activedescendant="
+                  activeSearchResultIndex >= 0 ? searchResultDomId(activeSearchResultIndex) : undefined
+                "
+                autocomplete="off"
+                @focus="openSearchPanel"
+                @keydown.down.prevent="moveSearchSelection(1)"
+                @keydown.up.prevent="moveSearchSelection(-1)"
+                @keydown.enter.prevent="openActiveSearchResult"
+                @keydown.esc.prevent="closeSearchPanel"
+              />
+            </label>
+            <div v-if="searchPanelOpen" id="global-search-panel" class="global-search-panel" role="listbox">
+              <p v-if="searchLoading" class="global-search-state">搜索中</p>
+              <p v-else-if="searchError" class="global-search-state error">{{ searchError }}</p>
+              <p v-else-if="hasSearchTerm && searchResults.length === 0" class="global-search-state">
+                没有匹配的情报对象
+              </p>
+              <template v-else>
+                <p v-if="showRecentSearchResults" class="global-search-recent-title">最近打开</p>
+                <section v-for="group in groupedSearchResults" :key="group.objectType" class="global-search-group">
+                  <p class="global-search-group-title">
+                    <span>{{ group.label }}</span>
+                    <small>{{ group.items.length }}</small>
+                  </p>
+                  <button
+                    v-for="{ result, index } in group.items"
+                    :id="searchResultDomId(index)"
+                    :key="`${result.object_type}-${result.object_id}`"
+                    type="button"
+                    role="option"
+                    class="global-search-result"
+                    :class="{ active: activeSearchResultIndex === index }"
+                    :aria-selected="activeSearchResultIndex === index ? 'true' : 'false'"
+                    @mouseenter="activeSearchResultIndex = index"
+                    @click="openSearchResult(result)"
+                  >
+                    <span>{{ searchResultTypeLabel(result.object_type) }}</span>
+                    <strong>{{ result.title }}</strong>
+                    <small>{{ result.highlight || result.summary }}</small>
+                  </button>
+                </section>
+              </template>
+            </div>
+          </form>
           <select
             class="topbar-workspace-select"
             :value="workspace.currentCode"
@@ -391,20 +753,35 @@ async function logout() {
               {{ item.name }}
             </option>
           </select>
-          <label class="global-search" aria-label="搜索资源">
-            <Search :size="16" />
-            <input type="search" placeholder="搜索资源..." />
-          </label>
-          <button class="notification-button" type="button" title="通知">
-            <Bell :size="19" />
-            <span aria-hidden="true"></span>
-          </button>
-          <div class="user-pill" :title="`${session.user?.display_name} · ${session.user?.roles[0]}`">
+          <RouterLink
+            class="notification-button"
+            to="/notifications"
+            aria-label="消息通知"
+            title="消息通知"
+          >
+            <Bell :size="18" />
+            <span v-if="notificationUnreadCount > 0" class="notification-badge">
+              {{ notificationUnreadCount > 99 ? "99+" : notificationUnreadCount }}
+            </span>
+          </RouterLink>
+          <RouterLink
+            class="user-pill"
+            to="/account"
+            aria-label="账号设置"
+            :title="`${session.user?.display_name} · ${session.user?.roles[0]}`"
+          >
             <span class="user-pill-avatar">{{ session.user?.display_name?.slice(0, 1) || "U" }}</span>
             <span class="user-pill-name">{{ session.user?.display_name }}</span>
-          </div>
+          </RouterLink>
         </div>
       </header>
+
+      <div v-if="runtime.metaError" class="form-error runtime-meta-error" role="alert">
+        <span>{{ metaErrorMessage }}</span>
+        <button type="button" class="ghost-button" :disabled="runtime.loading" @click="runtime.reload()">
+          {{ runtime.loading ? "重试中" : "重试" }}
+        </button>
+      </div>
 
       <router-view />
     </main>

@@ -151,3 +151,45 @@ def test_import_tech_insight_loop_sources_preserves_fetchable_and_metadata_only_
     assert second.updated == 386
     assert second.total == 386
     assert session.scalar(select(func.count(DataSource.id))) == 363
+
+
+def test_import_tech_insight_loop_maps_wx_records_to_wechat_adapter_config():
+    session = make_session()
+
+    import_tech_insight_loop_sources(session, tech_insight_loop_csv())
+    session.commit()
+
+    wechat_sources = session.scalars(
+        select(DataSource).where(DataSource.source_type == "wechat"),
+    ).all()
+    assert len(wechat_sources) == 31
+    for source in wechat_sources:
+        # 契约保持：rsshub_route 只是建议入口，未配 RSSHUB base 前不自动启用
+        assert source.enabled is False
+        assert source.metadata_json["metadata_only"] is True
+        assert source.metadata_json["needs_entry"] is True
+        assert source.url is None
+        assert source.fetch_config["original_url"].startswith("wx://")
+        assert source.fetch_config["account_name"]
+        assert source.fetch_config["account_username"].startswith("gh_")
+        assert source.fetch_config["rsshub_route"].startswith("/wechat/mp/")
+
+    sample = next(
+        source
+        for source in wechat_sources
+        if source.fetch_config["account_username"] == "gh_6b5001ccae4b"
+    )
+    assert sample.name == "机智流"
+    assert sample.fetch_config["account_name"] == "机智流"
+    assert sample.fetch_config["rsshub_route"] == "/wechat/mp/gh_6b5001ccae4b"
+
+    # 再次导入保持幂等，wechat 类型不回退成 manual
+    second = import_tech_insight_loop_sources(session, tech_insight_loop_csv())
+    session.commit()
+    assert second.created == 0
+    assert (
+        session.scalar(
+            select(func.count(DataSource.id)).where(DataSource.source_type == "wechat"),
+        )
+        == 31
+    )

@@ -18,6 +18,17 @@ const form = reactive({
   password: "",
   confirmPassword: ""
 });
+const statusLabels: Record<string, string> = {
+  pending: "待接受",
+  accepted: "已接受",
+  revoked: "已撤销",
+  expired: "已过期"
+};
+const statusHints: Record<string, string> = {
+  accepted: "这条邀请已经被使用。请直接登录，或联系管理员重新发放邀请。",
+  revoked: "管理员已经撤销这条邀请。请联系管理员确认是否需要重新邀请。",
+  expired: "这条邀请已经超过有效期。请联系管理员重新生成邀请链接。"
+};
 
 async function loadInvite() {
   loading.value = true;
@@ -25,13 +36,22 @@ async function loadInvite() {
   try {
     invite.value = await fetchInvite(String(route.params.code));
   } catch (exc) {
-    error.value = exc instanceof Error ? exc.message : "邀请无效";
+    invite.value = null;
+    error.value = friendlyInviteError(exc);
   } finally {
     loading.value = false;
   }
 }
 
 async function submitInvite() {
+  if (!form.username.trim()) {
+    error.value = "请填写账号";
+    return;
+  }
+  if (!form.display_name.trim()) {
+    error.value = "请填写姓名";
+    return;
+  }
   if (form.password.length < 8) {
     error.value = "密码至少 8 位";
     return;
@@ -52,10 +72,51 @@ async function submitInvite() {
     session.checked = true;
     router.replace("/dashboard");
   } catch (exc) {
-    error.value = exc instanceof Error ? exc.message : "接受邀请失败";
+    error.value = friendlyInviteError(exc);
   } finally {
     loading.value = false;
   }
+}
+
+function inviteStatusLabel(status: string) {
+  return statusLabels[status] ?? status;
+}
+
+function inviteStatusHint(status: string) {
+  return statusHints[status] ?? "这条邀请当前不可接受，请联系管理员确认状态。";
+}
+
+function friendlyInviteError(exc: unknown) {
+  const detail = exc instanceof Error ? exc.message : "";
+  if (detail.includes("Invite not found")) {
+    return "邀请不存在或链接已失效";
+  }
+  if (detail.includes("Invite is revoked")) {
+    return inviteStatusHint("revoked");
+  }
+  if (detail.includes("Invite is expired")) {
+    return inviteStatusHint("expired");
+  }
+  if (detail.includes("Invite is accepted")) {
+    return inviteStatusHint("accepted");
+  }
+  if (detail.includes("Username already exists")) {
+    return "账号已存在，请换一个账号或联系管理员。";
+  }
+  if (detail.includes("HTTP 422")) {
+    return "请检查账号、姓名和密码是否符合要求。";
+  }
+  return detail || "接受邀请失败";
+}
+
+function formatDate(value: string) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(new Date(value));
 }
 
 onMounted(loadInvite);
@@ -70,7 +131,23 @@ onMounted(loadInvite);
       </div>
 
       <p v-if="error" class="form-error">{{ error }}</p>
-      <p v-if="invite && invite.status !== 'pending'" class="form-error">邀请状态：{{ invite.status }}</p>
+      <p v-if="loading && !invite" class="empty-state compact">正在读取邀请...</p>
+
+      <section v-if="invite" class="invite-summary">
+        <span class="metric-pill">{{ inviteStatusLabel(invite.status) }}</span>
+        <p v-if="invite.email_hint">邀请邮箱：{{ invite.email_hint }}</p>
+        <p>全局角色：{{ invite.role_code }}</p>
+        <p>有效期至：{{ formatDate(invite.expires_at) }}</p>
+        <div v-if="invite.workspaces.length" class="invite-targets">
+          <span v-for="target in invite.workspaces" :key="`${target.code}-${target.workspace_role}`">
+            {{ target.code }} · {{ target.workspace_role }}
+          </span>
+        </div>
+      </section>
+
+      <p v-if="invite && invite.status !== 'pending'" class="form-info">
+        {{ inviteStatusHint(invite.status) }}
+      </p>
 
       <form v-if="invite?.status === 'pending'" class="login-form" @submit.prevent="submitInvite">
         <label>

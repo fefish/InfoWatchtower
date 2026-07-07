@@ -111,9 +111,146 @@
     },
     "company_sql": {
       "export_scope": "Only published/adopted daily report items with generation_status=ready and non-rule_v1 generated content are exported by default. Candidate-only items, non-adopted retained items, and fallback_needs_review generated drafts stay inside InfoWatchtower unless an admin explicitly creates a special export job.",
+      "implemented_preflight_endpoint": "POST /api/exports/company-sql/daily-reports/{daily_report_id}/preflight",
       "implemented_endpoint": "POST /api/exports/company-sql/daily-reports/{daily_report_id}",
+      "implemented_batch_endpoint": "POST /api/exports/company-sql/daily-reports/batch",
+      "implemented_download_endpoint": "GET /api/exports/{export_job_id}/download",
       "implemented_trace_endpoint": "GET /api/exports/{export_job_id}/trace",
+      "implemented_import_receipt_endpoints": [
+        "GET /api/exports/{export_job_id}/import-receipts",
+        "POST /api/exports/{export_job_id}/import-receipts",
+        "POST /api/exports/{export_job_id}/import-receipts/callback"
+      ],
       "implemented_service": "backend/app/exports/company_sql.py",
+      "preflight_contract": {
+        "write_behavior": "read-only; does not create export_jobs or export_job_items",
+        "status_values": ["passed", "failed"],
+        "item_status_values": ["eligible", "blocked", "skipped"],
+        "checks": [
+          "daily report must be published",
+          "non-adopted items are skipped",
+          "adopted items must have generation_status=ready",
+          "adopted items must not be generated_by rule_v1/fallback",
+          "source_url must be present and at most 1024 characters",
+          "title, summary, and key_points must be non-empty",
+          "content_json must contain background/effects/eventSummary/technologyAndInnovation/valueAndImpact",
+          "content_json values must not contain HTML tags",
+          "raw source_title and raw content HTML cleanup is reported as a warning when cleaned export text remains non-empty",
+          "created_at must be renderable as an Asia/Shanghai MySQL datetime literal"
+        ]
+      },
+      "download_contract": {
+        "source": "export_jobs.result_json.sql_text",
+        "response_media_type": "text/sql; charset=utf-8",
+        "content_disposition": "attachment",
+        "streaming_strategy": "server_streaming",
+        "headers": [
+          "Content-Length",
+          "Cache-Control: no-store",
+          "X-Content-Type-Options: nosniff",
+          "X-InfoWatchtower-SQL-Bytes",
+          "X-InfoWatchtower-Download-Strategy: server_streaming"
+        ],
+        "inline_preview_rule": "POST /api/exports/company-sql/daily-reports/{daily_report_id} may return a truncated sql_text preview when the SQL exceeds the inline preview byte cap. The response must include sql_text_bytes, sql_text_preview_bytes, sql_text_truncated, download_url and download_filename. The full SQL remains available only from the download endpoint.",
+        "permission": "workspace admin or super_admin; workspace viewer/member can list history and read trace but cannot download SQL files",
+        "missing_sql_text_status": 409
+      },
+      "trace_contract": {
+        "endpoint": "GET /api/exports/{export_job_id}/trace",
+        "lineage_path": "export_job_items -> daily_report_items -> generated_news -> news_items -> raw_items -> data_sources",
+        "preview_char_limit": 320,
+        "statement_fields": [
+          "sql_sequence",
+          "sql_table",
+          "sql_excerpt"
+        ],
+        "field_source_fields": [
+          "title_source",
+          "summary_source",
+          "key_points_source",
+          "content_field_sources",
+          "editor_override_fields",
+          "field_diffs"
+        ],
+        "field_diff_fields": [
+          "field",
+          "label",
+          "export_source",
+          "export_value_preview",
+          "generated_value_preview",
+          "editor_value_preview",
+          "raw_value_preview",
+          "changed_by_editor",
+          "truncated"
+        ],
+        "field_source_values": [
+          "daily_report_items.editor_title",
+          "daily_report_items.editor_summary",
+          "daily_report_items.editor_key_points",
+          "daily_report_items.editor_content_json",
+          "generated_news.title",
+          "generated_news.summary",
+          "generated_news.key_points",
+          "generated_news.content_json",
+          "missing"
+        ],
+        "field_diff_rule": "Trace responses return field-level previews for exported value, generated_news value, daily_report editor override and raw/news source value for source_url, source_title, raw_content, title, summary, key_points, category and the five company content_json fields. Long values are preview-only and truncated at preview_char_limit.",
+        "privacy_rule": "Trace responses must never return raw_payload_json or private source credentials. Raw values are preview strings only.",
+        "rule": "Trace responses must show whether exported title, summary, key points and each company content_json field came from daily report editor overrides or generated_news, and must expose field_diffs so admins can compare export/generated/editor/raw previews without downloading raw payload."
+      },
+      "batch_contract": {
+        "endpoint": "POST /api/exports/company-sql/daily-reports/batch",
+        "request_fields": [
+          "daily_report_ids",
+          "continue_on_error"
+        ],
+        "scope_rule": "A batch request must stay inside one workspace. Each existing daily report is checked with the same workspace membership rule as single export.",
+        "manifest_fields": [
+          "schema_version",
+          "batch_export_job_id",
+          "workspace_code",
+          "domain_code",
+          "requested_report_ids",
+          "succeeded_count",
+          "failed_count",
+          "skipped_count",
+          "total_item_count",
+          "total_statement_count",
+          "total_sql_text_bytes",
+          "validation_summary",
+          "items"
+        ],
+        "per_day_rule": "Each successful day creates an independent company_sql export_job with its own download_url and trace. Failed days stay in the batch manifest and do not create individual SQL jobs.",
+        "validation_rule": "Each daily report must pass company SQL preflight before an individual export job is created."
+      },
+      "import_receipt_contract": {
+        "table": "export_import_receipts",
+        "scope": "Records whether a downloaded company_sql export was actually imported by the company intranet system. It is an audit/acceptance attachment to export_jobs and does not change SQL text or company SQL fields.",
+        "status_values": ["pending", "imported", "failed", "partial"],
+        "fields": [
+          "export_job_id",
+          "target_system",
+          "import_status",
+          "imported_at",
+          "imported_statement_count",
+          "failed_statement_count",
+          "failure_items_json",
+          "notes",
+          "recorded_by_id"
+        ],
+        "failure_item_fields": [
+          "export_job_item_id",
+          "sql_sequence",
+          "sql_table",
+          "error_code",
+          "error_message",
+          "sql_excerpt"
+        ],
+        "permission": "workspace viewer/member/admin can read receipts; workspace admin/super_admin can record receipts",
+        "callback_authentication": "POST /api/exports/{export_job_id}/import-receipts/callback authenticates by Authorization: Bearer token from SYNC_SERVICE_TOKENS and does not use cookie session. It is CSRF-exempt as a machine callback endpoint.",
+        "privacy_rule": "Receipts are local audit records with sync_policy=local_only; they must not enter extranet feed or public sync packages.",
+        "validation_rule": "imported receipts cannot contain failed statements; failed or partial receipts must include failed_statement_count or failure_items; imported+failed counts cannot exceed export statement_count."
+      },
       "tables_in_order": [
         "ai_journal",
         "ai_journal_focus",
@@ -168,6 +305,7 @@
   },
   "export_validation_rules": [
     "default export query must start from published daily_report_items joined to generated_news/news_items/raw_items.",
+    "preflight must run before standard daily export; failed preflight must not create export_jobs or SQL text.",
     "only daily_report_items with adoption_status == 2 are exported by the standard daily SQL job.",
     "adopted items must point to generated_news.generation_status == ready and generated_by must not start with rule_v1.",
     "category must be one of config/taxonomy/news_categories.json AI 10 first-level labels.",

@@ -22,6 +22,7 @@ from app.models import (
 
 EXPECTED_STAGE1_TABLES = {
     "audit_logs",
+    "activity_events",
     "comments",
     "content_labels",
     "daily_report_items",
@@ -38,6 +39,9 @@ EXPECTED_STAGE1_TABLES = {
     "label_sets",
     "labels",
     "news_items",
+    "notifications",
+    "notification_preferences",
+    "object_watchers",
     "permissions",
     "ratings",
     "raw_items",

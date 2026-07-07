@@ -1,3 +1,5 @@
+import { apiUrl, requestJson, requestRaw } from "./http";
+
 export type UserRole = "super_admin" | "editor_admin" | "analyst" | "viewer";
 
 export interface SessionUser {
@@ -46,20 +48,7 @@ export interface InvitePublicRecord {
 }
 
 async function requestAuth(path: string, init?: RequestInit): Promise<AuthResponse> {
-  const response = await fetch(path, {
-    credentials: "same-origin",
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {})
-    },
-    ...init
-  });
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    const detail = typeof body.detail === "string" ? body.detail : `HTTP ${response.status}`;
-    throw new Error(detail);
-  }
-  return response.json() as Promise<AuthResponse>;
+  return requestJson<AuthResponse>(path, init);
 }
 
 export async function login(username: string, password: string): Promise<AuthResponse> {
@@ -67,6 +56,17 @@ export async function login(username: string, password: string): Promise<AuthRes
     method: "POST",
     body: JSON.stringify({ username, password })
   });
+}
+
+// 游客登录（AUTH_GUEST_ENABLED）：签发共享只读 guest 会话，
+// 会话用户 external_provider === "guest"（session store 以此识别游客）。
+export async function guestLogin(): Promise<AuthResponse> {
+  return requestAuth("/api/auth/guest-login", { method: "POST" });
+}
+
+export function startOidcLogin(nextPath = ""): void {
+  const nextQuery = nextPath ? `?next=${encodeURIComponent(nextPath)}` : "";
+  window.location.assign(apiUrl(`/api/auth/oidc/start${nextQuery}`));
 }
 
 export async function forgotPassword(username: string): Promise<void> {
@@ -84,12 +84,7 @@ export async function changePassword(currentPassword: string, newPassword: strin
 }
 
 export async function fetchInvite(code: string): Promise<InvitePublicRecord> {
-  const response = await fetch(`/api/auth/invites/${code}`, { credentials: "same-origin" });
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error(typeof body.detail === "string" ? body.detail : `HTTP ${response.status}`);
-  }
-  return response.json() as Promise<InvitePublicRecord>;
+  return requestJson<InvitePublicRecord>(`/api/auth/invites/${code}`);
 }
 
 export async function acceptInvite(
@@ -107,10 +102,8 @@ export async function fetchMe(): Promise<AuthResponse> {
 }
 
 export async function logout(): Promise<void> {
-  const response = await fetch("/api/auth/logout", {
-    method: "POST",
-    credentials: "same-origin"
-  });
+  // 401 视为已登出，不抛错；其余失败仍上抛，交由调用方提示。
+  const response = await requestRaw("/api/auth/logout", { method: "POST" });
   if (!response.ok && response.status !== 401) {
     throw new Error(`Logout failed: ${response.status}`);
   }

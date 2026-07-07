@@ -8,7 +8,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.api.routes.auth import assert_workspace_member, get_current_user, require_super_admin
+from app.api.routes.auth import (
+    assert_workspace_member,
+    get_current_user,
+    require_capability,
+    require_super_admin,
+)
 from app.core.database import get_db_session
 from app.ingestion.runs import (
     HistoricalBackfillRequest,
@@ -18,6 +23,8 @@ from app.ingestion.runs import (
     run_historical_backfill,
     run_workspace_ingestion,
 )
+from app.ingestion.manual_import import preview_manual_import
+from app.ingestion.retry import failed_source_retry_summary
 from app.models.content import (
     DataSource,
     DedupeGroup,
@@ -37,14 +44,24 @@ from app.schemas.ingestion import (
     IngestionCoverageFunnelRead,
     IngestionCoverageRead,
     IngestionCoverageSourceRead,
+    IngestionCoverageFailureTrendRead,
+    IngestionCoverageTrendPointRead,
+    IngestionCoverageTrendsRead,
+    IngestionFailedSourceRetryRunRead,
+    IngestionFailedSourceRetrySummaryRead,
     IngestionRunCreate,
     IngestionRunRead,
+    IngestionRetryFailedCreate,
+    ManualImportPreviewCreate,
+    ManualImportPreviewErrorRead,
+    ManualImportPreviewRead,
 )
 
 router = APIRouter(prefix="/api/ingestion", tags=["ingestion"])
 SUPER_ADMIN = Depends(require_super_admin)
 CURRENT_USER = Depends(get_current_user)
 DB_SESSION = Depends(get_db_session)
+INGESTION_CAPABILITY = Depends(require_capability("ingestion"))
 BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 
 
@@ -65,11 +82,15 @@ def get_scheduler_config(_: User = CURRENT_USER) -> dict:
         "max_items_per_source": settings.ingestion_max_items_per_source,
         "job_mode": settings.scheduler_job_mode,
         "day_offset_days": settings.daily_pipeline_day_offset_days,
+        "failed_source_auto_retry_enabled": settings.ingestion_failed_source_auto_retry_effective,
+        "failed_source_retry_base_seconds": settings.ingestion_failed_source_retry_base_seconds,
+        "failed_source_retry_max_attempts": settings.ingestion_failed_source_retry_max_attempts,
+        "failed_source_retry_limit": settings.ingestion_failed_source_retry_limit,
         "config_hint": "在部署 .env 中调整 INGESTION_SCHEDULER_* 后重启 scheduler 服务生效",
     }
 
 
-@router.post("/runs", response_model=IngestionRunRead)
+@router.post("/runs", response_model=IngestionRunRead, dependencies=[INGESTION_CAPABILITY])
 async def create_ingestion_run(
     payload: IngestionRunCreate,
     current_user: User = CURRENT_USER,
@@ -96,7 +117,11 @@ async def create_ingestion_run(
     return _run_to_read(run)
 
 
-@router.post("/backfill-runs", response_model=IngestionRunRead)
+@router.post(
+    "/backfill-runs",
+    response_model=IngestionRunRead,
+    dependencies=[INGESTION_CAPABILITY],
+)
 async def create_historical_backfill_run(
     payload: HistoricalBackfillCreate,
     current_user: User = CURRENT_USER,
@@ -131,6 +156,70 @@ async def create_historical_backfill_run(
     return _run_to_read(run)
 
 
+@router.post(
+    "/manual-import-preview",
+    response_model=ManualImportPreviewRead,
+    dependencies=[INGESTION_CAPABILITY],
+)
+def preview_manual_import_payload(
+    payload: ManualImportPreviewCreate,
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> ManualImportPreviewRead:
+    assert_workspace_member(session, current_user, payload.workspace_code, min_role="admin")
+    workspace = session.scalar(
+        select(Workspace).where(
+            Workspace.code == payload.workspace_code,
+            Workspace.enabled.is_(True),
+        ),
+    )
+    if workspace is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
+
+    enabled_sources = [
+        source
+        for source in _enabled_sources(session, workspace)
+        if source.source_type in set(payload.source_types)
+    ]
+    enabled_source_ids = {source.id for source in enabled_sources}
+    if not enabled_source_ids:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="当前工作台在所选源类型下没有启用源，无法预览手工导入。",
+        )
+    if payload.default_data_source_id and payload.default_data_source_id not in enabled_source_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="default_data_source_id 不属于当前工作台所选源类型下的已启用源。",
+        )
+
+    preview = preview_manual_import(
+        input_text=payload.input_text,
+        input_format=payload.input_format,
+        default_data_source_id=payload.default_data_source_id,
+        enabled_source_ids=enabled_source_ids,
+    )
+    return ManualImportPreviewRead(
+        workspace_code=payload.workspace_code,
+        input_format=preview.input_format,
+        filename=payload.filename,
+        total_rows=preview.total_rows,
+        accepted_count=preview.accepted_count,
+        rejected_count=preview.rejected_count,
+        accepted_items=preview.accepted_items,
+        errors=[
+            ManualImportPreviewErrorRead(
+                row_number=error.row_number,
+                code=error.code,
+                message=error.message,
+                raw_text=error.raw_text,
+            )
+            for error in preview.errors
+        ],
+        error_report_csv=preview.error_report_csv,
+    )
+
+
 @router.get("/runs", response_model=list[IngestionRunRead])
 def list_ingestion_runs(
     workspace_code: str | None = Query(default=None),
@@ -162,6 +251,114 @@ def get_ingestion_run(
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ingestion run not found")
     assert_workspace_member(session, current_user, run.workspace_code, min_role="viewer")
+    return _run_to_read(run)
+
+
+@router.post(
+    "/runs/{run_id}/retry-failed-sources",
+    response_model=IngestionRunRead,
+    dependencies=[INGESTION_CAPABILITY],
+)
+async def retry_failed_ingestion_run(
+    run_id: str,
+    payload: IngestionRetryFailedCreate | None = None,
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> IngestionRunRead:
+    original = session.get(IngestionRun, run_id)
+    if original is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ingestion run not found")
+    assert_workspace_member(session, current_user, original.workspace_code, min_role="admin")
+
+    failed_source_ids = _failed_run_source_ids(original)
+    if not failed_source_ids:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="本次运行没有可重试的失败源。",
+        )
+
+    retryable_sources = _retryable_failed_sources(
+        session,
+        workspace_code=original.workspace_code,
+        failed_source_ids=failed_source_ids,
+    )
+    if not retryable_sources:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="失败源已被停用或不再属于当前工作台，无法重试。",
+        )
+
+    payload = payload or IngestionRetryFailedCreate()
+    retry_source_ids = [source.id for source in retryable_sources]
+    retry_source_types = _unique(source.source_type for source in retryable_sources)
+    original_params = original.params_json or {}
+    original_summary = original.summary_json or {}
+
+    try:
+        if original.run_type == "historical_backfill":
+            backfill_mode = str(original_params.get("backfill_mode") or original_summary.get("backfill_mode") or "rss_window")
+            if backfill_mode == "manual_import":
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="manual_import 运行不能仅从 run summary 恢复原始手工条目，请重新上传手工补采数据。",
+                )
+            target_day_start = str(original_params.get("target_day_start") or original_summary.get("target_day_start") or "")
+            target_day_end = str(original_params.get("target_day_end") or original_summary.get("target_day_end") or "")
+            if not target_day_start or not target_day_end:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Historical backfill run is missing target_day_start/target_day_end",
+                )
+            run = await run_historical_backfill(
+                session,
+                HistoricalBackfillRequest(
+                    workspace_code=original.workspace_code,
+                    target_day_start=target_day_start,
+                    target_day_end=target_day_end,
+                    source_types=retry_source_types,
+                    source_ids=retry_source_ids,
+                    limit=None,
+                    concurrency=payload.concurrency,
+                    source_timeout_seconds=payload.source_timeout_seconds,
+                    backfill_mode=backfill_mode,
+                    source_scope="failed_sources",
+                    retry_policy="retry_failed_sources",
+                    include_undated=_bool_value(original_params.get("include_undated")),
+                    manual_items=[],
+                    retry_of_run_id=original.id,
+                ),
+            )
+        elif original.run_type == "workspace_fetch":
+            max_items_per_source = (
+                payload.max_items_per_source
+                if payload.max_items_per_source is not None
+                else _optional_int(original_params.get("max_items_per_source"))
+            )
+            run = await run_workspace_ingestion(
+                session,
+                WorkspaceIngestionRequest(
+                    workspace_code=original.workspace_code,
+                    source_types=retry_source_types,
+                    source_ids=retry_source_ids,
+                    limit=None,
+                    concurrency=payload.concurrency,
+                    source_timeout_seconds=payload.source_timeout_seconds,
+                    max_items_per_source=max_items_per_source,
+                    retry_of_run_id=original.id,
+                ),
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unsupported ingestion run_type for retry: {original.run_type}",
+            )
+    except WorkspaceNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except InvalidBackfillRangeError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    session.commit()
+    session.refresh(run)
     return _run_to_read(run)
 
 
@@ -346,6 +543,196 @@ def get_ingestion_coverage(
     )
 
 
+@router.get("/coverage/trends", response_model=IngestionCoverageTrendsRead)
+def get_ingestion_coverage_trends(
+    workspace_code: str = Query(...),
+    days: int = Query(default=14, ge=1, le=90),
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> IngestionCoverageTrendsRead:
+    assert_workspace_member(session, current_user, workspace_code, min_role="viewer")
+    workspace = session.scalar(
+        select(Workspace).where(
+            Workspace.code == workspace_code,
+            Workspace.enabled.is_(True),
+        ),
+    )
+    if workspace is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
+
+    today = datetime.now(BEIJING_TZ).date()
+    start_day = today - timedelta(days=days - 1)
+    start_utc = datetime.combine(start_day, time.min, BEIJING_TZ).astimezone(UTC)
+    runs = session.scalars(
+        select(IngestionRun)
+        .where(
+            IngestionRun.workspace_code == workspace.code,
+            IngestionRun.created_at >= start_utc,
+        )
+        .order_by(IngestionRun.created_at.asc(), IngestionRun.id.asc()),
+    ).all()
+
+    day_buckets = {
+        (start_day + timedelta(days=offset)).isoformat(): {
+            "run_count": 0,
+            "latest_run": None,
+            "source_total": 0,
+            "source_succeeded": 0,
+            "source_failed": 0,
+            "source_skipped_unimplemented": 0,
+            "items_fetched": 0,
+            "raw_created": 0,
+            "raw_updated": 0,
+        }
+        for offset in range(days)
+    }
+    failed_sources: dict[str, dict[str, object]] = {}
+
+    for run in runs:
+        occurred_at = _run_occurred_at(run)
+        day_key = occurred_at.astimezone(BEIJING_TZ).date().isoformat()
+        bucket = day_buckets.get(day_key)
+        if bucket is None:
+            continue
+        bucket["run_count"] = int(bucket["run_count"]) + 1
+        latest_run = bucket["latest_run"]
+        if latest_run is None or _run_occurred_at(run) >= _run_occurred_at(latest_run):
+            bucket["latest_run"] = run
+        bucket["source_total"] = int(bucket["source_total"]) + int(run.source_total or 0)
+        bucket["source_succeeded"] = int(bucket["source_succeeded"]) + int(run.source_succeeded or 0)
+        bucket["source_failed"] = int(bucket["source_failed"]) + int(run.source_failed or 0)
+        bucket["source_skipped_unimplemented"] = int(bucket["source_skipped_unimplemented"]) + _number(
+            (run.summary_json or {}).get("source_skipped_unimplemented"),
+        )
+        bucket["items_fetched"] = int(bucket["items_fetched"]) + int(run.items_fetched or 0)
+        bucket["raw_created"] = int(bucket["raw_created"]) + int(run.raw_created or 0)
+        bucket["raw_updated"] = int(bucket["raw_updated"]) + int(run.raw_updated or 0)
+
+        for source in _failed_run_sources(run):
+            source_id = str(source.get("data_source_id") or "").strip()
+            if not source_id:
+                continue
+            record = failed_sources.setdefault(
+                source_id,
+                {
+                    "data_source_id": source_id,
+                    "name": str(source.get("name") or "未命名数据源"),
+                    "source_type": str(source.get("source_type") or "unknown"),
+                    "failure_count": 0,
+                    "last_error": "",
+                    "last_run_id": run.id,
+                    "last_run_key": run.run_key,
+                    "last_failed_at": occurred_at,
+                },
+            )
+            record["failure_count"] = int(record["failure_count"]) + 1
+            if occurred_at >= _ensure_aware_datetime(record["last_failed_at"]):
+                record["name"] = str(source.get("name") or record["name"])
+                record["source_type"] = str(source.get("source_type") or record["source_type"])
+                record["last_error"] = str(source.get("error") or "")
+                record["last_run_id"] = run.id
+                record["last_run_key"] = run.run_key
+                record["last_failed_at"] = occurred_at
+
+    points = []
+    for day_key, bucket in day_buckets.items():
+        source_total = int(bucket["source_total"])
+        source_succeeded = int(bucket["source_succeeded"])
+        latest_run = bucket["latest_run"]
+        points.append(
+            IngestionCoverageTrendPointRead(
+                day_key=day_key,
+                run_count=int(bucket["run_count"]),
+                latest_run_id=latest_run.id if latest_run else None,
+                latest_run_key=latest_run.run_key if latest_run else None,
+                latest_run_status=latest_run.status if latest_run else None,
+                source_total=source_total,
+                source_succeeded=source_succeeded,
+                source_failed=int(bucket["source_failed"]),
+                source_skipped_unimplemented=int(bucket["source_skipped_unimplemented"]),
+                items_fetched=int(bucket["items_fetched"]),
+                raw_created=int(bucket["raw_created"]),
+                raw_updated=int(bucket["raw_updated"]),
+                success_rate=round(source_succeeded / source_total, 4) if source_total else 0.0,
+            ),
+        )
+
+    total_source_total = sum(point.source_total for point in points)
+    total_source_succeeded = sum(point.source_succeeded for point in points)
+    return IngestionCoverageTrendsRead(
+        workspace_code=workspace.code,
+        days=days,
+        generated_at=datetime.now(UTC),
+        total_runs=sum(point.run_count for point in points),
+        total_source_failed=sum(point.source_failed for point in points),
+        total_raw_created=sum(point.raw_created for point in points),
+        average_success_rate=round(total_source_succeeded / total_source_total, 4) if total_source_total else 0.0,
+        points=points,
+        top_failed_sources=[
+            IngestionCoverageFailureTrendRead(
+                data_source_id=str(record["data_source_id"]),
+                name=str(record["name"]),
+                source_type=str(record["source_type"]),
+                failure_count=int(record["failure_count"]),
+                last_error=str(record["last_error"]),
+                last_run_id=str(record["last_run_id"]),
+                last_run_key=str(record["last_run_key"]),
+                last_failed_at=_ensure_aware_datetime(record["last_failed_at"]),
+            )
+            for record in sorted(
+                failed_sources.values(),
+                key=lambda item: (-int(item["failure_count"]), str(item["name"])),
+            )[:10]
+        ],
+    )
+
+
+@router.get("/failed-source-retry-summary", response_model=IngestionFailedSourceRetrySummaryRead)
+def get_failed_source_retry_summary(
+    workspace_code: str = Query(...),
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> IngestionFailedSourceRetrySummaryRead:
+    assert_workspace_member(session, current_user, workspace_code, min_role="viewer")
+    workspace = session.scalar(
+        select(Workspace).where(
+            Workspace.code == workspace_code,
+            Workspace.enabled.is_(True),
+        ),
+    )
+    if workspace is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
+    from app.core.config import get_settings
+
+    summary = failed_source_retry_summary(session, get_settings(), workspace_code=workspace.code)
+    return IngestionFailedSourceRetrySummaryRead(
+        workspace_code=workspace.code,
+        generated_at=datetime.now(UTC),
+        policy=dict(summary["policy"] or {}),
+        due_count=int(summary["due_count"] or 0),
+        blocked_count=int(summary["blocked_count"] or 0),
+        next_retry_at=summary["next_retry_at"],
+        runs=[
+            IngestionFailedSourceRetryRunRead(
+                run_id=str(row["run_id"]),
+                run_key=str(row["run_key"]),
+                run_type=str(row["run_type"]),
+                status=str(row["status"]),
+                failed_source_count=int(row["failed_source_count"] or 0),
+                attempt_count=int(row["attempt_count"] or 0),
+                last_attempt_at=row["last_attempt_at"],
+                next_retry_at=row["next_retry_at"],
+                blocked=bool(row["blocked"]),
+                due=bool(row["due"]),
+                latest_retry_run_id=row.get("latest_retry_run_id"),
+                latest_retry_run_key=row.get("latest_retry_run_key"),
+                latest_retry_status=row.get("latest_retry_status"),
+            )
+            for row in summary["runs"]
+        ],
+    )
+
+
 def _run_to_read(run: IngestionRun) -> IngestionRunRead:
     return IngestionRunRead(
         id=run.id,
@@ -365,6 +752,77 @@ def _run_to_read(run: IngestionRun) -> IngestionRunRead:
         params_json=run.params_json or {},
         summary_json=run.summary_json or {},
     )
+
+
+def _failed_run_source_ids(run: IngestionRun) -> list[str]:
+    source_ids: list[str] = []
+    for source in _failed_run_sources(run):
+        source_id = str(source.get("data_source_id") or "").strip()
+        if source_id and source_id not in source_ids:
+            source_ids.append(source_id)
+    return source_ids
+
+
+def _failed_run_sources(run: IngestionRun) -> list[dict[str, object]]:
+    sources = (run.summary_json or {}).get("sources")
+    if not isinstance(sources, list):
+        return []
+    failed_sources: list[dict[str, object]] = []
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        if source.get("status") != "failed":
+            continue
+        failed_sources.append(source)
+    return failed_sources
+
+
+def _retryable_failed_sources(
+    session: Session,
+    *,
+    workspace_code: str,
+    failed_source_ids: list[str],
+) -> list[DataSource]:
+    sources = session.scalars(
+        select(DataSource)
+        .join(WorkspaceSourceLink, WorkspaceSourceLink.data_source_id == DataSource.id)
+        .join(Workspace, Workspace.id == WorkspaceSourceLink.workspace_id)
+        .where(
+            Workspace.code == workspace_code,
+            Workspace.enabled.is_(True),
+            WorkspaceSourceLink.enabled.is_(True),
+            DataSource.enabled.is_(True),
+            DataSource.id.in_(failed_source_ids),
+        ),
+    ).all()
+    sources_by_id = {source.id: source for source in sources}
+    return [sources_by_id[source_id] for source_id in failed_source_ids if source_id in sources_by_id]
+
+
+def _unique(values) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if text and text not in result:
+            result.append(text)
+    return result
+
+
+def _optional_int(value: object) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _bool_value(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() in {"1", "true", "yes", "on"}
+    return bool(value)
 
 
 def _coverage_run(
@@ -427,6 +885,18 @@ def _day_bounds(day_key: str) -> tuple[datetime, datetime]:
 
 def _today_key() -> str:
     return datetime.now(BEIJING_TZ).date().isoformat()
+
+
+def _run_occurred_at(run: IngestionRun) -> datetime:
+    return _ensure_aware_datetime(run.completed_at or run.started_at or run.created_at)
+
+
+def _ensure_aware_datetime(value: object) -> datetime:
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value
+    return datetime.min.replace(tzinfo=UTC)
 
 
 def _news_day_filter(start_utc: datetime, end_utc: datetime):

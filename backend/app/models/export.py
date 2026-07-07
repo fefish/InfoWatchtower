@@ -23,6 +23,7 @@ class ExportJob(IdMixin, ScopeMixin, SyncMixin, TimestampMixin, Base):
 
     requested_by: Mapped["User | None"] = relationship()
     items: Mapped[list[ExportJobItem]] = relationship(back_populates="export_job")
+    import_receipts: Mapped[list[ExportImportReceipt]] = relationship(back_populates="export_job")
 
 
 class ExportJobItem(IdMixin, TimestampMixin, Base):
@@ -42,3 +43,20 @@ class ExportJobItem(IdMixin, TimestampMixin, Base):
     daily_report_item: Mapped["DailyReportItem"] = relationship()
     generated_news: Mapped["GeneratedNews"] = relationship()
     news_item: Mapped["NewsItem"] = relationship()
+
+
+class ExportImportReceipt(IdMixin, ScopeMixin, TimestampMixin, Base):
+    __tablename__ = "export_import_receipts"
+
+    export_job_id: Mapped[str] = mapped_column(ForeignKey("export_jobs.id"), index=True)
+    target_system: Mapped[str] = mapped_column(String(128), default="company_intranet", index=True)
+    import_status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    imported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    imported_statement_count: Mapped[int] = mapped_column(Integer, default=0)
+    failed_statement_count: Mapped[int] = mapped_column(Integer, default=0)
+    failure_items_json: Mapped[list[dict]] = mapped_column(JsonColumn, default=list)
+    notes: Mapped[str] = mapped_column(Text, default="")
+    recorded_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+
+    export_job: Mapped[ExportJob] = relationship(back_populates="import_receipts")
+    recorded_by: Mapped["User | None"] = relationship()

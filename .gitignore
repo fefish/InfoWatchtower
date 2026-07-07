@@ -38,3 +38,4 @@ references/参考工具/
 
 # codrax runtime artifacts (logs, memory, blob caches, worktrees, plans)
 .codrax/
+frontend/test-results/

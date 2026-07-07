@@ -21,11 +21,273 @@
     "requirements": "Internal planning/product/research/operation needs created from one or more insights.",
     "tasks": "Assigned follow-up work for owners, with status and due date."
   },
+  "report_item_strategy_loop_v1": {
+    "create_endpoints": [
+      "POST /api/daily-report-items/{item_id}/insights",
+      "POST /api/weekly-report-items/{item_id}/insights"
+    ],
+    "permission_rule": "Creating a strategy loop from a report item requires workspace admin+ because it creates a requirement and may create a task.",
+    "create_objects": [
+      "insights",
+      "strategic_implications",
+      "requirements",
+      "requirement_source_links",
+      "topic_tasks when create_task=true"
+    ],
+    "payload_fields": [
+      "insight_title",
+      "insight_summary",
+      "insight_type",
+      "confidence_score",
+      "implication_title",
+      "implication_description",
+      "implication_type",
+      "requirement_title",
+      "requirement_description",
+      "requirement_priority",
+      "requirement_status",
+      "requirement_due_at",
+      "owner_user_id",
+      "source_note",
+      "create_task",
+      "task_title",
+      "task_description",
+      "task_status",
+      "task_due_at",
+      "task_assignee_user_id",
+      "metadata_json"
+    ],
+    "insight_trace_fields": [
+      "insights.news_item_id",
+      "insights.raw_item_id",
+      "insights.source_report_type",
+      "insights.source_report_id",
+      "insights.source_report_item_id"
+    ],
+    "response_fields": [
+      "insight",
+      "implication",
+      "requirement",
+      "task"
+    ],
+    "derivation_rule": "The API derives news/raw/source links from the daily or weekly report item generated_news chain; weekly report items that reference a daily item preserve both weekly_report_item_id and daily_report_item_id on the requirement source link.",
+    "task_trace_rule": "Topic task read models include requirement_source_links so a task can navigate back to requirement, report item, news, raw and source."
+  },
+  "insight_management_v1": {
+    "insight_endpoints": [
+      "GET /api/insights",
+      "POST /api/insights",
+      "GET /api/insights/{insight_id}",
+      "PATCH /api/insights/{insight_id}"
+    ],
+    "implication_endpoints": [
+      "GET /api/strategic-implications",
+      "POST /api/strategic-implications",
+      "GET /api/strategic-implications/{implication_id}",
+      "PATCH /api/strategic-implications/{implication_id}"
+    ],
+    "insight_create_rule": "Creating an insight requires a news_item_id in the same workspace; the API derives raw_item_id from the news item and rejects conflicting raw_item_id.",
+    "insight_read_trace_fields": [
+      "source_title",
+      "source_url",
+      "data_source_name",
+      "source_report_type",
+      "source_report_id",
+      "source_report_item_id"
+    ],
+    "implication_create_rule": "Creating a strategic implication requires an existing insight and inherits workspace_code/domain_code from that insight.",
+    "frontend_anchor": "/insights?insight_id={insight_id}",
+    "status_rule": "Insights can be listed, confirmed, linked_to_requirement and archived without losing report/news/raw trace."
+  },
+  "task_assignment_v1": {
+    "assignee_field": "topic_tasks.assignee_user_id",
+    "assignee_rule": "When assignee_user_id is provided on create/update, it must reference an active enabled member of the same workspace.",
+    "notification_event": "task.assigned",
+    "notification_rule": "Changing assignee_user_id from another value to a non-empty value emits task.assigned and creates an in-app notification for the new assignee, excluding self-assignment by the actor.",
+    "frontend_anchor": "/tasks?task_id={topic_task_id}"
+  },
+  "task_owner_view_v1": {
+    "list_endpoint": "GET /api/topic-tasks",
+    "filter_params": [
+      "workspace_code",
+      "status",
+      "assignee_user_id",
+      "assignee (me resolves to the current user; any other value is treated as a user id)",
+      "assigned_to_me",
+      "due=overdue",
+      "due=due_today"
+    ],
+    "read_fields": [
+      "is_overdue",
+      "blocked_reason",
+      "assignee_user_id",
+      "assignee_name",
+      "requirement_source_links"
+    ],
+    "blocked_reason_storage": "topic_tasks.metadata_json.blocked_reason",
+    "overdue_rule": "A task is overdue when due_at is before server utc_now and status is not done or canceled.",
+    "assignee_update_rule": "The current assignee may update status and metadata_json.blocked_reason only; title, due_at, assignee_user_id, requirement_id and arbitrary metadata remain workspace admin+ only.",
+    "frontend_anchor": "/tasks?view=mine|overdue|blocked"
+  },
+  "task_batch_update_v1": {
+    "endpoint": "POST /api/topic-tasks/batch",
+    "payload_fields": [
+      "workspace_code",
+      "task_ids",
+      "status",
+      "blocked_reason"
+    ],
+    "task_ids_rule": "At least one and at most 100 topic task ids; all ids must exist in the same workspace_code.",
+    "update_rule": "Batch update only supports status and topic_tasks.metadata_json.blocked_reason. It must not update title, due_at, assignee_user_id, requirement_id or arbitrary metadata.",
+    "admin_rule": "Workspace admin+ may batch update any selected tasks in the workspace, including overdue and blocked queues.",
+    "assignee_rule": "The current assignee may batch update only tasks assigned to themselves, with the same status/blocked_reason limit as single task update.",
+    "blocked_rule": "When status=blocked, blocked_reason is required.",
+    "audit_action": "topic_task.batch_update",
+    "response_fields": [
+      "updated_count",
+      "tasks"
+    ],
+    "frontend_anchor": "/tasks?view=mine|overdue|blocked"
+  },
+  "task_detail_v1": {
+    "endpoint": "GET /api/topic-tasks/{task_id}",
+    "permission_rule": "Workspace viewer+ can read a task detail in their workspace. Non-members must receive 403 and unknown ids must receive 404.",
+    "response_fields": [
+      "all TopicTaskRead fields",
+      "requirement_title",
+      "requirement_source_links",
+      "is_overdue",
+      "blocked_reason",
+      "assignee_name"
+    ],
+    "trace_rule": "The task detail response must include requirement source links so the frontend detail drawer can navigate from task -> requirement -> report item/news/raw/source without a second ad hoc lookup.",
+    "frontend_anchor": "/tasks?task_id={topic_task_id}",
+    "frontend_behavior": "The /tasks page opens a read-only detail drawer from list rows or task_id query anchors; status and assignment mutations continue to use the existing update endpoints."
+  },
+  "sync_boundary_v1": {
+    "intranet_only_objects": [
+      "requirements",
+      "topic_tasks"
+    ],
+    "feed_rule": "Requirements and topic tasks must not appear in extranet sync feed object_types, even if a row has public visibility_scope or public_to_intranet sync_policy.",
+    "negative_test": "backend/tests/test_deployment_modes.py::test_extranet_sync_feed_excludes_strategy_loop_private_objects"
+  },
+  "requirement_owner_status_v1": {
+    "owner_field": "requirements.owner_user_id",
+    "owner_rule": "When owner_user_id is provided on create/update, it must reference an active enabled member of the same workspace.",
+    "notification_event": "requirement.status_changed",
+    "notification_rule": "Changing requirements.status emits requirement.status_changed and creates an in-app notification for owner_user_id, excluding status changes made by the owner.",
+    "frontend_anchor": "/requirements?requirement_id={requirement_id}"
+  },
+  "requirement_feedback_to_recommendation_v1": {
+    "write_trigger": "PATCH /api/requirements/{requirement_id}",
+    "metadata_field": "requirements.metadata_json.recommendation_feedback",
+    "metadata_fields": [
+      "outcome=positive|negative|neutral",
+      "reason",
+      "score_delta"
+    ],
+    "implicit_status_mapping": {
+      "done": "positive",
+      "resolved": "positive",
+      "closed": "positive",
+      "rejected": "negative",
+      "canceled": "negative"
+    },
+    "audit_object": "editorial_actions",
+    "audit_action_type": "requirement.feedback_to_recommendation",
+    "target_object": "news_item",
+    "source_derivation": "Requirement source links derive target news_item_id from direct news links, report item generated_news, insight.news_item_id, or raw_item_id -> news_items.",
+    "recommendation_read_rule": "Recommendation scoring reads editorial_actions with action_type=requirement.feedback_to_recommendation into feedback_score and recommendation_reason.",
+    "frontend_anchor": "/requirements?requirement_id={requirement_id}"
+  },
+  "requirement_source_link_v1": {
+    "table": "requirement_source_links",
+    "create_endpoints": [
+      "POST /api/requirements",
+      "POST /api/requirements/{requirement_id}/source-links"
+    ],
+    "read_endpoint": "GET /api/requirements",
+    "create_payload_fields": [
+      "insight_id",
+      "daily_report_item_id",
+      "weekly_report_item_id",
+      "entity_milestone_id",
+      "historical_report_id",
+      "historical_feedback_item_id",
+      "news_item_id",
+      "raw_item_id",
+      "link_type",
+      "note"
+    ],
+    "create_requirement_shortcut_fields": [
+      "source_insight_id",
+      "source_daily_report_item_id",
+      "source_weekly_report_item_id",
+      "source_entity_milestone_id",
+      "source_historical_report_id",
+      "source_historical_feedback_item_id",
+      "source_news_item_id",
+      "source_raw_item_id",
+      "source_note"
+    ],
+    "read_fields": [
+      "id",
+      "link_type",
+      "note",
+      "insight_id",
+      "daily_report_item_id",
+      "weekly_report_item_id",
+      "entity_milestone_id",
+      "historical_report_id",
+      "historical_feedback_item_id",
+      "news_item_id",
+      "raw_item_id",
+      "source_object_type",
+      "source_title",
+      "source_url",
+      "data_source_name",
+      "created_at"
+    ],
+    "derivation_rule": "When a report item, generated news, insight, entity milestone, historical report, historical feedback, news, or raw source is supplied, the API derives the related news_item_id and raw_item_id when available; conflicting explicit source ids must be rejected.",
+    "workspace_rule": "A requirement source link target must belong to the same workspace as the requirement.",
+    "permission_rule": "Creating or adding requirement source links requires workspace admin+; listing source links requires workspace viewer+.",
+    "frontend_anchor": "/requirements?requirement_id={requirement_id}"
+  },
+  "permission_model_v1": {
+    "list_insights": "workspace viewer+",
+    "create_insight": "workspace member+",
+    "update_insight": "workspace member+",
+    "list_strategic_implications": "workspace viewer+",
+    "create_strategic_implication": "workspace member+",
+    "update_strategic_implication": "workspace member+",
+    "list_requirements": "workspace viewer+",
+    "create_requirement": "workspace admin+",
+    "update_requirement": "workspace admin+",
+    "create_requirement_source_link": "workspace admin+",
+    "create_report_item_strategy_loop": "workspace admin+",
+    "list_topic_tasks": "workspace viewer+",
+    "read_topic_task": "workspace viewer+",
+    "create_topic_task": "workspace admin+",
+    "assign_topic_task": "workspace admin+",
+    "update_topic_task_status": "workspace admin+ or the current assignee",
+    "update_topic_task_blocked_reason": "workspace admin+ or the current assignee, limited to metadata_json.blocked_reason for assignees",
+    "batch_update_topic_tasks": "workspace admin+ for workspace tasks, or current assignee for own tasks only; fields limited to status and blocked_reason",
+    "update_topic_task_fields_other_than_status": "workspace admin+"
+  },
   "required_links": [
     "insights.news_item_id -> news_items.id",
     "insights.raw_item_id -> raw_items.id",
+    "insights.source_report_item_id -> daily_report_items.id or weekly_report_items.id by source_report_type",
     "strategic_implications.insight_id -> insights.id",
     "requirements.source_implication_id -> strategic_implications.id",
+    "requirement_source_links.daily_report_item_id -> daily_report_items.id",
+    "requirement_source_links.weekly_report_item_id -> weekly_report_items.id",
+    "requirement_source_links.entity_milestone_id -> entity_milestones.id",
+    "requirement_source_links.historical_report_id -> historical_reports.id",
+    "requirement_source_links.historical_feedback_item_id -> historical_feedback_items.id",
+    "requirement_source_links.news_item_id -> news_items.id",
+    "requirement_source_links.raw_item_id -> raw_items.id",
     "tasks.requirement_id -> requirements.id"
   ],
   "rule": "A requirement must be traceable back to the external signals that motivated it."

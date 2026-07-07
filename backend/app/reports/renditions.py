@@ -1,25 +1,25 @@
 """报告多版成稿（rendition）服务。
 
-设计文档：docs/report-renditions-design.md
+设计文档：docs/backend/report-renditions-design.md
 不变式：
 - rendition 是采信条目的投影快照，可随时重生成，不回写采信状态、
   generated_news 与公司 SQL 出口。
 - 业务板块只存在于 insight 辅助字段和成稿分组里，不写 category。
+- 看板 taxonomy 按工作台策略解析：planning_intel（及声明 AI 口径的
+  工作台）用全局 business_boards.json，其余工作台用 domain pack /
+  标签策略的板块，缺省退化为单一「全部」分组。
 """
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from functools import lru_cache
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from app.core.config import REPO_ROOT
 from app.models.common import utc_now
 from app.models.reports import (
     DailyReport,
@@ -28,6 +28,11 @@ from app.models.reports import (
     ReportRendition,
     WeeklyReport,
     WeeklyReportItem,
+)
+from app.workspaces.policy import (
+    BoardTaxonomy,
+    ai_board_taxonomy,
+    board_taxonomy_for_workspace,
 )
 
 ReportItem = DailyReportItem | WeeklyReportItem
@@ -74,26 +79,13 @@ BUILTIN_REPORT_FORMATS = [
 ]
 
 
-@lru_cache
-def _board_taxonomy() -> dict[str, Any]:
-    path = REPO_ROOT / "config" / "taxonomy" / "business_boards.json"
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
 def board_order() -> list[str]:
-    return list(_board_taxonomy().get("board_order") or [])
+    """全局 AI 板块顺序（LLM prompt 与内置 AI 口径工作台使用）。"""
+    return list(ai_board_taxonomy().board_order)
 
 
 def fallback_board() -> str:
-    return str(_board_taxonomy().get("fallback_board") or "基础竞争力")
-
-
-def _category_to_board() -> dict[str, str]:
-    mapping: dict[str, str] = {}
-    for board in _board_taxonomy().get("boards") or []:
-        for category in board.get("suggested_categories") or []:
-            mapping.setdefault(str(category), str(board["code"]))
-    return mapping
+    return ai_board_taxonomy().fallback_board
 
 
 def ensure_report_formats(session: Session, workspace_code: str) -> list[ReportFormat]:
@@ -118,15 +110,23 @@ def ensure_report_formats(session: Session, workspace_code: str) -> list[ReportF
     return list(existing.values())
 
 
-def resolve_insight(item: ReportItem) -> dict[str, Any]:
-    """条目的技术洞察辅助字段：优先模型产出的 insight_json，缺省规则降级。"""
+def resolve_insight(item: ReportItem, boards: BoardTaxonomy | None = None) -> dict[str, Any]:
+    """条目的技术洞察辅助字段：优先模型产出的 insight_json，缺省规则降级。
+
+    boards 为工作台解析出的看板 taxonomy；缺省用全局 AI 板块（兼容旧调用方）。
+    """
+    boards = boards or ai_board_taxonomy()
     news = item.generated_news
     insight = dict(news.insight_json or {})
     content = news.content_json or {}
 
     board = str(insight.get("board") or "")
-    if board not in board_order():
-        board = _board_from_source(item) or _category_to_board().get(news.category) or fallback_board()
+    if board not in boards.board_order:
+        board = (
+            _board_from_source(item, boards)
+            or boards.category_to_board.get(news.category)
+            or boards.fallback_board
+        )
 
     bullet_points = [str(point) for point in insight.get("bullet_points") or [] if str(point).strip()]
     if not bullet_points:
@@ -149,7 +149,7 @@ def resolve_insight(item: ReportItem) -> dict[str, Any]:
     }
 
 
-def _board_from_source(item: ReportItem) -> str | None:
+def _board_from_source(item: ReportItem, boards: BoardTaxonomy) -> str | None:
     news_item = item.generated_news.news_item
     data_source = news_item.data_source if news_item else None
     metadata = (data_source.metadata_json or {}) if data_source else {}
@@ -158,7 +158,7 @@ def _board_from_source(item: ReportItem) -> str | None:
         candidates = [
             (str(board), float(score))
             for board, score in relevance.items()
-            if isinstance(score, (int, float)) and str(board) in board_order()
+            if isinstance(score, (int, float)) and str(board) in boards.board_order
         ]
         if candidates:
             return max(candidates, key=lambda pair: pair[1])[0]
@@ -276,8 +276,9 @@ def _upsert_rendition(
     fmt: ReportFormat,
     items: list[ReportItem],
 ) -> ReportRendition:
-    snapshots = [_item_snapshot(item, fmt) for item in items]
-    groups = _group_snapshots(snapshots, fmt)
+    boards = board_taxonomy_for_workspace(session, context.workspace_code)
+    snapshots = [_item_snapshot(item, fmt, boards) for item in items]
+    groups = _group_snapshots(snapshots, fmt, boards)
     headlines = [snapshot for snapshot in snapshots if snapshot["is_headline"]] if fmt.headline_enabled else []
 
     board_distribution: dict[str, int] = {}
@@ -304,16 +305,11 @@ def _upsert_rendition(
 
     rendition.title = f"{context.period_key} {context.workspace_name} {fmt.name}"
     rendition.status = "draft"
-    rendition.summary_json = {
-        "period_key": context.period_key,
-        "item_total": len(snapshots),
-        "group_distribution": board_distribution,
-        "headline_titles": [snapshot["title"] for snapshot in headlines],
-        "source_total": len({snapshot["source_name"] for snapshot in snapshots if snapshot["source_name"]}),
-    }
+    rendition.summary_json = _build_summary_json(context, snapshots, board_distribution, headlines)
     rendition.body_json = {
         "format_code": fmt.format_code,
         "group_by": fmt.group_by,
+        "board_taxonomy_source": boards.source,
         "item_fields": list((fmt.item_fields or {}).get("fields") or []),
         "headlines": [snapshot["item_id"] for snapshot in headlines],
         "groups": groups,
@@ -325,10 +321,58 @@ def _upsert_rendition(
     return rendition
 
 
-def _item_snapshot(item: ReportItem, fmt: ReportFormat) -> dict[str, Any]:
+def _build_summary_json(
+    context: RenditionContext,
+    snapshots: list[dict[str, Any]],
+    group_distribution: dict[str, int],
+    headlines: list[dict[str, Any]],
+) -> dict[str, Any]:
+    highlight_snapshots = headlines or sorted(
+        snapshots,
+        key=lambda snapshot: float(snapshot.get("score") or 0),
+        reverse=True,
+    )[:4]
+    key_highlights = [str(snapshot["title"]) for snapshot in highlight_snapshots if snapshot.get("title")]
+    top_groups = [
+        {"name": name, "count": count}
+        for name, count in sorted(group_distribution.items(), key=lambda pair: (-pair[1], pair[0]))[:5]
+    ]
+    source_total = len({snapshot["source_name"] for snapshot in snapshots if snapshot["source_name"]})
+    summary_text = _summary_text(context, snapshots, top_groups, key_highlights)
+    return {
+        "period_key": context.period_key,
+        "item_total": len(snapshots),
+        "group_distribution": group_distribution,
+        "headline_titles": [snapshot["title"] for snapshot in headlines],
+        "source_total": source_total,
+        "top_groups": top_groups,
+        "key_highlights": key_highlights,
+        "summary_text": summary_text,
+        "summary_generated_by": f"rule_{context.report_type}_summary_v1",
+    }
+
+
+def _summary_text(
+    context: RenditionContext,
+    snapshots: list[dict[str, Any]],
+    top_groups: list[dict[str, Any]],
+    key_highlights: list[str],
+) -> str:
+    if not snapshots:
+        return f"{context.period_key} 暂无可成稿条目。"
+    group_text = "、".join(str(group["name"]) for group in top_groups[:3]) or "未分组"
+    highlight_text = "；".join(key_highlights[:3]) or "待编辑补充"
+    period_name = "本周" if context.report_type == "weekly" else "本期"
+    return (
+        f"{period_name}共纳入 {len(snapshots)} 条成稿，覆盖 {len(top_groups)} 个主要板块，"
+        f"重点集中在 {group_text}。关键亮点：{highlight_text}。"
+    )
+
+
+def _item_snapshot(item: ReportItem, fmt: ReportFormat, boards: BoardTaxonomy | None = None) -> dict[str, Any]:
     news = item.generated_news
     assert news is not None
-    insight = resolve_insight(item)
+    insight = resolve_insight(item, boards)
     content = news.content_json or {}
     news_item = news.news_item
     return {
@@ -354,15 +398,20 @@ def _item_snapshot(item: ReportItem, fmt: ReportFormat) -> dict[str, Any]:
     }
 
 
-def _group_snapshots(snapshots: list[dict[str, Any]], fmt: ReportFormat) -> list[dict[str, Any]]:
+def _group_snapshots(
+    snapshots: list[dict[str, Any]],
+    fmt: ReportFormat,
+    boards: BoardTaxonomy | None = None,
+) -> list[dict[str, Any]]:
     if fmt.group_by == "none":
         return [{"key": "all", "title": "全部条目", "item_ids": [s["item_id"] for s in snapshots]}]
 
     key_field = "board" if fmt.group_by == "board" else "category"
     ordered_keys: list[str]
     if fmt.group_by == "board":
+        workspace_board_order = list((boards or ai_board_taxonomy()).board_order)
         present = {s[key_field] for s in snapshots}
-        ordered_keys = [board for board in board_order() if board in present]
+        ordered_keys = [board for board in workspace_board_order if board in present]
         ordered_keys += sorted(present - set(ordered_keys))
     else:
         ordered_keys = sorted({s[key_field] for s in snapshots})
@@ -405,7 +454,12 @@ def render_markdown(rendition: ReportRendition) -> str:
     if distribution:
         parts = "，".join(f"{key} {count} 条" for key, count in distribution.items())
         lines.append(":::summary")
+        if summary.get("summary_text"):
+            lines.append(f"- 摘要：{summary['summary_text']}")
         lines.append(f"- 板块分布：{parts}，合计 {summary.get('item_total', 0)} 条。")
+        key_highlights = summary.get("key_highlights") or []
+        if key_highlights:
+            lines.append(f"- 关键亮点：{'；'.join(str(title) for title in key_highlights[:4])}。")
         headline_titles = summary.get("headline_titles") or []
         if headline_titles:
             lines.append(f"- 今日头条：{'；'.join(headline_titles[:4])}。")

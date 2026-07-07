@@ -6,15 +6,21 @@ import json
 import zipfile
 from datetime import date, datetime, time, timezone
 from typing import Any
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.api.routes.auth import get_current_user, require_super_admin
+from app.api.routes.auth import assert_workspace_member, get_current_user, require_super_admin
 from app.auth.service import write_audit
+from app.collaboration.notifications import (
+    record_requirement_status_changed_activity,
+    record_topic_task_assigned_activity,
+)
 from app.core.database import get_db_session
+from app.core.privacy import contains_secret_like_key
 from app.ingestion.tech_insight_loop_import_audit import (
     build_legacy_import_summary,
     feedback_ref_flag,
@@ -26,8 +32,8 @@ from app.ingestion.tech_insight_loop_import_audit import (
 )
 from app.ingestion.tech_insight_loop_legacy import LEGACY_WORKSPACE_CODE
 from app.models.common import utc_now
-from app.models.content import DataSource, NewsItem, RawItem
-from app.models.feedback import AuditLog
+from app.models.content import GeneratedNews, NewsItem, RawItem
+from app.models.feedback import AuditLog, EditorialAction
 from app.models.identity import User
 from app.models.legacy import (
     EntityMilestone,
@@ -36,23 +42,41 @@ from app.models.legacy import (
     HistoricalReport,
     TrackedEntity,
 )
-from app.models.strategy import Requirement, TopicTask
-from app.models.sync import SyncConflict, SyncInbox, SyncOutbox, SyncRun
+from app.models.reports import DailyReport, DailyReportItem, WeeklyReport, WeeklyReportItem
+from app.models.strategy import Insight, Requirement, RequirementSourceLink, StrategicImplication, TopicTask
+from app.models.sync import SyncOutbox, SyncRun
+from app.models.workspace import Workspace, WorkspaceMembership
+from app.reports.weekly import InvalidWeekKeyError, week_bounds
 from app.schemas.operations import (
     AuditLogRead,
     EntityMilestoneDetailRead,
     EntityMilestoneListItem,
+    EntityMilestoneManualCreate,
+    EntityMilestoneUpdate,
+    EntityTimelineMonthGroupRead,
     EntityTimelineSummaryRead,
     HistoricalFeedbackListItem,
     HistoricalJobRunListItem,
     HistoricalReportDetailRead,
     HistoricalReportListItem,
     HistoricalReportSummaryRead,
+    InsightCreate,
+    InsightRead,
+    InsightUpdate,
     LegacyImportGapItemRead,
     LegacyImportSummaryRead,
     QualityArchiveSummaryRead,
+    ReportArchiveListItem,
+    ReportArchiveMonthBucket,
+    ReportArchiveSourceStat,
+    ReportArchiveSummaryRead,
+    ReportItemEntityMilestoneCreate,
+    ReportItemStrategyLoopCreate,
+    ReportItemStrategyLoopRead,
     RequirementCreate,
     RequirementRead,
+    RequirementSourceLinkCreate,
+    RequirementSourceLinkRead,
     RequirementUpdate,
     SyncPackageExportCreate,
     SyncPackageExportRead,
@@ -60,19 +84,218 @@ from app.schemas.operations import (
     SyncPackageImportRead,
     SyncRunCreate,
     SyncRunRead,
+    StrategicImplicationCreate,
+    StrategicImplicationRead,
+    StrategicImplicationUpdate,
+    TopicTaskBatchUpdate,
+    TopicTaskBatchUpdateRead,
     TopicTaskCreate,
     TopicTaskRead,
     TopicTaskUpdate,
+    TrackedEntityCreate,
     TrackedEntityListItem,
+    TrackedEntityTimelineRead,
+    TrackedEntityUpdate,
 )
+from app.sync.apply import apply_sync_records
+from app.sync.records import sort_records_by_dependency
 
 router = APIRouter(prefix="/api", tags=["operations"])
 SUPER_ADMIN = Depends(require_super_admin)
 CURRENT_USER = Depends(get_current_user)
 DB_SESSION = Depends(get_db_session)
 EXPORTABLE_SYNC_POLICIES = {"public_to_intranet", "manual_only", "two_way_config"}
-SYNC_APPLY_OBJECT_TYPES = {"data_sources", "raw_items", "news_items"}
-SYNC_SECRET_KEY_PARTS = ("secret", "token", "password", "cookie", ".env")
+
+
+@router.get("/insights", response_model=list[InsightRead])
+def list_insights(
+    workspace_code: str = Query(...),
+    status_filter: str | None = Query(default=None, alias="status"),
+    query: str | None = Query(default=None, alias="q"),
+    limit: int = Query(default=50, ge=1, le=200),
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> list[InsightRead]:
+    assert_workspace_member(session, current_user, workspace_code, min_role="viewer")
+    statement = (
+        select(Insight)
+        .options(*_insight_query_options())
+        .where(Insight.workspace_code == workspace_code)
+        .order_by(Insight.updated_at.desc(), Insight.created_at.desc())
+        .limit(limit)
+    )
+    if status_filter:
+        statement = statement.where(Insight.status == status_filter)
+    if query:
+        pattern = f"%{query.strip()}%"
+        statement = statement.where(or_(Insight.title.ilike(pattern), Insight.summary.ilike(pattern)))
+    return [_insight_to_read(item) for item in session.scalars(statement).all()]
+
+
+@router.post("/insights", response_model=InsightRead)
+def create_insight(
+    payload: InsightCreate,
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> InsightRead:
+    assert_workspace_member(session, current_user, payload.workspace_code, min_role="member")
+    news_item = _load_news_item_for_insight(session, payload.news_item_id, payload.workspace_code)
+    raw_item_id = _resolve_insight_raw_item_id(news_item, payload.raw_item_id)
+    insight = Insight(
+        workspace_code=payload.workspace_code,
+        domain_code=payload.domain_code,
+        visibility_scope="workspace",
+        sync_policy="outbox",
+        news_item_id=news_item.id,
+        raw_item_id=raw_item_id,
+        title=payload.title.strip(),
+        summary=payload.summary,
+        insight_type=payload.insight_type,
+        status=payload.status,
+        source_report_type=payload.source_report_type,
+        source_report_id=payload.source_report_id,
+        source_report_item_id=payload.source_report_item_id,
+        confidence_score=payload.confidence_score,
+        metadata_json=payload.metadata_json,
+    )
+    session.add(insight)
+    session.flush()
+    write_audit(
+        session,
+        current_user,
+        "insight.create",
+        "insight",
+        insight.id,
+        {"workspace_code": insight.workspace_code, "news_item_id": insight.news_item_id, "status": insight.status},
+    )
+    session.commit()
+    return _insight_to_read(_load_insight(session, insight.id))
+
+
+@router.get("/insights/{insight_id}", response_model=InsightRead)
+def get_insight(
+    insight_id: str,
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> InsightRead:
+    insight = _load_insight(session, insight_id)
+    assert_workspace_member(session, current_user, insight.workspace_code, min_role="viewer")
+    return _insight_to_read(insight)
+
+
+@router.patch("/insights/{insight_id}", response_model=InsightRead)
+def update_insight(
+    insight_id: str,
+    payload: InsightUpdate,
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> InsightRead:
+    insight = _load_insight(session, insight_id)
+    assert_workspace_member(session, current_user, insight.workspace_code, min_role="member")
+    for field in ("title", "summary", "insight_type", "status", "confidence_score", "metadata_json"):
+        value = getattr(payload, field)
+        if value is not None:
+            setattr(insight, field, value.strip() if field == "title" and isinstance(value, str) else value)
+    write_audit(
+        session,
+        current_user,
+        "insight.update",
+        "insight",
+        insight.id,
+        {"status": insight.status, "insight_type": insight.insight_type},
+    )
+    session.commit()
+    return _insight_to_read(_load_insight(session, insight.id))
+
+
+@router.get("/strategic-implications", response_model=list[StrategicImplicationRead])
+def list_strategic_implications(
+    workspace_code: str = Query(...),
+    insight_id: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> list[StrategicImplicationRead]:
+    assert_workspace_member(session, current_user, workspace_code, min_role="viewer")
+    statement = (
+        select(StrategicImplication)
+        .options(*_strategic_implication_query_options())
+        .where(StrategicImplication.workspace_code == workspace_code)
+        .order_by(StrategicImplication.updated_at.desc(), StrategicImplication.created_at.desc())
+        .limit(limit)
+    )
+    if insight_id:
+        statement = statement.where(StrategicImplication.insight_id == insight_id)
+    return [_strategic_implication_to_read(item) for item in session.scalars(statement).all()]
+
+
+@router.post("/strategic-implications", response_model=StrategicImplicationRead)
+def create_strategic_implication(
+    payload: StrategicImplicationCreate,
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> StrategicImplicationRead:
+    insight = _load_insight(session, payload.insight_id)
+    assert_workspace_member(session, current_user, insight.workspace_code, min_role="member")
+    implication = StrategicImplication(
+        workspace_code=insight.workspace_code,
+        domain_code=insight.domain_code,
+        visibility_scope="workspace",
+        sync_policy="outbox",
+        insight_id=insight.id,
+        title=payload.title.strip(),
+        description=payload.description,
+        implication_type=payload.implication_type,
+        metadata_json=payload.metadata_json,
+    )
+    session.add(implication)
+    session.flush()
+    write_audit(
+        session,
+        current_user,
+        "strategic_implication.create",
+        "strategic_implication",
+        implication.id,
+        {"workspace_code": implication.workspace_code, "insight_id": implication.insight_id},
+    )
+    session.commit()
+    return _strategic_implication_to_read(_load_strategic_implication(session, implication.id))
+
+
+@router.get("/strategic-implications/{implication_id}", response_model=StrategicImplicationRead)
+def get_strategic_implication(
+    implication_id: str,
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> StrategicImplicationRead:
+    implication = _load_strategic_implication(session, implication_id)
+    assert_workspace_member(session, current_user, implication.workspace_code, min_role="viewer")
+    return _strategic_implication_to_read(implication)
+
+
+@router.patch("/strategic-implications/{implication_id}", response_model=StrategicImplicationRead)
+def update_strategic_implication(
+    implication_id: str,
+    payload: StrategicImplicationUpdate,
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> StrategicImplicationRead:
+    implication = _load_strategic_implication(session, implication_id)
+    assert_workspace_member(session, current_user, implication.workspace_code, min_role="member")
+    for field in ("title", "description", "implication_type", "metadata_json"):
+        value = getattr(payload, field)
+        if value is not None:
+            setattr(implication, field, value.strip() if field == "title" and isinstance(value, str) else value)
+    write_audit(
+        session,
+        current_user,
+        "strategic_implication.update",
+        "strategic_implication",
+        implication.id,
+        {"implication_type": implication.implication_type},
+    )
+    session.commit()
+    return _strategic_implication_to_read(_load_strategic_implication(session, implication.id))
 
 
 @router.get("/requirements", response_model=list[RequirementRead])
@@ -80,16 +303,13 @@ def list_requirements(
     workspace_code: str = Query(...),
     status_filter: str | None = Query(default=None, alias="status"),
     limit: int = Query(default=50, ge=1, le=200),
-    _: User = CURRENT_USER,
+    current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> list[RequirementRead]:
+    assert_workspace_member(session, current_user, workspace_code, min_role="viewer")
     statement = (
         select(Requirement)
-        .options(
-            selectinload(Requirement.owner),
-            selectinload(Requirement.source_links),
-            selectinload(Requirement.topic_tasks),
-        )
+        .options(*_requirement_query_options())
         .where(Requirement.workspace_code == workspace_code)
         .order_by(Requirement.created_at.desc())
         .limit(limit)
@@ -102,9 +322,16 @@ def list_requirements(
 @router.post("/requirements", response_model=RequirementRead)
 def create_requirement(
     payload: RequirementCreate,
-    current_user: User = SUPER_ADMIN,
+    current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> RequirementRead:
+    assert_workspace_member(session, current_user, payload.workspace_code, min_role="admin")
+    _validate_workspace_member_user(
+        session,
+        workspace_code=payload.workspace_code,
+        user_id=payload.owner_user_id,
+        detail="owner must be an active workspace member",
+    )
     requirement = Requirement(
         workspace_code=payload.workspace_code,
         domain_code=payload.domain_code,
@@ -120,13 +347,35 @@ def create_requirement(
     )
     session.add(requirement)
     session.flush()
+    if _requirement_create_has_source(payload):
+        session.add(
+            _build_requirement_source_link(
+                session,
+                requirement=requirement,
+                payload=RequirementSourceLinkCreate(
+                    insight_id=payload.source_insight_id,
+                    daily_report_item_id=payload.source_daily_report_item_id,
+                    weekly_report_item_id=payload.source_weekly_report_item_id,
+                    entity_milestone_id=payload.source_entity_milestone_id,
+                    historical_report_id=payload.source_historical_report_id,
+                    historical_feedback_item_id=payload.source_historical_feedback_item_id,
+                    news_item_id=payload.source_news_item_id,
+                    raw_item_id=payload.source_raw_item_id,
+                    note=payload.source_note,
+                ),
+            ),
+        )
     write_audit(
         session,
         current_user,
         "requirement.create",
         "requirement",
         requirement.id,
-        {"workspace_code": requirement.workspace_code, "title": requirement.title},
+        {
+            "workspace_code": requirement.workspace_code,
+            "title": requirement.title,
+            "source_link": _requirement_create_has_source(payload),
+        },
     )
     session.commit()
     return _requirement_to_read(_load_requirement(session, requirement.id))
@@ -136,14 +385,26 @@ def create_requirement(
 def update_requirement(
     requirement_id: str,
     payload: RequirementUpdate,
-    current_user: User = SUPER_ADMIN,
+    current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> RequirementRead:
     requirement = _load_requirement(session, requirement_id)
+    assert_workspace_member(session, current_user, requirement.workspace_code, min_role="admin")
+    previous_status = requirement.status
+    if payload.owner_user_id is not None:
+        _validate_workspace_member_user(
+            session,
+            workspace_code=requirement.workspace_code,
+            user_id=payload.owner_user_id,
+            detail="owner must be an active workspace member",
+        )
     for field in ("title", "description", "priority", "status", "due_at", "owner_user_id", "metadata_json"):
         value = getattr(payload, field)
         if value is not None:
-            setattr(requirement, field, value)
+            if field == "metadata_json":
+                requirement.metadata_json = {**(requirement.metadata_json or {}), **value}
+            else:
+                setattr(requirement, field, value)
     write_audit(
         session,
         current_user,
@@ -152,36 +413,180 @@ def update_requirement(
         requirement.id,
         {"status": requirement.status, "priority": requirement.priority},
     )
+    if requirement.status != previous_status:
+        record_requirement_status_changed_activity(
+            session,
+            actor=current_user,
+            requirement=requirement,
+            previous_status=previous_status,
+        )
+    _record_requirement_recommendation_feedback(session, current_user, requirement)
     session.commit()
     return _requirement_to_read(_load_requirement(session, requirement.id))
+
+
+@router.post("/requirements/{requirement_id}/source-links", response_model=RequirementRead)
+def create_requirement_source_link(
+    requirement_id: str,
+    payload: RequirementSourceLinkCreate,
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> RequirementRead:
+    requirement = _load_requirement(session, requirement_id)
+    assert_workspace_member(session, current_user, requirement.workspace_code, min_role="admin")
+    source_link = _build_requirement_source_link(session, requirement=requirement, payload=payload)
+    session.add(source_link)
+    session.flush()
+    write_audit(
+        session,
+        current_user,
+        "requirement.source_link.create",
+        "requirement",
+        requirement.id,
+        {
+            "source_link_id": source_link.id,
+            "daily_report_item_id": source_link.daily_report_item_id,
+            "weekly_report_item_id": source_link.weekly_report_item_id,
+            "news_item_id": source_link.news_item_id,
+            "raw_item_id": source_link.raw_item_id,
+        },
+    )
+    session.commit()
+    return _requirement_to_read(_load_requirement(session, requirement.id))
+
+
+@router.post("/daily-report-items/{item_id}/insights", response_model=ReportItemStrategyLoopRead)
+def create_daily_report_item_strategy_loop(
+    item_id: str,
+    payload: ReportItemStrategyLoopCreate,
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> ReportItemStrategyLoopRead:
+    item = _load_daily_report_item_source(session, item_id)
+    assert_workspace_member(session, current_user, item.workspace_code, min_role="admin")
+    return _create_strategy_loop_from_report_item(
+        session,
+        current_user=current_user,
+        payload=payload,
+        daily_item=item,
+        weekly_item=None,
+    )
+
+
+@router.post("/weekly-report-items/{item_id}/insights", response_model=ReportItemStrategyLoopRead)
+def create_weekly_report_item_strategy_loop(
+    item_id: str,
+    payload: ReportItemStrategyLoopCreate,
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> ReportItemStrategyLoopRead:
+    item = _load_weekly_report_item_source(session, item_id)
+    assert_workspace_member(session, current_user, item.workspace_code, min_role="admin")
+    return _create_strategy_loop_from_report_item(
+        session,
+        current_user=current_user,
+        payload=payload,
+        daily_item=item.daily_report_item,
+        weekly_item=item,
+    )
+
+
+@router.post("/daily-report-items/{item_id}/entity-milestones", response_model=EntityMilestoneDetailRead)
+def create_daily_report_item_entity_milestone(
+    item_id: str,
+    payload: ReportItemEntityMilestoneCreate,
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> EntityMilestoneDetailRead:
+    item = _load_daily_report_item_source(session, item_id)
+    assert_workspace_member(session, current_user, item.workspace_code, min_role="member")
+    return _create_entity_milestone_from_report_item(
+        session,
+        current_user=current_user,
+        payload=payload,
+        daily_item=item,
+        weekly_item=None,
+    )
+
+
+@router.post("/weekly-report-items/{item_id}/entity-milestones", response_model=EntityMilestoneDetailRead)
+def create_weekly_report_item_entity_milestone(
+    item_id: str,
+    payload: ReportItemEntityMilestoneCreate,
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> EntityMilestoneDetailRead:
+    item = _load_weekly_report_item_source(session, item_id)
+    assert_workspace_member(session, current_user, item.workspace_code, min_role="member")
+    return _create_entity_milestone_from_report_item(
+        session,
+        current_user=current_user,
+        payload=payload,
+        daily_item=item.daily_report_item,
+        weekly_item=item,
+    )
 
 
 @router.get("/topic-tasks", response_model=list[TopicTaskRead])
 def list_topic_tasks(
     workspace_code: str = Query(...),
     status_filter: str | None = Query(default=None, alias="status"),
+    assignee_user_id: str | None = Query(default=None),
+    # “我的任务”过滤：assignee=me（等价 assigned_to_me=true），也接受具体 user_id。
+    assignee: str | None = Query(default=None),
+    assigned_to_me: bool = Query(default=False),
+    due_filter: str | None = Query(default=None, alias="due", pattern="^(overdue|due_today)$"),
     limit: int = Query(default=50, ge=1, le=200),
-    _: User = CURRENT_USER,
+    current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> list[TopicTaskRead]:
+    assert_workspace_member(session, current_user, workspace_code, min_role="viewer")
+    now = utc_now()
     statement = (
         select(TopicTask)
-        .options(selectinload(TopicTask.assignee), selectinload(TopicTask.requirement))
+        .options(*_topic_task_query_options())
         .where(TopicTask.workspace_code == workspace_code)
         .order_by(TopicTask.created_at.desc())
-        .limit(limit)
     )
     if status_filter:
         statement = statement.where(TopicTask.status == status_filter)
+    if assignee:
+        assignee_user_id = current_user.id if assignee == "me" else assignee
+    if assigned_to_me:
+        statement = statement.where(TopicTask.assignee_user_id == current_user.id)
+    if assignee_user_id:
+        statement = statement.where(TopicTask.assignee_user_id == assignee_user_id)
+    if due_filter == "overdue":
+        statement = statement.where(
+            TopicTask.due_at.is_not(None),
+            TopicTask.due_at < now,
+            TopicTask.status.notin_(("done", "canceled")),
+        )
+    elif due_filter == "due_today":
+        day_start = datetime.combine(now.date(), time.min, tzinfo=timezone.utc)
+        day_end = datetime.combine(now.date(), time.max, tzinfo=timezone.utc)
+        statement = statement.where(
+            TopicTask.due_at.is_not(None),
+            TopicTask.due_at >= day_start,
+            TopicTask.due_at <= day_end,
+            TopicTask.status.notin_(("done", "canceled")),
+        )
+    statement = statement.limit(limit)
     return [_topic_task_to_read(item) for item in session.scalars(statement).all()]
 
 
 @router.post("/topic-tasks", response_model=TopicTaskRead)
 def create_topic_task(
     payload: TopicTaskCreate,
-    current_user: User = SUPER_ADMIN,
+    current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> TopicTaskRead:
+    assert_workspace_member(session, current_user, payload.workspace_code, min_role="admin")
+    _validate_topic_task_assignee(
+        session,
+        workspace_code=payload.workspace_code,
+        assignee_user_id=payload.assignee_user_id,
+    )
     task = TopicTask(
         workspace_code=payload.workspace_code,
         domain_code=payload.domain_code,
@@ -205,22 +610,102 @@ def create_topic_task(
         task.id,
         {"workspace_code": task.workspace_code, "title": task.title},
     )
+    if task.assignee_user_id:
+        record_topic_task_assigned_activity(session, actor=current_user, task=task)
     session.commit()
     return _topic_task_to_read(_load_topic_task(session, task.id))
+
+
+@router.get("/topic-tasks/{task_id}", response_model=TopicTaskRead)
+def get_topic_task(
+    task_id: str,
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> TopicTaskRead:
+    task = _load_topic_task(session, task_id)
+    assert_workspace_member(session, current_user, task.workspace_code, min_role="viewer")
+    return _topic_task_to_read(task)
+
+
+@router.post("/topic-tasks/batch", response_model=TopicTaskBatchUpdateRead)
+def batch_update_topic_tasks(
+    payload: TopicTaskBatchUpdate,
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> TopicTaskBatchUpdateRead:
+    if payload.status is None and payload.blocked_reason is None:
+        raise HTTPException(
+            status_code=422,
+            detail="status or blocked_reason is required",
+        )
+    blocked_reason = payload.blocked_reason.strip() if payload.blocked_reason is not None else None
+    if payload.status == "blocked" and not blocked_reason:
+        raise HTTPException(
+            status_code=422,
+            detail="blocked_reason is required when status is blocked",
+        )
+
+    task_ids = list(dict.fromkeys(payload.task_ids))
+    statement = (
+        select(TopicTask)
+        .options(*_topic_task_query_options())
+        .where(TopicTask.workspace_code == payload.workspace_code, TopicTask.id.in_(task_ids))
+    )
+    tasks = session.scalars(statement).all()
+    tasks_by_id = {task.id: task for task in tasks}
+    missing_ids = [task_id for task_id in task_ids if task_id not in tasks_by_id]
+    if missing_ids:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"missing_task_ids": missing_ids})
+
+    _ensure_topic_task_batch_update_permission(session, current_user, tasks)
+    for task in tasks:
+        if payload.status is not None:
+            task.status = payload.status
+        if blocked_reason is not None:
+            task.metadata_json = {**(task.metadata_json or {}), "blocked_reason": blocked_reason}
+
+    write_audit(
+        session,
+        current_user,
+        "topic_task.batch_update",
+        "topic_task",
+        payload.workspace_code,
+        {
+            "workspace_code": payload.workspace_code,
+            "task_ids": task_ids,
+            "status": payload.status,
+            "blocked_reason": blocked_reason,
+            "updated_count": len(tasks),
+        },
+    )
+    session.commit()
+    reloaded = _load_topic_tasks_by_ids(session, task_ids)
+    return TopicTaskBatchUpdateRead(updated_count=len(reloaded), tasks=[_topic_task_to_read(task) for task in reloaded])
 
 
 @router.patch("/topic-tasks/{task_id}", response_model=TopicTaskRead)
 def update_topic_task(
     task_id: str,
     payload: TopicTaskUpdate,
-    current_user: User = SUPER_ADMIN,
+    current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> TopicTaskRead:
     task = _load_topic_task(session, task_id)
+    _ensure_topic_task_update_permission(session, current_user, task, payload)
+    previous_assignee_user_id = task.assignee_user_id
+    if payload.assignee_user_id is not None:
+        _validate_topic_task_assignee(
+            session,
+            workspace_code=task.workspace_code,
+            assignee_user_id=payload.assignee_user_id,
+        )
     for field in ("requirement_id", "title", "description", "status", "due_at", "assignee_user_id", "metadata_json"):
         value = getattr(payload, field)
         if value is not None:
-            setattr(task, field, value)
+            if field == "metadata_json":
+                task.metadata_json = {**(task.metadata_json or {}), **value}
+            else:
+                setattr(task, field, value)
     write_audit(
         session,
         current_user,
@@ -229,6 +714,8 @@ def update_topic_task(
         task.id,
         {"status": task.status},
     )
+    if task.assignee_user_id and task.assignee_user_id != previous_assignee_user_id:
+        record_topic_task_assigned_activity(session, actor=current_user, task=task)
     session.commit()
     return _topic_task_to_read(_load_topic_task(session, task.id))
 
@@ -278,7 +765,7 @@ def export_sync_package(
 @router.get("/sync/packages/{package_id}/download")
 def download_sync_package(
     package_id: str,
-    _: User = CURRENT_USER,
+    _: User = SUPER_ADMIN,
     session: Session = DB_SESSION,
 ) -> StreamingResponse:
     run = _load_sync_run_by_package(session, package_id)
@@ -325,53 +812,20 @@ def import_sync_package(
     session.add(run)
     session.flush()
 
-    applied = 0
-    skipped = 0
-    failed = 0
-    conflicts = 0
-    errors: list[str] = []
-    for record in payload.records:
-        event_id = str(record.get("event_id") or "")
-        if not event_id:
-            failed += 1
-            errors.append("record without event_id")
-            continue
-        existing = session.scalar(select(SyncOutbox).where(SyncOutbox.event_id == event_id))
-        inbox_existing = session.scalar(select(SyncInbox).where(SyncInbox.event_id == event_id))
-        if inbox_existing is not None or existing is not None:
-            skipped += 1
-            continue
-
-        object_type = str(record.get("object_type") or "")
-        object_id = str(record.get("object_global_id") or record.get("object_id") or "")
-        record_payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
-        try:
-            apply_status, error_message = _apply_sync_record(session, run, record)
-        except ValueError as exc:
-            apply_status = "failed"
-            error_message = str(exc)
-
-        if apply_status == "applied":
-            applied += 1
-        elif apply_status == "conflict":
-            conflicts += 1
-            errors.append(error_message or f"conflict applying {event_id}")
-        elif apply_status == "skipped":
-            skipped += 1
-        else:
-            failed += 1
-            errors.append(error_message or f"failed applying {event_id}")
-
-        session.add(
-            SyncInbox(
-                event_id=event_id,
-                source_instance_id=str(payload.package_manifest.get("source_instance_id") or ""),
-                object_type=object_type,
-                object_id=object_id,
-                payload_hash=str(record.get("content_hash") or _hash_json(record_payload)),
-                status=apply_status,
-            ),
-        )
+    # 手工包不保证 records.jsonl 的对象顺序（可能出自第三方或人工拼包），
+    # 先按外键依赖序稳定排序，让一轮 apply 即净，而不是 failed 后等 retry 收敛。
+    # records_sha256 校验在上面用原始顺序完成，排序不影响包完整性校验。
+    outcome = apply_sync_records(
+        session,
+        run,
+        sort_records_by_dependency(payload.records),
+        source_instance_id=str(payload.package_manifest.get("source_instance_id") or ""),
+    )
+    applied = outcome.applied
+    skipped = outcome.skipped
+    failed = outcome.failed
+    conflicts = outcome.conflicts
+    errors = outcome.errors
 
     if failed:
         run.status = "completed_with_errors"
@@ -418,18 +872,26 @@ def import_sync_package(
 
 @router.get("/audit-logs", response_model=list[AuditLogRead])
 def list_audit_logs(
+    workspace_code: str | None = Query(default=None),
     action: str | None = Query(default=None),
     object_type: str | None = Query(default=None),
     limit: int = Query(default=80, ge=1, le=300),
-    _: User = CURRENT_USER,
+    current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> list[AuditLogRead]:
+    if workspace_code:
+        if not _is_super_admin(current_user):
+            assert_workspace_member(session, current_user, workspace_code, min_role="admin")
+    else:
+        require_super_admin(current_user)
     statement = (
         select(AuditLog)
         .options(selectinload(AuditLog.user))
         .order_by(AuditLog.created_at.desc())
         .limit(limit)
     )
+    if workspace_code:
+        statement = statement.where(AuditLog.workspace_code == workspace_code)
     if action:
         statement = statement.where(AuditLog.action == action)
     if object_type:
@@ -679,6 +1141,74 @@ def get_historical_report(
     return _historical_report_to_detail(report)
 
 
+@router.get("/report-archive/summary", response_model=ReportArchiveSummaryRead)
+def get_report_archive_summary(
+    workspace_code: str = Query(...),
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> ReportArchiveSummaryRead:
+    """统一归档统计：已发布日报/周报 + legacy 导入报告的总量、月份分布与平均采信率。"""
+
+    assert_workspace_member(session, current_user, workspace_code, min_role="viewer")
+    entries = _report_archive_entries(session, workspace_code=workspace_code)
+    published = [entry for entry in entries if entry.origin == "published"]
+    month_counts: dict[str, int] = {}
+    for entry in entries:
+        if entry.month:
+            month_counts[entry.month] = month_counts.get(entry.month, 0) + 1
+    total_items = sum(entry.item_count for entry in published)
+    total_adopted = sum(entry.adopted_count for entry in published)
+    rated = [entry.adoption_rate for entry in published if entry.item_count > 0]
+    published_ats = [entry.published_at for entry in published if entry.published_at]
+    return ReportArchiveSummaryRead(
+        workspace_code=workspace_code,
+        total=len(entries),
+        published_daily=sum(1 for entry in published if entry.report_type == "daily"),
+        published_weekly=sum(1 for entry in published if entry.report_type == "weekly"),
+        legacy_reports=sum(1 for entry in entries if entry.origin == "legacy"),
+        total_items=total_items,
+        total_adopted=total_adopted,
+        average_adoption_rate=round(sum(rated) / len(rated), 4) if rated else 0.0,
+        months=[
+            ReportArchiveMonthBucket(month=month, count=count)
+            for month, count in sorted(month_counts.items(), reverse=True)
+        ],
+        latest_published_at=max(published_ats) if published_ats else None,
+    )
+
+
+@router.get("/report-archive", response_model=list[ReportArchiveListItem])
+def list_report_archive(
+    workspace_code: str = Query(...),
+    month: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}$"),
+    report_type: str | None = Query(default=None, pattern="^(daily|weekly)$"),
+    origin: str | None = Query(default=None, pattern="^(published|legacy)$"),
+    q: str | None = Query(default=None),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=60, ge=1, le=300),
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> list[ReportArchiveListItem]:
+    """统一归档列表：回溯任意一天/一周发过什么、质量如何（条目数/采信率/头条/来源分布）。"""
+
+    assert_workspace_member(session, current_user, workspace_code, min_role="viewer")
+    entries = _report_archive_entries(session, workspace_code=workspace_code)
+    if month:
+        entries = [entry for entry in entries if entry.month == month]
+    if report_type:
+        entries = [entry for entry in entries if entry.report_type == report_type]
+    if origin:
+        entries = [entry for entry in entries if entry.origin == origin]
+    if q and q.strip():
+        needle = q.strip().lower()
+        entries = [
+            entry
+            for entry in entries
+            if needle in entry.title.lower() or needle in entry.content_excerpt.lower()
+        ]
+    return entries[offset: offset + limit]
+
+
 @router.get("/entity-timeline/summary", response_model=EntityTimelineSummaryRead)
 def get_entity_timeline_summary(
     workspace_code: str = Query(...),
@@ -765,6 +1295,178 @@ def list_tracked_entities(
     return [_tracked_entity_to_list_item(session, entity) for entity in entities]
 
 
+@router.post("/tracked-entities", response_model=TrackedEntityListItem)
+def create_tracked_entity(
+    payload: TrackedEntityCreate,
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> TrackedEntityListItem:
+    assert_workspace_member(session, current_user, payload.workspace_code, min_role="admin")
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="name is required")
+    existing = session.scalar(
+        select(TrackedEntity).where(
+            TrackedEntity.workspace_code == payload.workspace_code,
+            func.lower(TrackedEntity.name) == name.lower(),
+        ),
+    )
+    if existing is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Tracked entity already exists")
+    entity = TrackedEntity(
+        workspace_code=payload.workspace_code,
+        domain_code=payload.domain_code,
+        visibility_scope="workspace",
+        sync_policy="outbox",
+        legacy_system="current",
+        legacy_table="tracked_entities",
+        legacy_id=f"{payload.workspace_code}:{hashlib.sha1(name.lower().encode('utf-8')).hexdigest()[:16]}",
+        name=name,
+        entity_type=payload.entity_type.strip(),
+        rank=payload.rank.strip(),
+        aliases_json=_normalized_aliases(payload.aliases),
+        influence_score=payload.influence_score,
+        notes=payload.notes,
+        metadata_json={"created_from": "entity_milestones_page", "created_by_user_id": current_user.id},
+    )
+    session.add(entity)
+    session.flush()
+    write_audit(
+        session,
+        current_user,
+        "tracked_entity.create",
+        "tracked_entity",
+        entity.id,
+        {"workspace_code": entity.workspace_code, "name": entity.name, "entity_type": entity.entity_type},
+    )
+    session.commit()
+    return _tracked_entity_to_list_item(session, _load_tracked_entity(session, entity.id))
+
+
+@router.patch("/tracked-entities/{entity_id}", response_model=TrackedEntityListItem)
+def update_tracked_entity(
+    entity_id: str,
+    payload: TrackedEntityUpdate,
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> TrackedEntityListItem:
+    entity = _load_tracked_entity(session, entity_id)
+    assert_workspace_member(session, current_user, entity.workspace_code, min_role="admin")
+    if entity.legacy_system != "current":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Imported legacy entity is immutable")
+    if payload.name is not None:
+        name = payload.name.strip()
+        if not name:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="name is required")
+        duplicate = session.scalar(
+            select(TrackedEntity).where(
+                TrackedEntity.workspace_code == entity.workspace_code,
+                func.lower(TrackedEntity.name) == name.lower(),
+                TrackedEntity.id != entity.id,
+            ),
+        )
+        if duplicate is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Tracked entity already exists")
+        entity.name = name
+    if payload.entity_type is not None:
+        entity.entity_type = payload.entity_type.strip()
+    if payload.rank is not None:
+        entity.rank = payload.rank.strip()
+    if payload.aliases is not None:
+        entity.aliases_json = _normalized_aliases(payload.aliases)
+    if payload.notes is not None:
+        entity.notes = payload.notes
+    if payload.influence_score is not None:
+        entity.influence_score = payload.influence_score
+    write_audit(
+        session,
+        current_user,
+        "tracked_entity.update",
+        "tracked_entity",
+        entity.id,
+        {"workspace_code": entity.workspace_code, "name": entity.name},
+    )
+    session.commit()
+    return _tracked_entity_to_list_item(session, _load_tracked_entity(session, entity.id))
+
+
+@router.delete("/tracked-entities/{entity_id}")
+def delete_tracked_entity(
+    entity_id: str,
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> dict[str, str]:
+    entity = _load_tracked_entity(session, entity_id)
+    assert_workspace_member(session, current_user, entity.workspace_code, min_role="admin")
+    if entity.legacy_system != "current":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Imported legacy entity is immutable")
+    milestone_count = session.scalar(
+        select(func.count()).select_from(EntityMilestone).where(EntityMilestone.tracked_entity_id == entity.id),
+    ) or 0
+    if milestone_count:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tracked entity still has milestones; remove or keep them before deleting",
+        )
+    write_audit(
+        session,
+        current_user,
+        "tracked_entity.delete",
+        "tracked_entity",
+        entity.id,
+        {"workspace_code": entity.workspace_code, "name": entity.name},
+    )
+    session.delete(entity)
+    session.commit()
+    return {"status": "deleted", "id": entity_id}
+
+
+@router.get("/tracked-entities/{entity_id}/timeline", response_model=TrackedEntityTimelineRead)
+def get_tracked_entity_timeline(
+    entity_id: str,
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> TrackedEntityTimelineRead:
+    entity = _load_tracked_entity(session, entity_id)
+    assert_workspace_member(session, current_user, entity.workspace_code, min_role="viewer")
+    milestones = session.scalars(
+        select(EntityMilestone)
+        .options(selectinload(EntityMilestone.tracked_entity))
+        .where(EntityMilestone.tracked_entity_id == entity.id)
+        .order_by(
+            EntityMilestone.event_time.desc().nullslast(),
+            EntityMilestone.importance_score.desc(),
+            EntityMilestone.created_at.desc(),
+        ),
+    ).all()
+    groups: dict[str, list[EntityMilestone]] = {}
+    for milestone in milestones:
+        month = milestone.event_time.strftime("%Y-%m") if milestone.event_time else "未标注时间"
+        groups.setdefault(month, []).append(milestone)
+    candidate_total = 0
+    confirmed_total = 0
+    group_reads: list[EntityTimelineMonthGroupRead] = []
+    for month, month_milestones in groups.items():
+        candidate_count = sum(1 for item in month_milestones if _milestone_curation_status(item) == "candidate")
+        candidate_total += candidate_count
+        confirmed_total += sum(1 for item in month_milestones if _milestone_curation_status(item) == "confirmed")
+        group_reads.append(
+            EntityTimelineMonthGroupRead(
+                month=month,
+                milestone_count=len(month_milestones),
+                candidate_count=candidate_count,
+                milestones=[_entity_milestone_to_list_item(item) for item in month_milestones],
+            ),
+        )
+    return TrackedEntityTimelineRead(
+        entity=_tracked_entity_to_list_item(session, entity),
+        total_milestones=len(milestones),
+        candidate_count=candidate_total,
+        confirmed_count=confirmed_total,
+        groups=group_reads,
+    )
+
+
 @router.get("/entity-milestones", response_model=list[EntityMilestoneListItem])
 def list_entity_milestones(
     workspace_code: str = Query(...),
@@ -776,6 +1478,7 @@ def list_entity_milestones(
     start_date: date | None = Query(default=None),
     end_date: date | None = Query(default=None),
     q: str | None = Query(default=None),
+    curation_status: str | None = Query(default=None),
     has_unresolved_refs: bool | None = Query(default=None),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=80, ge=1, le=300),
@@ -794,6 +1497,8 @@ def list_entity_milestones(
         q=q,
     )
     milestones = session.scalars(statement).all()
+    if curation_status:
+        milestones = [item for item in milestones if _milestone_curation_status(item) == curation_status]
     if has_unresolved_refs is not None:
         milestones = [
             item
@@ -820,6 +1525,116 @@ def get_entity_milestone(
     return _entity_milestone_to_detail(milestone)
 
 
+@router.patch("/entity-milestones/{milestone_id}", response_model=EntityMilestoneDetailRead)
+def update_entity_milestone(
+    milestone_id: str,
+    payload: EntityMilestoneUpdate,
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> EntityMilestoneDetailRead:
+    milestone = _load_entity_milestone_source(session, milestone_id)
+    assert_workspace_member(session, current_user, milestone.workspace_code, min_role="admin")
+    if milestone.legacy_system != "current":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Imported legacy milestone is immutable")
+    _apply_entity_milestone_update(milestone, payload, current_user)
+    write_audit(
+        session,
+        current_user,
+        "entity_milestone.update",
+        "entity_milestone",
+        milestone.id,
+        {
+            "curation_status": _milestone_curation_status(milestone),
+            "selected_for_timeline": milestone.selected_for_timeline,
+            "fields": sorted(_schema_fields_set(payload)),
+        },
+    )
+    session.commit()
+    loaded = _load_entity_milestone_source(session, milestone.id)
+    return _entity_milestone_to_detail(loaded)
+
+
+@router.post("/entity-milestones", response_model=EntityMilestoneDetailRead)
+def create_entity_milestone(
+    payload: EntityMilestoneManualCreate,
+    current_user: User = CURRENT_USER,
+    session: Session = DB_SESSION,
+) -> EntityMilestoneDetailRead:
+    """人工补录里程碑：admin 为已跟踪实体补一条已确认的时间线事件。"""
+
+    entity = _load_tracked_entity(session, payload.tracked_entity_id)
+    assert_workspace_member(session, current_user, entity.workspace_code, min_role="admin")
+    title = payload.event_title.strip()
+    if not title:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="event_title is required")
+    news_item = None
+    if payload.news_item_id:
+        news_item = session.get(NewsItem, payload.news_item_id)
+        if news_item is None or news_item.workspace_code != entity.workspace_code:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="News item not found in workspace")
+    brief = payload.event_brief.strip() or title
+    current_refs: dict[str, Any] = {}
+    if news_item is not None:
+        current_refs = {
+            "news_item_id": news_item.id,
+            "raw_item_id": news_item.raw_item_id,
+            "data_source_id": news_item.data_source_id,
+        }
+    milestone = EntityMilestone(
+        workspace_code=entity.workspace_code,
+        domain_code=entity.domain_code,
+        visibility_scope="workspace",
+        sync_policy="outbox",
+        legacy_system="current",
+        legacy_table="manual_entity_milestones",
+        legacy_id=f"manual:{uuid4().hex}",
+        tracked_entity_id=entity.id,
+        legacy_entity_id=entity.legacy_id,
+        raw_item_id=news_item.raw_item_id if news_item is not None else None,
+        event_time=payload.event_time or utc_now(),
+        event_type=payload.event_type.strip() or "manual",
+        title=title,
+        event_content=brief,
+        impact=payload.impact_brief.strip(),
+        event_brief=brief,
+        impact_brief=payload.impact_brief.strip(),
+        timeline_brief=brief,
+        source_url=payload.source_url or (news_item.source_url if news_item is not None else None),
+        source_name=payload.source_name.strip() or (news_item.source_name if news_item is not None else ""),
+        board=payload.board.strip(),
+        selected_for_timeline=True,
+        confidence_score=payload.confidence_score,
+        importance_score=payload.importance_score,
+        importance_level=payload.importance_level,
+        event_dedupe_key="",
+        metadata_json={
+            **(payload.metadata_json or {}),
+            "curation_status": "confirmed",
+            "created_from": "manual_timeline_entry",
+            "curation_note": payload.note.strip(),
+            "created_by_user_id": current_user.id,
+            "updated_by_user_id": current_user.id,
+            "current_refs": current_refs,
+        },
+    )
+    session.add(milestone)
+    session.flush()
+    write_audit(
+        session,
+        current_user,
+        "entity_milestone.manual_create",
+        "entity_milestone",
+        milestone.id,
+        {
+            "workspace_code": milestone.workspace_code,
+            "tracked_entity_id": entity.id,
+            "news_item_id": news_item.id if news_item is not None else None,
+        },
+    )
+    session.commit()
+    return _entity_milestone_to_detail(_load_entity_milestone_source(session, milestone.id))
+
+
 def _create_sync_export_package(
     session: Session,
     *,
@@ -838,7 +1653,14 @@ def _create_sync_export_package(
         .limit(payload.limit)
     )
     outbox_items = list(session.scalars(statement).all())
-    records = [_sync_outbox_to_record(item) for item in outbox_items]
+    records: list[dict[str, object]] = []
+    secret_blocked_event_ids: list[str] = []
+    for item in outbox_items:
+        if contains_secret_like_key(item.payload_json or {}):
+            item.status = "failed"
+            secret_blocked_event_ids.append(item.event_id)
+            continue
+        records.append(_sync_outbox_to_record(item))
     package_manifest = {
         "format_version": "sync_package_v1",
         "package_id": f"sync_{now.strftime('%Y%m%d%H%M%S%f')}",
@@ -852,12 +1674,15 @@ def _create_sync_export_package(
             "excluded_visibility_scope": "restricted",
             "allowed_sync_policies": sorted(EXPORTABLE_SYNC_POLICIES),
             "secrets_policy": "payloads must reference credential_ref and must not include tokens",
+            "secret_blocked_count": len(secret_blocked_event_ids),
         },
     }
     pending_total = session.scalar(select(func.count()).select_from(SyncOutbox).where(SyncOutbox.status == "pending")) or 0
     counts_json = {
         "pending_outbox": int(pending_total),
         "exported": len(records),
+        "secret_blocked": len(secret_blocked_event_ids),
+        "secret_blocked_event_ids": secret_blocked_event_ids,
         "conflicts": 0,
         "package_manifest": package_manifest,
         "package_records": records,
@@ -874,6 +1699,8 @@ def _create_sync_export_package(
     )
     session.add(run)
     for item in outbox_items:
+        if item.event_id in secret_blocked_event_ids:
+            continue
         item.status = "exported"
     session.flush()
     write_audit(
@@ -882,7 +1709,12 @@ def _create_sync_export_package(
         "sync_package.export",
         "sync_run",
         run.id,
-        {"package_id": run.package_id, "direction": run.direction, "exported": len(records)},
+        {
+            "package_id": run.package_id,
+            "direction": run.direction,
+            "exported": len(records),
+            "secret_blocked": len(secret_blocked_event_ids),
+        },
     )
     session.commit()
     session.refresh(run)
@@ -912,377 +1744,6 @@ def _sync_outbox_to_record(item: SyncOutbox) -> dict[str, object]:
     }
 
 
-def _apply_sync_record(session: Session, run: SyncRun, record: dict[str, Any]) -> tuple[str, str | None]:
-    object_type = str(record.get("object_type") or "")
-    operation = str(record.get("operation") or "upsert")
-    if object_type not in SYNC_APPLY_OBJECT_TYPES:
-        return "failed", f"unsupported object_type: {object_type}"
-    if operation not in {"upsert", "create", "update"}:
-        return "failed", f"unsupported operation for {object_type}: {operation}"
-
-    payload = record.get("payload")
-    if not isinstance(payload, dict):
-        return "failed", f"{object_type} payload must be an object"
-    if _contains_secret_key(payload):
-        return "failed", f"{object_type} payload contains secret-like fields"
-    if str(record.get("visibility_scope") or payload.get("visibility_scope") or "") == "restricted":
-        return "skipped", f"{object_type} has restricted visibility"
-
-    if object_type == "data_sources":
-        return _apply_data_source_record(session, run, record, payload)
-    if object_type == "raw_items":
-        return _apply_raw_item_record(session, run, record, payload)
-    if object_type == "news_items":
-        return _apply_news_item_record(session, run, record, payload)
-    return "failed", f"unsupported object_type: {object_type}"
-
-
-def _apply_data_source_record(
-    session: Session,
-    run: SyncRun,
-    record: dict[str, Any],
-    payload: dict[str, Any],
-) -> tuple[str, str | None]:
-    global_id = _record_global_id(record, payload)
-    incoming_revision = _record_revision(record, payload)
-    incoming_hash = _record_content_hash(record, payload)
-    source = session.scalar(select(DataSource).where(DataSource.global_id == global_id))
-    if source is not None:
-        conflict = _maybe_record_sync_conflict(
-            session,
-            run,
-            object_type="data_sources",
-            object_id=global_id,
-            local_revision=source.revision,
-            incoming_revision=incoming_revision,
-            local_hash=source.content_hash,
-            incoming_hash=incoming_hash,
-            local_json=_data_source_snapshot(source),
-            incoming_json=payload,
-        )
-        if conflict:
-            return "conflict", conflict
-    else:
-        source = DataSource(
-            global_id=global_id,
-            origin_instance_id=str(payload.get("origin_instance_id") or "remote"),
-            source_type=str(payload.get("source_type") or "rss"),
-            name=str(payload.get("name") or payload.get("source_name") or global_id),
-        )
-        session.add(source)
-
-    source.workspace_code = str(payload.get("workspace_code") or record.get("workspace_code") or "shared")
-    source.domain_code = str(payload.get("domain_code") or record.get("domain_code") or source.domain_code or "ai")
-    source.visibility_scope = str(payload.get("visibility_scope") or record.get("visibility_scope") or "public")
-    source.sync_policy = str(payload.get("sync_policy") or record.get("sync_policy") or "public_to_intranet")
-    source.source_type = str(payload.get("source_type") or source.source_type)
-    source.name = str(payload.get("name") or source.name)
-    source.url = _optional_str(payload.get("url"))
-    source.enabled = bool(payload.get("enabled", source.enabled))
-    source.default_focus_id = _int_value(payload.get("default_focus_id"), source.default_focus_id)
-    source.backfill_days = _int_value(payload.get("backfill_days"), source.backfill_days)
-    source.credential_ref = _optional_str(payload.get("credential_ref"))
-    source.fetch_config = _dict_value(payload.get("fetch_config"))
-    source.paper_config = _dict_value(payload.get("paper_config"))
-    source.metadata_json = _dict_value(payload.get("metadata_json") or payload.get("metadata"))
-    source.last_fetch_at = _datetime_value(payload.get("last_fetch_at"))
-    source.last_success_at = _datetime_value(payload.get("last_success_at"))
-    source.last_error = str(payload.get("last_error") or "")
-    source.source_score = _float_value(payload.get("source_score"), source.source_score)
-    source.revision = incoming_revision
-    source.content_hash = incoming_hash
-    return "applied", None
-
-
-def _apply_raw_item_record(
-    session: Session,
-    run: SyncRun,
-    record: dict[str, Any],
-    payload: dict[str, Any],
-) -> tuple[str, str | None]:
-    global_id = _record_global_id(record, payload)
-    incoming_revision = _record_revision(record, payload)
-    incoming_hash = _record_content_hash(record, payload)
-    raw_item = session.scalar(select(RawItem).where(RawItem.global_id == global_id))
-    data_source = _resolve_data_source(session, payload)
-    if data_source is None:
-        return "failed", "raw_items payload cannot resolve data source"
-
-    if raw_item is not None:
-        conflict = _maybe_record_sync_conflict(
-            session,
-            run,
-            object_type="raw_items",
-            object_id=global_id,
-            local_revision=raw_item.revision,
-            incoming_revision=incoming_revision,
-            local_hash=raw_item.content_hash,
-            incoming_hash=incoming_hash,
-            local_json=_raw_item_snapshot(raw_item),
-            incoming_json=payload,
-        )
-        if conflict:
-            return "conflict", conflict
-    else:
-        raw_item = RawItem(
-            global_id=global_id,
-            origin_instance_id=str(payload.get("origin_instance_id") or "remote"),
-            data_source=data_source,
-            source_type=str(payload.get("source_type") or data_source.source_type),
-            source_name=str(payload.get("source_name") or data_source.name),
-            entry_key=str(payload.get("entry_key") or global_id)[:255],
-            fetched_at=_datetime_value(payload.get("fetched_at")) or utc_now(),
-        )
-        session.add(raw_item)
-
-    raw_item.data_source = data_source
-    raw_item.workspace_code = str(payload.get("workspace_code") or record.get("workspace_code") or "planning_intel")
-    raw_item.domain_code = str(payload.get("domain_code") or record.get("domain_code") or data_source.domain_code)
-    raw_item.visibility_scope = str(payload.get("visibility_scope") or record.get("visibility_scope") or "public")
-    raw_item.sync_policy = str(payload.get("sync_policy") or record.get("sync_policy") or "public_to_intranet")
-    raw_item.source_type = str(payload.get("source_type") or data_source.source_type)
-    raw_item.source_name = str(payload.get("source_name") or data_source.name)
-    raw_item.entry_key = str(payload.get("entry_key") or raw_item.entry_key)[:255]
-    raw_item.source_title = str(payload.get("source_title") or "")
-    raw_item.source_url = _optional_str(payload.get("source_url"))
-    raw_item.raw_content = str(payload.get("raw_content") or "")
-    raw_item.fetched_at = _datetime_value(payload.get("fetched_at")) or raw_item.fetched_at or utc_now()
-    raw_item.published_at = _datetime_value(payload.get("published_at"))
-    raw_item.raw_payload_json = _dict_value(payload.get("raw_payload_json"))
-    raw_item.revision = incoming_revision
-    raw_item.content_hash = incoming_hash
-    return "applied", None
-
-
-def _apply_news_item_record(
-    session: Session,
-    run: SyncRun,
-    record: dict[str, Any],
-    payload: dict[str, Any],
-) -> tuple[str, str | None]:
-    global_id = _record_global_id(record, payload)
-    incoming_revision = _record_revision(record, payload)
-    incoming_hash = _record_content_hash(record, payload)
-    news_item = session.scalar(select(NewsItem).where(NewsItem.global_id == global_id))
-    raw_item = _resolve_raw_item(session, payload)
-    data_source = _resolve_data_source(session, payload) or (raw_item.data_source if raw_item else None)
-    if raw_item is None or data_source is None:
-        return "failed", "news_items payload cannot resolve raw item and data source"
-
-    if news_item is not None:
-        conflict = _maybe_record_sync_conflict(
-            session,
-            run,
-            object_type="news_items",
-            object_id=global_id,
-            local_revision=news_item.revision,
-            incoming_revision=incoming_revision,
-            local_hash=news_item.content_hash,
-            incoming_hash=incoming_hash,
-            local_json=_news_item_snapshot(news_item),
-            incoming_json=payload,
-        )
-        if conflict:
-            return "conflict", conflict
-    else:
-        news_item = NewsItem(
-            global_id=global_id,
-            origin_instance_id=str(payload.get("origin_instance_id") or "remote"),
-            raw_item=raw_item,
-            data_source=data_source,
-            source_type=str(payload.get("source_type") or raw_item.source_type),
-            source_name=str(payload.get("source_name") or raw_item.source_name),
-            source_title=str(payload.get("source_title") or raw_item.source_title),
-            dedupe_key=str(payload.get("dedupe_key") or f"sync:{global_id}")[:512],
-        )
-        session.add(news_item)
-
-    news_item.raw_item = raw_item
-    news_item.data_source = data_source
-    news_item.workspace_code = str(payload.get("workspace_code") or record.get("workspace_code") or raw_item.workspace_code)
-    news_item.domain_code = str(payload.get("domain_code") or record.get("domain_code") or raw_item.domain_code)
-    news_item.visibility_scope = str(payload.get("visibility_scope") or record.get("visibility_scope") or raw_item.visibility_scope)
-    news_item.sync_policy = str(payload.get("sync_policy") or record.get("sync_policy") or raw_item.sync_policy)
-    news_item.source_type = str(payload.get("source_type") or raw_item.source_type)
-    news_item.source_name = str(payload.get("source_name") or raw_item.source_name)
-    news_item.source_url = _optional_str(payload.get("source_url") or raw_item.source_url)
-    news_item.canonical_url = _optional_str(payload.get("canonical_url"))
-    news_item.source_title = str(payload.get("source_title") or raw_item.source_title)
-    news_item.normalized_title = str(payload.get("normalized_title") or news_item.source_title)
-    news_item.summary = str(payload.get("summary") or "")
-    news_item.content = str(payload.get("content") or raw_item.raw_content or news_item.summary or news_item.source_title)
-    news_item.author = str(payload.get("author") or "")
-    news_item.published_at = _datetime_value(payload.get("published_at")) or raw_item.published_at
-    news_item.focus_id = _int_value(payload.get("focus_id"), news_item.focus_id)
-    news_item.dedupe_key = str(payload.get("dedupe_key") or news_item.dedupe_key)[:512]
-    news_item.active = bool(payload.get("active", news_item.active))
-    news_item.normalization_status = str(payload.get("normalization_status") or "normalized")
-    news_item.normalization_notes = str(payload.get("normalization_notes") or "")
-    news_item.revision = incoming_revision
-    news_item.content_hash = incoming_hash
-    return "applied", None
-
-
-def _maybe_record_sync_conflict(
-    session: Session,
-    run: SyncRun,
-    *,
-    object_type: str,
-    object_id: str,
-    local_revision: int,
-    incoming_revision: int,
-    local_hash: str,
-    incoming_hash: str,
-    local_json: dict[str, Any],
-    incoming_json: dict[str, Any],
-) -> str | None:
-    if local_revision > incoming_revision:
-        reason = "incoming revision is older than local revision"
-    elif local_revision == incoming_revision and local_hash and incoming_hash and local_hash != incoming_hash:
-        reason = "same revision has different content hash"
-    else:
-        return None
-    session.add(
-        SyncConflict(
-            sync_run=run,
-            object_type=object_type,
-            object_id=object_id,
-            local_revision=local_revision,
-            incoming_revision=incoming_revision,
-            field_name="record",
-            local_value_json=local_json,
-            incoming_value_json=incoming_json,
-            status="open",
-            resolution_json={"reason": reason},
-        ),
-    )
-    return f"{object_type}:{object_id} conflict: {reason}"
-
-
-def _resolve_data_source(session: Session, payload: dict[str, Any]) -> DataSource | None:
-    data_source_global_id = _optional_str(payload.get("data_source_global_id") or payload.get("data_source_id"))
-    if data_source_global_id:
-        source = session.scalar(select(DataSource).where(DataSource.global_id == data_source_global_id))
-        if source is not None:
-            return source
-        source = session.get(DataSource, data_source_global_id)
-        if source is not None:
-            return source
-    url = _optional_str(payload.get("data_source_url") or payload.get("url"))
-    if url:
-        return session.scalar(select(DataSource).where(DataSource.url == url))
-    return None
-
-
-def _resolve_raw_item(session: Session, payload: dict[str, Any]) -> RawItem | None:
-    raw_global_id = _optional_str(payload.get("raw_item_global_id") or payload.get("raw_item_id"))
-    if raw_global_id:
-        raw_item = session.scalar(select(RawItem).where(RawItem.global_id == raw_global_id))
-        if raw_item is not None:
-            return raw_item
-        raw_item = session.get(RawItem, raw_global_id)
-        if raw_item is not None:
-            return raw_item
-    return None
-
-
-def _record_global_id(record: dict[str, Any], payload: dict[str, Any]) -> str:
-    value = _optional_str(record.get("object_global_id") or payload.get("global_id") or record.get("object_id"))
-    if not value:
-        raise ValueError("sync record is missing object_global_id")
-    return value
-
-
-def _record_revision(record: dict[str, Any], payload: dict[str, Any]) -> int:
-    return max(1, _int_value(record.get("revision") or payload.get("revision"), 1))
-
-
-def _record_content_hash(record: dict[str, Any], payload: dict[str, Any]) -> str:
-    return str(record.get("content_hash") or payload.get("content_hash") or _hash_json(payload))
-
-
-def _contains_secret_key(value: Any) -> bool:
-    if isinstance(value, dict):
-        for key, nested in value.items():
-            key_lower = str(key).lower()
-            if any(part in key_lower for part in SYNC_SECRET_KEY_PARTS):
-                return True
-            if _contains_secret_key(nested):
-                return True
-    elif isinstance(value, list):
-        return any(_contains_secret_key(item) for item in value)
-    return False
-
-
-def _optional_str(value: Any) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
-
-
-def _int_value(value: Any, default: int) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _float_value(value: Any, default: float) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _dict_value(value: Any) -> dict[str, Any]:
-    return value if isinstance(value, dict) else {}
-
-
-def _datetime_value(value: Any) -> datetime | None:
-    if isinstance(value, datetime):
-        return value
-    if isinstance(value, str) and value.strip():
-        try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            return None
-    return None
-
-
-def _data_source_snapshot(source: DataSource) -> dict[str, Any]:
-    return {
-        "global_id": source.global_id,
-        "revision": source.revision,
-        "content_hash": source.content_hash,
-        "name": source.name,
-        "url": source.url,
-        "source_type": source.source_type,
-    }
-
-
-def _raw_item_snapshot(raw_item: RawItem) -> dict[str, Any]:
-    return {
-        "global_id": raw_item.global_id,
-        "revision": raw_item.revision,
-        "content_hash": raw_item.content_hash,
-        "entry_key": raw_item.entry_key,
-        "source_title": raw_item.source_title,
-        "source_url": raw_item.source_url,
-    }
-
-
-def _news_item_snapshot(news_item: NewsItem) -> dict[str, Any]:
-    return {
-        "global_id": news_item.global_id,
-        "revision": news_item.revision,
-        "content_hash": news_item.content_hash,
-        "dedupe_key": news_item.dedupe_key,
-        "source_title": news_item.source_title,
-        "source_url": news_item.source_url,
-    }
-
-
 def _hash_json(value: object) -> str:
     data = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(data).hexdigest()
@@ -1298,11 +1759,7 @@ def _load_sync_run_by_package(session: Session, package_id: str) -> SyncRun:
 def _load_requirement(session: Session, requirement_id: str) -> Requirement:
     requirement = session.scalar(
         select(Requirement)
-        .options(
-            selectinload(Requirement.owner),
-            selectinload(Requirement.source_links),
-            selectinload(Requirement.topic_tasks),
-        )
+        .options(*_requirement_query_options())
         .where(Requirement.id == requirement_id),
     )
     if requirement is None:
@@ -1310,15 +1767,1189 @@ def _load_requirement(session: Session, requirement_id: str) -> Requirement:
     return requirement
 
 
+def _load_insight(session: Session, insight_id: str) -> Insight:
+    insight = session.scalar(
+        select(Insight)
+        .options(*_insight_query_options())
+        .where(Insight.id == insight_id),
+    )
+    if insight is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Insight not found")
+    return insight
+
+
+def _insight_query_options() -> list[Any]:
+    return [
+        selectinload(Insight.implications),
+        selectinload(Insight.news_item).selectinload(NewsItem.data_source),
+        selectinload(Insight.news_item).selectinload(NewsItem.raw_item).selectinload(RawItem.data_source),
+        selectinload(Insight.raw_item).selectinload(RawItem.data_source),
+    ]
+
+
+def _load_strategic_implication(session: Session, implication_id: str) -> StrategicImplication:
+    implication = session.scalar(
+        select(StrategicImplication)
+        .options(*_strategic_implication_query_options())
+        .where(StrategicImplication.id == implication_id),
+    )
+    if implication is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Strategic implication not found")
+    return implication
+
+
+def _strategic_implication_query_options() -> list[Any]:
+    return [selectinload(StrategicImplication.insight)]
+
+
+def _requirement_query_options() -> list[Any]:
+    return [
+        selectinload(Requirement.owner),
+        selectinload(Requirement.topic_tasks),
+        selectinload(Requirement.source_links)
+        .selectinload(RequirementSourceLink.insight)
+        .selectinload(Insight.news_item)
+        .selectinload(NewsItem.raw_item)
+        .selectinload(RawItem.data_source),
+        selectinload(Requirement.source_links)
+        .selectinload(RequirementSourceLink.news_item)
+        .selectinload(NewsItem.data_source),
+        selectinload(Requirement.source_links)
+        .selectinload(RequirementSourceLink.news_item)
+        .selectinload(NewsItem.raw_item)
+        .selectinload(RawItem.data_source),
+        selectinload(Requirement.source_links)
+        .selectinload(RequirementSourceLink.raw_item)
+        .selectinload(RawItem.data_source),
+        selectinload(Requirement.source_links)
+        .selectinload(RequirementSourceLink.daily_report_item)
+        .selectinload(DailyReportItem.generated_news)
+        .selectinload(GeneratedNews.news_item)
+        .selectinload(NewsItem.raw_item)
+        .selectinload(RawItem.data_source),
+        selectinload(Requirement.source_links)
+        .selectinload(RequirementSourceLink.weekly_report_item)
+        .selectinload(WeeklyReportItem.generated_news)
+        .selectinload(GeneratedNews.news_item)
+        .selectinload(NewsItem.raw_item)
+        .selectinload(RawItem.data_source),
+        selectinload(Requirement.source_links)
+        .selectinload(RequirementSourceLink.weekly_report_item)
+        .selectinload(WeeklyReportItem.daily_report_item)
+        .selectinload(DailyReportItem.generated_news)
+        .selectinload(GeneratedNews.news_item)
+        .selectinload(NewsItem.raw_item)
+        .selectinload(RawItem.data_source),
+        selectinload(Requirement.source_links)
+        .selectinload(RequirementSourceLink.entity_milestone)
+        .selectinload(EntityMilestone.tracked_entity),
+        selectinload(Requirement.source_links)
+        .selectinload(RequirementSourceLink.entity_milestone)
+        .selectinload(EntityMilestone.raw_item)
+        .selectinload(RawItem.data_source),
+        selectinload(Requirement.source_links).selectinload(RequirementSourceLink.historical_report),
+        selectinload(Requirement.source_links)
+        .selectinload(RequirementSourceLink.historical_feedback_item)
+        .selectinload(HistoricalFeedbackItem.raw_item)
+        .selectinload(RawItem.data_source),
+    ]
+
+
 def _load_topic_task(session: Session, task_id: str) -> TopicTask:
     task = session.scalar(
         select(TopicTask)
-        .options(selectinload(TopicTask.assignee), selectinload(TopicTask.requirement))
+        .options(*_topic_task_query_options())
         .where(TopicTask.id == task_id),
     )
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Topic task not found")
     return task
+
+
+def _load_topic_tasks_by_ids(session: Session, task_ids: list[str]) -> list[TopicTask]:
+    if not task_ids:
+        return []
+    tasks = session.scalars(
+        select(TopicTask)
+        .options(*_topic_task_query_options())
+        .where(TopicTask.id.in_(task_ids)),
+    ).all()
+    tasks_by_id = {task.id: task for task in tasks}
+    return [tasks_by_id[task_id] for task_id in task_ids if task_id in tasks_by_id]
+
+
+def _topic_task_query_options() -> list[Any]:
+    return [
+        selectinload(TopicTask.assignee),
+        selectinload(TopicTask.requirement),
+        selectinload(TopicTask.requirement)
+        .selectinload(Requirement.source_links)
+        .selectinload(RequirementSourceLink.insight)
+        .selectinload(Insight.news_item)
+        .selectinload(NewsItem.raw_item)
+        .selectinload(RawItem.data_source),
+        selectinload(TopicTask.requirement)
+        .selectinload(Requirement.source_links)
+        .selectinload(RequirementSourceLink.news_item)
+        .selectinload(NewsItem.data_source),
+        selectinload(TopicTask.requirement)
+        .selectinload(Requirement.source_links)
+        .selectinload(RequirementSourceLink.news_item)
+        .selectinload(NewsItem.raw_item)
+        .selectinload(RawItem.data_source),
+        selectinload(TopicTask.requirement)
+        .selectinload(Requirement.source_links)
+        .selectinload(RequirementSourceLink.raw_item)
+        .selectinload(RawItem.data_source),
+        selectinload(TopicTask.requirement)
+        .selectinload(Requirement.source_links)
+        .selectinload(RequirementSourceLink.daily_report_item)
+        .selectinload(DailyReportItem.generated_news)
+        .selectinload(GeneratedNews.news_item)
+        .selectinload(NewsItem.raw_item)
+        .selectinload(RawItem.data_source),
+        selectinload(TopicTask.requirement)
+        .selectinload(Requirement.source_links)
+        .selectinload(RequirementSourceLink.weekly_report_item)
+        .selectinload(WeeklyReportItem.generated_news)
+        .selectinload(GeneratedNews.news_item)
+        .selectinload(NewsItem.raw_item)
+        .selectinload(RawItem.data_source),
+        selectinload(TopicTask.requirement)
+        .selectinload(Requirement.source_links)
+        .selectinload(RequirementSourceLink.weekly_report_item)
+        .selectinload(WeeklyReportItem.daily_report_item)
+        .selectinload(DailyReportItem.generated_news)
+        .selectinload(GeneratedNews.news_item)
+        .selectinload(NewsItem.raw_item)
+        .selectinload(RawItem.data_source),
+        selectinload(TopicTask.requirement)
+        .selectinload(Requirement.source_links)
+        .selectinload(RequirementSourceLink.entity_milestone)
+        .selectinload(EntityMilestone.tracked_entity),
+        selectinload(TopicTask.requirement)
+        .selectinload(Requirement.source_links)
+        .selectinload(RequirementSourceLink.entity_milestone)
+        .selectinload(EntityMilestone.raw_item)
+        .selectinload(RawItem.data_source),
+        selectinload(TopicTask.requirement)
+        .selectinload(Requirement.source_links)
+        .selectinload(RequirementSourceLink.historical_report),
+        selectinload(TopicTask.requirement)
+        .selectinload(Requirement.source_links)
+        .selectinload(RequirementSourceLink.historical_feedback_item)
+        .selectinload(HistoricalFeedbackItem.raw_item)
+        .selectinload(RawItem.data_source),
+    ]
+
+
+def _validate_topic_task_assignee(session: Session, *, workspace_code: str, assignee_user_id: str | None) -> None:
+    _validate_workspace_member_user(
+        session,
+        workspace_code=workspace_code,
+        user_id=assignee_user_id,
+        detail="assignee must be an active workspace member",
+    )
+
+
+def _validate_workspace_member_user(
+    session: Session,
+    *,
+    workspace_code: str,
+    user_id: str | None,
+    detail: str,
+) -> None:
+    if not user_id:
+        return
+    membership = session.scalar(
+        select(WorkspaceMembership)
+        .join(Workspace, Workspace.id == WorkspaceMembership.workspace_id)
+        .join(User, User.id == WorkspaceMembership.user_id)
+        .where(
+            Workspace.code == workspace_code,
+            Workspace.enabled.is_(True),
+            WorkspaceMembership.user_id == user_id,
+            WorkspaceMembership.enabled.is_(True),
+            User.is_active.is_(True),
+            User.status == "active",
+        ),
+    )
+    if membership is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=detail,
+        )
+
+
+def _ensure_topic_task_update_permission(
+    session: Session,
+    user: User,
+    task: TopicTask,
+    payload: TopicTaskUpdate,
+) -> None:
+    try:
+        assert_workspace_member(session, user, task.workspace_code, min_role="admin")
+        return
+    except HTTPException as exc:
+        if exc.status_code != status.HTTP_403_FORBIDDEN:
+            raise
+
+    if task.assignee_user_id != user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="insufficient workspace role")
+
+    assert_workspace_member(session, user, task.workspace_code, min_role="viewer")
+    if _assignee_task_update_allowed(payload):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="assignees may only update task status or blocked reason",
+    )
+
+
+def _assignee_task_update_allowed(payload: TopicTaskUpdate) -> bool:
+    fields = _schema_fields_set(payload)
+    if not fields <= {"status", "metadata_json"}:
+        return False
+    if "metadata_json" not in fields or payload.metadata_json is None:
+        return True
+    return set(payload.metadata_json.keys()) <= {"blocked_reason"}
+
+
+def _ensure_topic_task_batch_update_permission(
+    session: Session,
+    user: User,
+    tasks: list[TopicTask],
+) -> None:
+    if not tasks:
+        return
+    workspace_code = tasks[0].workspace_code
+    try:
+        assert_workspace_member(session, user, workspace_code, min_role="admin")
+        return
+    except HTTPException as exc:
+        if exc.status_code != status.HTTP_403_FORBIDDEN:
+            raise
+
+    assert_workspace_member(session, user, workspace_code, min_role="viewer")
+    if all(task.assignee_user_id == user.id for task in tasks):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="assignees may only batch update their own tasks",
+    )
+
+
+def _schema_fields_set(payload: object) -> set[str]:
+    fields = getattr(payload, "model_fields_set", None)
+    if fields is None:
+        fields = getattr(payload, "__fields_set__", set())
+    return set(fields)
+
+
+def _create_strategy_loop_from_report_item(
+    session: Session,
+    *,
+    current_user: User,
+    payload: ReportItemStrategyLoopCreate,
+    daily_item: DailyReportItem | None,
+    weekly_item: WeeklyReportItem | None,
+) -> ReportItemStrategyLoopRead:
+    source_item = weekly_item or daily_item
+    if source_item is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="report item source is required")
+    generated_news = _report_item_generated_news(daily_item=daily_item, weekly_item=weekly_item)
+    if generated_news is None or generated_news.news_item is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="report item has no generated news source",
+        )
+    news_item = generated_news.news_item
+    raw_item = news_item.raw_item
+    workspace_code = source_item.workspace_code
+    _validate_workspace_member_user(
+        session,
+        workspace_code=workspace_code,
+        user_id=payload.owner_user_id,
+        detail="owner must be an active workspace member",
+    )
+    if payload.create_task:
+        _validate_topic_task_assignee(
+            session,
+            workspace_code=workspace_code,
+            assignee_user_id=payload.task_assignee_user_id,
+        )
+
+    source_title = _report_item_title(daily_item=daily_item, weekly_item=weekly_item)
+    source_summary = _report_item_summary(daily_item=daily_item, weekly_item=weekly_item)
+    source_report_type = "weekly" if weekly_item else "daily"
+    source_report_id = weekly_item.weekly_report_id if weekly_item else daily_item.daily_report_id if daily_item else None
+    source_report_item_id = weekly_item.id if weekly_item else daily_item.id if daily_item else None
+
+    insight = Insight(
+        workspace_code=workspace_code,
+        domain_code=source_item.domain_code,
+        visibility_scope="workspace",
+        sync_policy="outbox",
+        news_item_id=news_item.id,
+        raw_item_id=raw_item.id if raw_item else None,
+        title=(payload.insight_title or source_title).strip(),
+        summary=(payload.insight_summary or source_summary).strip(),
+        insight_type=payload.insight_type,
+        status="linked_to_requirement",
+        source_report_type=source_report_type,
+        source_report_id=source_report_id,
+        source_report_item_id=source_report_item_id,
+        confidence_score=payload.confidence_score,
+        metadata_json={
+            **(payload.metadata_json or {}),
+            "created_from": f"{source_report_type}_report_item",
+            "generated_news_id": generated_news.id,
+        },
+    )
+    session.add(insight)
+    session.flush()
+
+    implication = StrategicImplication(
+        workspace_code=workspace_code,
+        domain_code=source_item.domain_code,
+        visibility_scope="workspace",
+        sync_policy="outbox",
+        insight_id=insight.id,
+        title=(payload.implication_title or f"研判：{insight.title}").strip(),
+        description=(payload.implication_description or insight.summary).strip(),
+        implication_type=payload.implication_type,
+        metadata_json={
+            "created_from": f"{source_report_type}_report_item",
+            "source_report_item_id": source_report_item_id,
+        },
+    )
+    session.add(implication)
+    session.flush()
+
+    requirement = Requirement(
+        workspace_code=workspace_code,
+        domain_code=source_item.domain_code,
+        visibility_scope="workspace",
+        sync_policy="outbox",
+        strategic_implication_id=implication.id,
+        owner_user_id=payload.owner_user_id,
+        title=(payload.requirement_title or f"跟进：{insight.title}").strip(),
+        description=(payload.requirement_description or implication.description or insight.summary).strip(),
+        priority=payload.requirement_priority,
+        status=payload.requirement_status,
+        due_at=payload.requirement_due_at,
+        metadata_json={
+            "created_from": f"{source_report_type}_report_item",
+            "insight_id": insight.id,
+            "strategic_implication_id": implication.id,
+        },
+    )
+    session.add(requirement)
+    session.flush()
+
+    source_link = _build_requirement_source_link(
+        session,
+        requirement=requirement,
+        payload=RequirementSourceLinkCreate(
+            insight_id=insight.id,
+            daily_report_item_id=daily_item.id if daily_item else None,
+            weekly_report_item_id=weekly_item.id if weekly_item else None,
+            note=payload.source_note or f"由{source_report_type} report item 沉淀",
+        ),
+    )
+    session.add(source_link)
+    session.flush()
+
+    task: TopicTask | None = None
+    if payload.create_task:
+        task = TopicTask(
+            workspace_code=workspace_code,
+            domain_code=source_item.domain_code,
+            visibility_scope="workspace",
+            sync_policy="outbox",
+            requirement_id=requirement.id,
+            assignee_user_id=payload.task_assignee_user_id,
+            title=(payload.task_title or f"跟进需求：{requirement.title}").strip(),
+            description=(payload.task_description or requirement.description).strip(),
+            status=payload.task_status,
+            due_at=payload.task_due_at,
+            metadata_json={
+                "created_from": f"{source_report_type}_report_item",
+                "requirement_id": requirement.id,
+            },
+        )
+        session.add(task)
+        session.flush()
+        if task.assignee_user_id:
+            record_topic_task_assigned_activity(session, actor=current_user, task=task)
+
+    write_audit(
+        session,
+        current_user,
+        f"{source_report_type}_report_item.strategy_loop.create",
+        f"{source_report_type}_report_item",
+        source_report_item_id or "",
+        {
+            "insight_id": insight.id,
+            "strategic_implication_id": implication.id,
+            "requirement_id": requirement.id,
+            "topic_task_id": task.id if task else None,
+        },
+    )
+    session.commit()
+    return ReportItemStrategyLoopRead(
+        insight=_insight_to_read(session.get(Insight, insight.id) or insight),
+        implication=_strategic_implication_to_read(session.get(StrategicImplication, implication.id) or implication),
+        requirement=_requirement_to_read(_load_requirement(session, requirement.id)),
+        task=_topic_task_to_read(_load_topic_task(session, task.id)) if task else None,
+    )
+
+
+def _create_entity_milestone_from_report_item(
+    session: Session,
+    *,
+    current_user: User,
+    payload: ReportItemEntityMilestoneCreate,
+    daily_item: DailyReportItem | None,
+    weekly_item: WeeklyReportItem | None,
+) -> EntityMilestoneDetailRead:
+    source_item = weekly_item or daily_item
+    if source_item is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="report item source is required")
+    generated_news = _report_item_generated_news(daily_item=daily_item, weekly_item=weekly_item)
+    if generated_news is None or generated_news.news_item is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="report item has no generated news source",
+        )
+    news_item = generated_news.news_item
+    raw_item = news_item.raw_item
+    workspace_code = source_item.workspace_code
+    entity = _upsert_report_item_tracked_entity(
+        session,
+        payload=payload,
+        workspace_code=workspace_code,
+        domain_code=source_item.domain_code,
+    )
+
+    source_title = _report_item_title(daily_item=daily_item, weekly_item=weekly_item)
+    source_summary = _report_item_summary(daily_item=daily_item, weekly_item=weekly_item)
+    source_report_type = "weekly" if weekly_item else "daily"
+    source_report_id = weekly_item.weekly_report_id if weekly_item else daily_item.daily_report_id if daily_item else None
+    source_report_item_id = weekly_item.id if weekly_item else daily_item.id if daily_item else None
+    milestone_legacy_id = f"{source_report_type}:{source_report_item_id}:{entity.id}"
+    milestone = session.scalar(
+        select(EntityMilestone).where(
+            EntityMilestone.legacy_system == "current",
+            EntityMilestone.legacy_table == "report_item_entity_milestones",
+            EntityMilestone.legacy_id == milestone_legacy_id,
+        ),
+    )
+    created = milestone is None
+    if milestone is None:
+        milestone = EntityMilestone(
+            workspace_code=workspace_code,
+            domain_code=source_item.domain_code,
+            visibility_scope="workspace",
+            sync_policy="outbox",
+            legacy_system="current",
+            legacy_table="report_item_entity_milestones",
+            legacy_id=milestone_legacy_id,
+            tracked_entity_id=entity.id,
+            legacy_entity_id=entity.legacy_id,
+        )
+        session.add(milestone)
+
+    board = payload.board or _generated_news_board(generated_news)
+    source_url = generated_news.source_url or news_item.source_url or (raw_item.source_url if raw_item else None)
+    source_name = news_item.source_name or (raw_item.source_name if raw_item else "")
+    if not source_name and raw_item and raw_item.data_source:
+        source_name = raw_item.data_source.name
+    event_brief = (payload.event_brief or source_summary or source_title).strip()
+    impact_brief = (payload.impact_brief or source_summary).strip()
+    event_time = payload.event_time or news_item.published_at or (raw_item.published_at if raw_item else None) or source_item.created_at
+    current_refs = {
+        "source_report_type": source_report_type,
+        "source_report_id": source_report_id,
+        "source_report_item_id": source_report_item_id,
+        "daily_report_item_id": daily_item.id if daily_item else None,
+        "weekly_report_item_id": weekly_item.id if weekly_item else None,
+        "generated_news_id": generated_news.id,
+        "news_item_id": news_item.id,
+        "raw_item_id": raw_item.id if raw_item else None,
+        "data_source_id": raw_item.data_source_id if raw_item else news_item.data_source_id,
+    }
+
+    milestone.workspace_code = workspace_code
+    milestone.domain_code = source_item.domain_code
+    milestone.visibility_scope = "workspace"
+    milestone.sync_policy = "outbox"
+    milestone.tracked_entity_id = entity.id
+    milestone.legacy_entity_id = entity.legacy_id
+    milestone.legacy_article_id = None
+    milestone.legacy_report_id = None
+    milestone.raw_item_id = raw_item.id if raw_item else None
+    milestone.historical_report_id = None
+    milestone.event_time = event_time
+    milestone.event_type = payload.event_type
+    milestone.title = (payload.event_title or source_title).strip()
+    milestone.event_content = event_brief
+    milestone.impact = impact_brief
+    milestone.event_brief = event_brief
+    milestone.impact_brief = impact_brief
+    milestone.timeline_brief = event_brief
+    milestone.source_url = source_url
+    milestone.source_name = source_name
+    milestone.board = board
+    milestone.selected_for_timeline = True
+    milestone.confidence_score = payload.confidence_score
+    milestone.importance_score = payload.importance_score
+    milestone.importance_level = payload.importance_level
+    milestone.event_dedupe_key = f"{entity.id}:{source_report_type}:{source_report_item_id}"
+    milestone.metadata_json = {
+        **(milestone.metadata_json or {}),
+        **(payload.metadata_json or {}),
+        "created_from": f"{source_report_type}_report_item",
+        "curation_status": (milestone.metadata_json or {}).get("curation_status") or "draft",
+        "source_note": payload.source_note,
+        "created_by_user_id": (milestone.metadata_json or {}).get("created_by_user_id") or current_user.id,
+        "updated_by_user_id": current_user.id,
+        "current_refs": current_refs,
+    }
+    session.flush()
+
+    write_audit(
+        session,
+        current_user,
+        f"{source_report_type}_report_item.entity_milestone.{ 'create' if created else 'update' }",
+        "entity_milestone",
+        milestone.id,
+        {
+            "tracked_entity_id": entity.id,
+            "source_report_item_id": source_report_item_id,
+            "daily_report_item_id": daily_item.id if daily_item else None,
+            "weekly_report_item_id": weekly_item.id if weekly_item else None,
+            "news_item_id": news_item.id,
+            "raw_item_id": raw_item.id if raw_item else None,
+        },
+    )
+    session.commit()
+    loaded = session.scalar(
+        select(EntityMilestone)
+        .options(selectinload(EntityMilestone.tracked_entity))
+        .where(EntityMilestone.id == milestone.id),
+    )
+    return _entity_milestone_to_detail(loaded or milestone)
+
+
+def _upsert_report_item_tracked_entity(
+    session: Session,
+    *,
+    payload: ReportItemEntityMilestoneCreate,
+    workspace_code: str,
+    domain_code: str,
+) -> TrackedEntity:
+    entity_name = payload.entity_name.strip()
+    if not entity_name:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="entity_name is required")
+    if payload.tracked_entity_id:
+        entity = session.scalar(
+            select(TrackedEntity).where(
+                TrackedEntity.id == payload.tracked_entity_id,
+                TrackedEntity.workspace_code == workspace_code,
+            ),
+        )
+        if entity is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tracked entity not found")
+        return entity
+
+    existing = session.scalar(
+        select(TrackedEntity).where(
+            TrackedEntity.workspace_code == workspace_code,
+            func.lower(TrackedEntity.name) == entity_name.lower(),
+        ),
+    )
+    if existing:
+        if payload.entity_type:
+            existing.entity_type = existing.entity_type or payload.entity_type
+        if payload.entity_rank:
+            existing.rank = existing.rank or payload.entity_rank
+        return existing
+
+    legacy_id = f"{workspace_code}:{hashlib.sha1(entity_name.lower().encode('utf-8')).hexdigest()[:16]}"
+    entity = TrackedEntity(
+        workspace_code=workspace_code,
+        domain_code=domain_code,
+        visibility_scope="workspace",
+        sync_policy="outbox",
+        legacy_system="current",
+        legacy_table="tracked_entities",
+        legacy_id=legacy_id,
+        name=entity_name,
+        entity_type=payload.entity_type,
+        rank=payload.entity_rank,
+        aliases_json=[],
+        influence_score=0,
+        notes="",
+        metadata_json={"created_from": "report_item_entity_milestone"},
+    )
+    session.add(entity)
+    session.flush()
+    return entity
+
+
+def _generated_news_board(generated_news: GeneratedNews) -> str:
+    insight_json = generated_news.insight_json or {}
+    board = insight_json.get("board") if isinstance(insight_json, dict) else None
+    return str(board or generated_news.category or "")
+
+
+def _apply_entity_milestone_update(
+    milestone: EntityMilestone,
+    payload: EntityMilestoneUpdate,
+    current_user: User,
+) -> None:
+    fields = _schema_fields_set(payload)
+    text_fields = {
+        "event_type": "event_type",
+        "event_brief": "event_brief",
+        "event_content": "event_content",
+        "impact_brief": "impact_brief",
+        "impact": "impact",
+        "timeline_brief": "timeline_brief",
+        "source_url": "source_url",
+        "source_name": "source_name",
+        "board": "board",
+        "importance_level": "importance_level",
+    }
+    if "event_title" in fields and payload.event_title is not None:
+        title = payload.event_title.strip()
+        if not title:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="event_title is required")
+        milestone.title = title
+    for payload_field, model_field in text_fields.items():
+        if payload_field in fields:
+            value = getattr(payload, payload_field)
+            if value is not None:
+                setattr(milestone, model_field, value.strip() if isinstance(value, str) else value)
+    for field in ("event_time", "selected_for_timeline", "importance_score", "confidence_score"):
+        if field in fields:
+            value = getattr(payload, field)
+            if value is not None:
+                setattr(milestone, field, value)
+
+    metadata = {**(milestone.metadata_json or {})}
+    if payload.metadata_json is not None:
+        metadata.update(payload.metadata_json)
+    if payload.curation_status is not None:
+        curation_status = payload.curation_status.strip()
+        if curation_status not in {"draft", "candidate", "confirmed", "revoked"}:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="invalid curation_status")
+        metadata["curation_status"] = curation_status
+        if curation_status == "confirmed":
+            milestone.selected_for_timeline = True
+        if curation_status == "revoked":
+            milestone.selected_for_timeline = False
+    if payload.curation_note is not None:
+        metadata["curation_note"] = payload.curation_note.strip()
+    metadata["updated_by_user_id"] = current_user.id
+    metadata["updated_at"] = utc_now().isoformat()
+    milestone.metadata_json = metadata
+
+
+def _milestone_curation_status(milestone: EntityMilestone) -> str:
+    metadata = milestone.metadata_json or {}
+    status_value = metadata.get("curation_status")
+    if isinstance(status_value, str) and status_value:
+        return status_value
+    if milestone.legacy_system == "current":
+        return "draft"
+    return "imported"
+
+
+def _report_item_generated_news(
+    *,
+    daily_item: DailyReportItem | None,
+    weekly_item: WeeklyReportItem | None,
+) -> GeneratedNews | None:
+    if weekly_item and weekly_item.generated_news:
+        return weekly_item.generated_news
+    if weekly_item and weekly_item.daily_report_item:
+        return weekly_item.daily_report_item.generated_news
+    if daily_item:
+        return daily_item.generated_news
+    return None
+
+
+def _report_item_title(
+    *,
+    daily_item: DailyReportItem | None,
+    weekly_item: WeeklyReportItem | None,
+) -> str:
+    generated_news = _report_item_generated_news(daily_item=daily_item, weekly_item=weekly_item)
+    return (
+        (weekly_item.editor_title if weekly_item else None)
+        or (daily_item.editor_title if daily_item else None)
+        or (generated_news.title if generated_news else None)
+        or "未命名情报"
+    )
+
+
+def _report_item_summary(
+    *,
+    daily_item: DailyReportItem | None,
+    weekly_item: WeeklyReportItem | None,
+) -> str:
+    generated_news = _report_item_generated_news(daily_item=daily_item, weekly_item=weekly_item)
+    return (
+        (weekly_item.editor_summary if weekly_item else None)
+        or (daily_item.editor_summary if daily_item else None)
+        or (generated_news.summary if generated_news else None)
+        or ""
+    )
+
+
+def _record_requirement_recommendation_feedback(
+    session: Session,
+    current_user: User,
+    requirement: Requirement,
+) -> None:
+    feedback = _requirement_recommendation_feedback(requirement)
+    if feedback is None:
+        return
+    news_item_ids = _requirement_feedback_news_item_ids(session, requirement)
+    if not news_item_ids:
+        return
+    for news_item_id in news_item_ids:
+        if _requirement_feedback_action_exists(
+            session,
+            requirement_id=requirement.id,
+            news_item_id=news_item_id,
+            outcome=feedback["outcome"],
+        ):
+            continue
+        session.add(
+            EditorialAction(
+                user_id=current_user.id,
+                object_type="news_item",
+                object_id=news_item_id,
+                action_type="requirement.feedback_to_recommendation",
+                before_json={},
+                after_json={
+                    "requirement_id": requirement.id,
+                    "requirement_status": requirement.status,
+                    "outcome": feedback["outcome"],
+                    "score_delta": feedback["score_delta"],
+                    "source": "requirement_conclusion",
+                },
+                reason=feedback["reason"],
+            ),
+        )
+    write_audit(
+        session,
+        current_user,
+        "requirement.feedback_to_recommendation",
+        "requirement",
+        requirement.id,
+        {
+            "outcome": feedback["outcome"],
+            "score_delta": feedback["score_delta"],
+            "news_item_ids": news_item_ids,
+        },
+    )
+
+
+def _requirement_recommendation_feedback(requirement: Requirement) -> dict[str, object] | None:
+    metadata = requirement.metadata_json or {}
+    configured = metadata.get("recommendation_feedback")
+    if isinstance(configured, dict):
+        outcome = str(configured.get("outcome") or "").strip().lower()
+        if outcome in {"positive", "negative", "neutral"}:
+            return {
+                "outcome": outcome,
+                "score_delta": _recommendation_feedback_score_delta(outcome, configured.get("score_delta")),
+                "reason": str(configured.get("reason") or f"requirement {requirement.status}"),
+            }
+    if requirement.status in {"done", "resolved", "closed"}:
+        return {"outcome": "positive", "score_delta": 80.0, "reason": f"requirement {requirement.status}"}
+    if requirement.status in {"rejected", "canceled"}:
+        return {"outcome": "negative", "score_delta": -40.0, "reason": f"requirement {requirement.status}"}
+    return None
+
+
+def _recommendation_feedback_score_delta(outcome: str, configured_delta: object) -> float:
+    if configured_delta is not None:
+        try:
+            return max(-50.0, min(100.0, float(configured_delta)))
+        except (TypeError, ValueError):
+            pass
+    if outcome == "positive":
+        return 80.0
+    if outcome == "negative":
+        return -40.0
+    return 0.0
+
+
+def _requirement_feedback_news_item_ids(session: Session, requirement: Requirement) -> list[str]:
+    news_item_ids: set[str] = set()
+    for link in requirement.source_links or []:
+        if link.news_item_id:
+            news_item_ids.add(link.news_item_id)
+        if link.insight and link.insight.news_item_id:
+            news_item_ids.add(link.insight.news_item_id)
+        if link.daily_report_item and link.daily_report_item.generated_news_id:
+            generated = link.daily_report_item.generated_news
+            if generated and generated.news_item_id:
+                news_item_ids.add(generated.news_item_id)
+        if link.weekly_report_item and link.weekly_report_item.generated_news_id:
+            generated = link.weekly_report_item.generated_news
+            if generated and generated.news_item_id:
+                news_item_ids.add(generated.news_item_id)
+        if link.raw_item_id:
+            derived_news_ids = session.scalars(
+                select(NewsItem.id).where(
+                    NewsItem.raw_item_id == link.raw_item_id,
+                    NewsItem.workspace_code == requirement.workspace_code,
+                ),
+            ).all()
+            news_item_ids.update(derived_news_ids)
+    return sorted(news_item_ids)
+
+
+def _requirement_feedback_action_exists(
+    session: Session,
+    *,
+    requirement_id: str,
+    news_item_id: str,
+    outcome: object,
+) -> bool:
+    actions = session.scalars(
+        select(EditorialAction).where(
+            EditorialAction.object_type == "news_item",
+            EditorialAction.object_id == news_item_id,
+            EditorialAction.action_type == "requirement.feedback_to_recommendation",
+        ),
+    ).all()
+    for action in actions:
+        after_json = action.after_json or {}
+        if after_json.get("requirement_id") == requirement_id and after_json.get("outcome") == outcome:
+            return True
+    return False
+
+
+def _requirement_create_has_source(payload: RequirementCreate) -> bool:
+    return any(
+        (
+            payload.source_insight_id,
+            payload.source_daily_report_item_id,
+            payload.source_weekly_report_item_id,
+            payload.source_entity_milestone_id,
+            payload.source_historical_report_id,
+            payload.source_historical_feedback_item_id,
+            payload.source_news_item_id,
+            payload.source_raw_item_id,
+        ),
+    )
+
+
+def _build_requirement_source_link(
+    session: Session,
+    *,
+    requirement: Requirement,
+    payload: RequirementSourceLinkCreate,
+) -> RequirementSourceLink:
+    if not any(
+        (
+            payload.insight_id,
+            payload.daily_report_item_id,
+            payload.weekly_report_item_id,
+            payload.entity_milestone_id,
+            payload.historical_report_id,
+            payload.historical_feedback_item_id,
+            payload.news_item_id,
+            payload.raw_item_id,
+        ),
+    ):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="source reference is required")
+
+    source_link = RequirementSourceLink(
+        requirement_id=requirement.id,
+        link_type=payload.link_type or "evidence",
+        note=payload.note or "",
+    )
+    if payload.insight_id:
+        insight = _load_insight_source(session, payload.insight_id)
+        _assert_same_workspace(requirement, insight.workspace_code, "insight belongs to another workspace")
+        source_link.insight_id = insight.id
+        _merge_source_ids(source_link, news_item=insight.news_item)
+
+    if payload.daily_report_item_id:
+        daily_item = _load_daily_report_item_source(session, payload.daily_report_item_id)
+        _assert_same_workspace(requirement, daily_item.workspace_code, "daily report item belongs to another workspace")
+        source_link.daily_report_item_id = daily_item.id
+        _merge_source_ids(source_link, generated_news=daily_item.generated_news)
+
+    if payload.weekly_report_item_id:
+        weekly_item = _load_weekly_report_item_source(session, payload.weekly_report_item_id)
+        _assert_same_workspace(requirement, weekly_item.workspace_code, "weekly report item belongs to another workspace")
+        source_link.weekly_report_item_id = weekly_item.id
+        if weekly_item.daily_report_item_id:
+            _set_source_id(source_link, "daily_report_item_id", weekly_item.daily_report_item_id)
+        _merge_source_ids(source_link, generated_news=weekly_item.generated_news)
+        if weekly_item.daily_report_item:
+            _merge_source_ids(source_link, generated_news=weekly_item.daily_report_item.generated_news)
+
+    if payload.entity_milestone_id:
+        milestone = _load_entity_milestone_source(session, payload.entity_milestone_id)
+        _assert_same_workspace(requirement, milestone.workspace_code, "entity milestone belongs to another workspace")
+        source_link.entity_milestone_id = milestone.id
+        if milestone.raw_item:
+            _merge_source_ids(source_link, raw_item=milestone.raw_item)
+        elif milestone.raw_item_id:
+            _set_source_id(source_link, "raw_item_id", milestone.raw_item_id)
+
+    if payload.historical_report_id:
+        historical_report = _load_historical_report_source(session, payload.historical_report_id)
+        _assert_same_workspace(requirement, historical_report.workspace_code, "historical report belongs to another workspace")
+        source_link.historical_report_id = historical_report.id
+
+    if payload.historical_feedback_item_id:
+        feedback = _load_historical_feedback_source(session, payload.historical_feedback_item_id)
+        _assert_same_workspace(requirement, feedback.workspace_code, "historical feedback belongs to another workspace")
+        source_link.historical_feedback_item_id = feedback.id
+        if feedback.raw_item:
+            _merge_source_ids(source_link, raw_item=feedback.raw_item)
+        elif feedback.raw_item_id:
+            _set_source_id(source_link, "raw_item_id", feedback.raw_item_id)
+
+    if payload.news_item_id:
+        news_item = _load_news_item_source(session, payload.news_item_id)
+        _assert_same_workspace(requirement, news_item.workspace_code, "news item belongs to another workspace")
+        _merge_source_ids(source_link, news_item=news_item)
+
+    if payload.raw_item_id:
+        raw_item = _load_raw_item_source(session, payload.raw_item_id)
+        _assert_same_workspace(requirement, raw_item.workspace_code, "raw item belongs to another workspace")
+        _merge_source_ids(source_link, raw_item=raw_item)
+
+    return source_link
+
+
+def _load_news_item_for_insight(session: Session, news_item_id: str, workspace_code: str) -> NewsItem:
+    news_item = _load_news_item_source(session, news_item_id)
+    if news_item.workspace_code != workspace_code:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="news item belongs to another workspace")
+    return news_item
+
+
+def _resolve_insight_raw_item_id(news_item: NewsItem, raw_item_id: str | None) -> str | None:
+    derived_raw_item_id = news_item.raw_item_id or (news_item.raw_item.id if news_item.raw_item else None)
+    if raw_item_id and derived_raw_item_id and raw_item_id != derived_raw_item_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="raw item conflicts with news item")
+    return raw_item_id or derived_raw_item_id
+
+
+def _load_insight_source(session: Session, insight_id: str) -> Insight:
+    insight = session.scalar(
+        select(Insight)
+        .options(
+            selectinload(Insight.news_item).selectinload(NewsItem.raw_item).selectinload(RawItem.data_source),
+        )
+        .where(Insight.id == insight_id),
+    )
+    if insight is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Insight source not found")
+    return insight
+
+
+def _load_daily_report_item_source(session: Session, daily_report_item_id: str) -> DailyReportItem:
+    daily_item = session.scalar(
+        select(DailyReportItem)
+        .options(
+            selectinload(DailyReportItem.generated_news)
+            .selectinload(GeneratedNews.news_item)
+            .selectinload(NewsItem.raw_item)
+            .selectinload(RawItem.data_source),
+        )
+        .where(DailyReportItem.id == daily_report_item_id),
+    )
+    if daily_item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Daily report item source not found")
+    return daily_item
+
+
+def _load_weekly_report_item_source(session: Session, weekly_report_item_id: str) -> WeeklyReportItem:
+    weekly_item = session.scalar(
+        select(WeeklyReportItem)
+        .options(
+            selectinload(WeeklyReportItem.generated_news)
+            .selectinload(GeneratedNews.news_item)
+            .selectinload(NewsItem.raw_item)
+            .selectinload(RawItem.data_source),
+            selectinload(WeeklyReportItem.daily_report_item)
+            .selectinload(DailyReportItem.generated_news)
+            .selectinload(GeneratedNews.news_item)
+            .selectinload(NewsItem.raw_item)
+            .selectinload(RawItem.data_source),
+        )
+        .where(WeeklyReportItem.id == weekly_report_item_id),
+    )
+    if weekly_item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Weekly report item source not found")
+    return weekly_item
+
+
+def _load_news_item_source(session: Session, news_item_id: str) -> NewsItem:
+    news_item = session.scalar(
+        select(NewsItem)
+        .options(
+            selectinload(NewsItem.data_source),
+            selectinload(NewsItem.raw_item).selectinload(RawItem.data_source),
+        )
+        .where(NewsItem.id == news_item_id),
+    )
+    if news_item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="News item source not found")
+    return news_item
+
+
+def _load_raw_item_source(session: Session, raw_item_id: str) -> RawItem:
+    raw_item = session.scalar(
+        select(RawItem).options(selectinload(RawItem.data_source)).where(RawItem.id == raw_item_id),
+    )
+    if raw_item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Raw item source not found")
+    return raw_item
+
+
+def _load_entity_milestone_source(session: Session, milestone_id: str) -> EntityMilestone:
+    milestone = session.scalar(
+        select(EntityMilestone)
+        .options(
+            selectinload(EntityMilestone.tracked_entity),
+            selectinload(EntityMilestone.raw_item).selectinload(RawItem.data_source),
+        )
+        .where(EntityMilestone.id == milestone_id),
+    )
+    if milestone is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entity milestone source not found")
+    return milestone
+
+
+def _load_historical_report_source(session: Session, report_id: str) -> HistoricalReport:
+    report = session.get(HistoricalReport, report_id)
+    if report is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Historical report source not found")
+    return report
+
+
+def _load_historical_feedback_source(session: Session, feedback_id: str) -> HistoricalFeedbackItem:
+    feedback = session.scalar(
+        select(HistoricalFeedbackItem)
+        .options(selectinload(HistoricalFeedbackItem.raw_item).selectinload(RawItem.data_source))
+        .where(HistoricalFeedbackItem.id == feedback_id),
+    )
+    if feedback is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Historical feedback source not found")
+    return feedback
+
+
+def _assert_same_workspace(requirement: Requirement, workspace_code: str, detail: str) -> None:
+    if workspace_code != requirement.workspace_code:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+
+
+def _merge_source_ids(
+    source_link: RequirementSourceLink,
+    *,
+    generated_news: GeneratedNews | None = None,
+    news_item: NewsItem | None = None,
+    raw_item: RawItem | None = None,
+) -> None:
+    if generated_news is not None:
+        _set_source_id(source_link, "news_item_id", generated_news.news_item_id)
+        if generated_news.news_item is not None:
+            news_item = generated_news.news_item
+    if news_item is not None:
+        _set_source_id(source_link, "news_item_id", news_item.id)
+        if news_item.raw_item is not None:
+            raw_item = news_item.raw_item
+        elif news_item.raw_item_id:
+            _set_source_id(source_link, "raw_item_id", news_item.raw_item_id)
+    if raw_item is not None:
+        _set_source_id(source_link, "raw_item_id", raw_item.id)
+
+
+def _set_source_id(source_link: RequirementSourceLink, field: str, value: str | None) -> None:
+    if not value:
+        return
+    existing = getattr(source_link, field)
+    if existing and existing != value:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"conflicting {field}")
+    setattr(source_link, field, value)
+
+
+def _insight_to_read(item: Insight) -> InsightRead:
+    source_title, source_url, data_source_name = _insight_source_summary(item)
+    return InsightRead(
+        id=item.id,
+        workspace_code=item.workspace_code,
+        domain_code=item.domain_code,
+        news_item_id=item.news_item_id,
+        raw_item_id=item.raw_item_id,
+        title=item.title,
+        summary=item.summary,
+        insight_type=item.insight_type,
+        status=item.status,
+        source_report_type=item.source_report_type,
+        source_report_id=item.source_report_id,
+        source_report_item_id=item.source_report_item_id,
+        source_title=source_title,
+        source_url=source_url,
+        data_source_name=data_source_name,
+        implication_count=len(item.implications or []),
+        confidence_score=item.confidence_score,
+        metadata_json=item.metadata_json or {},
+        created_at=item.created_at,
+        updated_at=item.updated_at,
+    )
+
+
+def _insight_source_summary(item: Insight) -> tuple[str, str | None, str | None]:
+    news_item = item.news_item
+    raw_item = item.raw_item or (news_item.raw_item if news_item is not None else None)
+    data_source = None
+    if news_item is not None and news_item.data_source is not None:
+        data_source = news_item.data_source
+    elif raw_item is not None:
+        data_source = raw_item.data_source
+    title = (
+        (news_item.source_title if news_item is not None else None)
+        or (raw_item.source_title if raw_item is not None else None)
+        or item.title
+    )
+    url = (
+        (news_item.source_url if news_item is not None else None)
+        or (raw_item.source_url if raw_item is not None else None)
+    )
+    data_source_name = data_source.name if data_source is not None else None
+    return title, url, data_source_name
+
+
+def _strategic_implication_to_read(item: StrategicImplication) -> StrategicImplicationRead:
+    return StrategicImplicationRead(
+        id=item.id,
+        workspace_code=item.workspace_code,
+        domain_code=item.domain_code,
+        insight_id=item.insight_id,
+        insight_title=item.insight.title if item.insight else None,
+        title=item.title,
+        description=item.description,
+        implication_type=item.implication_type,
+        metadata_json=item.metadata_json or {},
+        created_at=item.created_at,
+        updated_at=item.updated_at,
+    )
 
 
 def _requirement_to_read(item: Requirement) -> RequirementRead:
@@ -1334,6 +2965,7 @@ def _requirement_to_read(item: Requirement) -> RequirementRead:
         owner_user_id=item.owner_user_id,
         owner_name=item.owner.display_name if item.owner else None,
         source_count=len(item.source_links or []),
+        source_links=[_requirement_source_link_to_read(link) for link in item.source_links or []],
         task_count=len(item.topic_tasks or []),
         metadata_json=item.metadata_json or {},
         created_at=item.created_at,
@@ -1341,7 +2973,111 @@ def _requirement_to_read(item: Requirement) -> RequirementRead:
     )
 
 
+def _requirement_source_link_to_read(link: RequirementSourceLink) -> RequirementSourceLinkRead:
+    daily_item = link.daily_report_item
+    weekly_item = link.weekly_report_item
+    entity_milestone = link.entity_milestone
+    historical_report = link.historical_report
+    historical_feedback = link.historical_feedback_item
+    generated_news = _source_generated_news(link)
+    news_item = link.news_item or (generated_news.news_item if generated_news else None)
+    raw_item = link.raw_item or (news_item.raw_item if news_item else None) or (
+        entity_milestone.raw_item if entity_milestone else None
+    ) or (
+        historical_feedback.raw_item if historical_feedback else None
+    )
+    source_title = (
+        (weekly_item.editor_title if weekly_item else None)
+        or (daily_item.editor_title if daily_item else None)
+        or (entity_milestone.title if entity_milestone else None)
+        or (historical_report.title if historical_report else None)
+        or (_historical_feedback_title(historical_feedback) if historical_feedback else None)
+        or (generated_news.title if generated_news else None)
+        or (link.insight.title if link.insight else None)
+        or (news_item.source_title if news_item else None)
+        or (raw_item.source_title if raw_item else None)
+        or ""
+    )
+    source_url = (
+        (entity_milestone.source_url if entity_milestone else None)
+        or (generated_news.source_url if generated_news else None)
+        or (news_item.source_url if news_item else None)
+        or (raw_item.source_url if raw_item else None)
+    )
+    data_source = (
+        raw_item.data_source
+        if raw_item and raw_item.data_source
+        else news_item.data_source
+        if news_item and news_item.data_source
+        else None
+    )
+    return RequirementSourceLinkRead(
+        id=link.id,
+        link_type=link.link_type,
+        note=link.note,
+        insight_id=link.insight_id,
+        daily_report_item_id=link.daily_report_item_id,
+        weekly_report_item_id=link.weekly_report_item_id,
+        entity_milestone_id=link.entity_milestone_id,
+        historical_report_id=link.historical_report_id,
+        historical_feedback_item_id=link.historical_feedback_item_id,
+        news_item_id=link.news_item_id,
+        raw_item_id=link.raw_item_id,
+        source_object_type=_source_object_type(link),
+        source_title=source_title,
+        source_url=source_url,
+        data_source_name=data_source.name if data_source else None,
+        created_at=link.created_at,
+    )
+
+
+def _historical_feedback_title(item: HistoricalFeedbackItem | None) -> str:
+    if item is None:
+        return ""
+    text = item.reason or item.comment or item.feedback_type or item.legacy_id
+    return f"{_feedback_kind_label(item.feedback_kind)}：{text}"
+
+
+def _feedback_kind_label(value: str) -> str:
+    if value == "quality_feedback":
+        return "历史质量反馈"
+    if value == "feedback":
+        return "历史反馈"
+    return value or "历史反馈"
+
+
+def _source_generated_news(link: RequirementSourceLink) -> GeneratedNews | None:
+    if link.weekly_report_item and link.weekly_report_item.generated_news:
+        return link.weekly_report_item.generated_news
+    if link.weekly_report_item and link.weekly_report_item.daily_report_item:
+        return link.weekly_report_item.daily_report_item.generated_news
+    if link.daily_report_item:
+        return link.daily_report_item.generated_news
+    return None
+
+
+def _source_object_type(link: RequirementSourceLink) -> str:
+    if link.historical_feedback_item_id:
+        return "historical_feedback"
+    if link.historical_report_id:
+        return "historical_report"
+    if link.entity_milestone_id:
+        return "entity_milestone"
+    if link.weekly_report_item_id:
+        return "weekly_report_item"
+    if link.daily_report_item_id:
+        return "daily_report_item"
+    if link.insight_id:
+        return "insight"
+    if link.news_item_id:
+        return "news_item"
+    if link.raw_item_id:
+        return "raw_item"
+    return "unknown"
+
+
 def _topic_task_to_read(item: TopicTask) -> TopicTaskRead:
+    metadata = item.metadata_json or {}
     return TopicTaskRead(
         id=item.id,
         workspace_code=item.workspace_code,
@@ -1352,12 +3088,28 @@ def _topic_task_to_read(item: TopicTask) -> TopicTaskRead:
         description=item.description,
         status=item.status,
         due_at=item.due_at,
+        is_overdue=_topic_task_is_overdue(item),
+        blocked_reason=str(metadata.get("blocked_reason") or ""),
         assignee_user_id=item.assignee_user_id,
         assignee_name=item.assignee.display_name if item.assignee else None,
-        metadata_json=item.metadata_json or {},
+        requirement_source_count=len(item.requirement.source_links or []) if item.requirement else 0,
+        requirement_source_links=[
+            _requirement_source_link_to_read(link)
+            for link in (item.requirement.source_links if item.requirement else [])
+        ],
+        metadata_json=metadata,
         created_at=item.created_at,
         updated_at=item.updated_at,
     )
+
+
+def _topic_task_is_overdue(item: TopicTask) -> bool:
+    if item.due_at is None or item.status in {"done", "canceled"}:
+        return False
+    due_at = item.due_at
+    if due_at.tzinfo is None:
+        due_at = due_at.replace(tzinfo=timezone.utc)
+    return due_at < utc_now()
 
 
 def _sync_run_to_read(run: SyncRun) -> SyncRunRead:
@@ -1380,6 +3132,7 @@ def _audit_log_to_read(item: AuditLog) -> AuditLogRead:
         id=item.id,
         user_id=item.user_id,
         user_name=item.user.display_name if item.user else None,
+        workspace_code=item.workspace_code,
         action=item.action,
         object_type=item.object_type,
         object_id=item.object_id,
@@ -1388,6 +3141,10 @@ def _audit_log_to_read(item: AuditLog) -> AuditLogRead:
         detail_json=item.detail_json or {},
         created_at=item.created_at,
     )
+
+
+def _is_super_admin(user: User) -> bool:
+    return "super_admin" in {role.code for role in user.roles}
 
 
 def _historical_reports_statement(
@@ -1560,6 +3317,7 @@ def _entity_milestone_to_list_item(milestone: EntityMilestone) -> EntityMileston
         source_name=milestone.source_name,
         board=milestone.board,
         selected_for_timeline=milestone.selected_for_timeline,
+        curation_status=_milestone_curation_status(milestone),
         importance_score=milestone.importance_score,
         importance_level=milestone.importance_level,
         article_ref_resolved=article_ref_resolved,
@@ -1641,3 +3399,166 @@ def _content_excerpt(content: str, limit: int = 180) -> str:
     if len(compact) <= limit:
         return compact
     return f"{compact[:limit].rstrip()}..."
+
+
+def _load_tracked_entity(session: Session, entity_id: str) -> TrackedEntity:
+    entity = session.get(TrackedEntity, entity_id)
+    if entity is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tracked entity not found")
+    return entity
+
+
+def _normalized_aliases(aliases: list[str]) -> list[str]:
+    normalized: list[str] = []
+    for alias in aliases:
+        cleaned = (alias or "").strip()
+        if cleaned and cleaned not in normalized:
+            normalized.append(cleaned)
+    return normalized
+
+
+def _report_archive_entries(session: Session, *, workspace_code: str) -> list[ReportArchiveListItem]:
+    """合并三路归档来源并按时间倒序：已发布日报、已发布周报、legacy 导入历史报告。"""
+
+    dated_entries: list[tuple[datetime, ReportArchiveListItem]] = []
+
+    daily_reports = session.scalars(
+        select(DailyReport)
+        .options(
+            selectinload(DailyReport.items)
+            .selectinload(DailyReportItem.generated_news)
+            .selectinload(GeneratedNews.news_item),
+        )
+        .where(DailyReport.workspace_code == workspace_code, DailyReport.status == "published"),
+    ).unique().all()
+    for report in daily_reports:
+        dated_entries.append(_daily_report_archive_entry(report))
+
+    weekly_reports = session.scalars(
+        select(WeeklyReport)
+        .options(
+            selectinload(WeeklyReport.items)
+            .selectinload(WeeklyReportItem.generated_news)
+            .selectinload(GeneratedNews.news_item),
+        )
+        .where(WeeklyReport.workspace_code == workspace_code, WeeklyReport.status == "published"),
+    ).unique().all()
+    for report in weekly_reports:
+        dated_entries.append(_weekly_report_archive_entry(report))
+
+    legacy_reports = session.scalars(
+        select(HistoricalReport).where(HistoricalReport.workspace_code == workspace_code),
+    ).all()
+    for report in legacy_reports:
+        dated_entries.append(_legacy_report_archive_entry(report))
+
+    dated_entries.sort(key=lambda pair: _archive_sort_value(pair[0]), reverse=True)
+    return [entry for _, entry in dated_entries]
+
+
+def _archive_sort_value(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def _top_sources(source_names: list[str], limit: int = 3) -> list[ReportArchiveSourceStat]:
+    counts: dict[str, int] = {}
+    for name in source_names:
+        cleaned = (name or "").strip()
+        if cleaned:
+            counts[cleaned] = counts.get(cleaned, 0) + 1
+    ranked = sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))
+    return [ReportArchiveSourceStat(name=name, count=count) for name, count in ranked[:limit]]
+
+
+def _daily_report_archive_entry(report: DailyReport) -> tuple[datetime, ReportArchiveListItem]:
+    items = report.items or []
+    adopted = [item for item in items if item.adoption_status == 2]
+    source_names = [
+        item.generated_news.news_item.source_name
+        for item in adopted
+        if item.generated_news is not None and item.generated_news.news_item is not None
+    ]
+    sort_time = report.published_at or report.created_at
+    entry = ReportArchiveListItem(
+        id=report.id,
+        origin="published",
+        report_type="daily",
+        workspace_code=report.workspace_code,
+        title=report.title,
+        date_key=report.day_key,
+        month=report.day_key[:7],
+        status=report.status,
+        published_at=report.published_at,
+        item_count=len(items),
+        adopted_count=len(adopted),
+        headline_count=sum(1 for item in adopted if item.is_headline),
+        adoption_rate=round(len(adopted) / len(items), 4) if items else 0.0,
+        top_sources=_top_sources(source_names),
+        detail_kind="daily_report",
+        detail_id=report.id,
+        content_excerpt=_content_excerpt(report.summary),
+    )
+    return sort_time, entry
+
+
+def _weekly_report_archive_entry(report: WeeklyReport) -> tuple[datetime, ReportArchiveListItem]:
+    items = report.items or []
+    adopted = [item for item in items if item.adoption_status == 2]
+    source_names = [
+        item.generated_news.news_item.source_name
+        for item in adopted
+        if item.generated_news is not None and item.generated_news.news_item is not None
+    ]
+    try:
+        month = week_bounds(report.week_key)[0].strftime("%Y-%m")
+    except InvalidWeekKeyError:
+        month = report.created_at.strftime("%Y-%m")
+    sort_time = report.published_at or report.created_at
+    entry = ReportArchiveListItem(
+        id=report.id,
+        origin="published",
+        report_type="weekly",
+        workspace_code=report.workspace_code,
+        title=report.title,
+        date_key=report.week_key,
+        month=month,
+        status=report.status,
+        published_at=report.published_at,
+        item_count=len(items),
+        adopted_count=len(adopted),
+        headline_count=0,
+        adoption_rate=round(len(adopted) / len(items), 4) if items else 0.0,
+        top_sources=_top_sources(source_names),
+        detail_kind="weekly_report",
+        detail_id=report.id,
+        content_excerpt=_content_excerpt(report.summary),
+    )
+    return sort_time, entry
+
+
+def _legacy_report_archive_entry(report: HistoricalReport) -> tuple[datetime, ReportArchiveListItem]:
+    resolved_count, unresolved_count = report_ref_counts(report)
+    ref_total = resolved_count + unresolved_count
+    sort_time = report.period_start_at or report.created_at
+    entry = ReportArchiveListItem(
+        id=report.id,
+        origin="legacy",
+        report_type=report.report_type if report.report_type in {"daily", "weekly"} else "daily",
+        workspace_code=report.workspace_code,
+        title=report.title,
+        date_key=report.period_start_at.date().isoformat() if report.period_start_at else "",
+        month=report.period_start_at.strftime("%Y-%m") if report.period_start_at else "",
+        status=report.status,
+        published_at=report.period_start_at,
+        item_count=ref_total,
+        adopted_count=ref_total,
+        headline_count=0,
+        adoption_rate=1.0 if ref_total else 0.0,
+        top_sources=[],
+        detail_kind="historical_report",
+        detail_id=report.id,
+        content_excerpt=_content_excerpt(report.content),
+    )
+    return sort_time, entry

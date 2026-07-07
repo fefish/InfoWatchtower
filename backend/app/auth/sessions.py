@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import time
+from collections.abc import Iterable
 from typing import Any
 
 
@@ -39,13 +40,31 @@ def create_session_token(
     return f"{payload_part}.{_b64encode(signature.digest())}"
 
 
-def verify_session_token(token: str | None, secret: str) -> dict[str, Any] | None:
-    if not token or not secret or "." not in token:
+def verify_session_token(
+    token: str | None,
+    secret: str | Iterable[str],
+) -> dict[str, Any] | None:
+    """验签 session token。
+
+    secret 支持单值或多值（AUTH_SESSION_SECRETS 轮换语义：第一个用于签名、
+    全部可验签）；任一 secret 验签通过即有效，换密钥不再全员掉线——
+    旧 secret 签的 cookie 在其仍在列表中时保持有效，移出列表后失效。
+    """
+    secrets = [secret] if isinstance(secret, str) else [item for item in secret if item]
+    secrets = [item for item in secrets if item]
+    if not token or not secrets or "." not in token:
         return None
 
     payload_part, signature_part = token.split(".", 1)
-    expected = hmac.new(secret.encode("utf-8"), payload_part.encode("ascii"), hashlib.sha256)
-    if not hmac.compare_digest(_b64encode(expected.digest()), signature_part):
+    for candidate in secrets:
+        expected = hmac.new(
+            candidate.encode("utf-8"),
+            payload_part.encode("ascii"),
+            hashlib.sha256,
+        )
+        if hmac.compare_digest(_b64encode(expected.digest()), signature_part):
+            break
+    else:
         return None
 
     try:

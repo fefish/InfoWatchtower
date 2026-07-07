@@ -77,6 +77,43 @@ class Permission(IdMixin, TimestampMixin, Base):
     )
 
 
+class UserGroup(IdMixin, TimestampMixin, Base):
+    """运营用户组：批量把一组人加入工作台、组织任务协作视图。
+
+    组本身不构成第三层权限；权限仍由全局角色和 workspace membership 决定。
+    """
+
+    __tablename__ = "user_groups"
+
+    code: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(128))
+    description: Mapped[str] = mapped_column(Text, default="")
+
+    members: Mapped[list[UserGroupMember]] = relationship(
+        back_populates="group",
+        cascade="all, delete-orphan",
+    )
+
+
+class UserGroupMember(IdMixin, TimestampMixin, Base):
+    __tablename__ = "user_group_members"
+    __table_args__ = (
+        UniqueConstraint("group_id", "user_id", name="uq_user_group_members_user"),
+    )
+
+    group_id: Mapped[str] = mapped_column(
+        ForeignKey("user_groups.id", ondelete="CASCADE"),
+        index=True,
+    )
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        index=True,
+    )
+
+    group: Mapped[UserGroup] = relationship(back_populates="members")
+    user: Mapped[User] = relationship()
+
+
 class UserInvite(IdMixin, SyncMixin, TimestampMixin, Base):
     __tablename__ = "user_invites"
 

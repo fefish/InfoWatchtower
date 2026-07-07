@@ -83,6 +83,10 @@ def test_super_admin_creates_extensible_workspace(monkeypatch, tmp_path):
     assert policy_payload["label_set_code"] == "ai_sql_categories"
     assert len(policy_payload["allowed_primary_categories"]) == 10
 
+    feedback_policy = client.get("/api/workspaces/hardware_intel/feedback-policy")
+    assert feedback_policy.status_code == 200
+    assert feedback_policy.json()["viewer_can_comment"] is True
+
 
 def test_create_workspace_validates_code_and_uniqueness(monkeypatch, tmp_path):
     client = make_client(monkeypatch, tmp_path)
@@ -214,10 +218,129 @@ def test_workspace_update_members_and_member_scoped_list(monkeypatch, tmp_path):
     assert [item["code"] for item in viewer.get("/api/workspaces").json()] == ["planning_intel"]
 
     owner_user_id = accepted_editor.json()["user"]["id"]
-    removed_admin_owner = editor.delete(f"/api/workspaces/hardware_team/members/{admin_user_id}")
+    owner_without_confirmation = editor.delete(f"/api/workspaces/hardware_team/members/{admin_user_id}")
+    assert owner_without_confirmation.status_code == 409
+    removed_admin_owner = editor.delete(
+        f"/api/workspaces/hardware_team/members/{admin_user_id}",
+        params={"confirm_dangerous_change": "true"},
+    )
     assert removed_admin_owner.status_code == 204
     last_owner = editor.delete(f"/api/workspaces/hardware_team/members/{owner_user_id}")
     assert last_owner.status_code == 400
+
+
+def test_workspace_auth_membership_mapping_is_editable_by_super_admin(monkeypatch, tmp_path):
+    admin = make_client(monkeypatch, tmp_path)
+
+    login = admin.post("/api/auth/login", json={"username": "admin", "password": "password"})
+    assert login.status_code == 200
+
+    empty = admin.get("/api/workspaces/ai_tools/auth-membership-mapping")
+    assert empty.status_code == 200
+    assert empty.json() == {"workspace_code": "ai_tools", "department_workspaces": []}
+
+    updated = admin.patch(
+        "/api/workspaces/ai_tools/auth-membership-mapping",
+        json={
+            "department_workspaces": [
+                {"department": " 战略部 ", "workspace_role": "viewer"},
+                {"department": "战略部", "workspace_role": "member"},
+                {"department": "硬件部", "workspace_role": "admin"},
+            ],
+        },
+    )
+    assert updated.status_code == 200
+    assert updated.json() == {
+        "workspace_code": "ai_tools",
+        "department_workspaces": [
+            {"department": "战略部", "workspace_role": "member"},
+            {"department": "硬件部", "workspace_role": "admin"},
+        ],
+    }
+
+    audit = admin.get("/api/audit-logs", params={"action": "workspace.auth_membership_mapping.update"})
+    assert audit.status_code == 200
+    assert audit.json()[0]["detail_json"]["workspace_code"] == "ai_tools"
+
+    editor_invite = admin.post(
+        "/api/auth/invites",
+        json={
+            "role_code": "editor_admin",
+            "workspaces": [{"code": "planning_intel", "workspace_role": "admin"}],
+            "expires_in_days": 7,
+        },
+    )
+    editor = TestClient(create_app())
+    assert editor.post(
+        f"/api/auth/invites/{editor_invite.json()['code']}/accept",
+        json={
+            "username": "workspace-admin",
+            "display_name": "工作台管理员",
+            "password": "strong-password",
+        },
+    ).status_code == 200
+
+    forbidden = editor.patch(
+        "/api/workspaces/ai_tools/auth-membership-mapping",
+        json={"department_workspaces": [{"department": "测试部", "workspace_role": "viewer"}]},
+    )
+    assert forbidden.status_code == 403
+
+
+def test_workspace_feedback_policy_is_admin_scoped(monkeypatch, tmp_path):
+    admin = make_client(monkeypatch, tmp_path)
+
+    login = admin.post("/api/auth/login", json={"username": "admin", "password": "password"})
+    assert login.status_code == 200
+
+    viewer_invite = admin.post(
+        "/api/auth/invites",
+        json={
+            "role_code": "viewer",
+            "workspaces": [{"code": "planning_intel", "workspace_role": "viewer"}],
+            "expires_in_days": 7,
+        },
+    )
+    assert viewer_invite.status_code == 200
+    viewer = TestClient(create_app())
+    accepted_viewer = viewer.post(
+        f"/api/auth/invites/{viewer_invite.json()['code']}/accept",
+        json={
+            "username": "feedback-viewer",
+            "display_name": "反馈浏览者",
+            "password": "strong-password",
+        },
+    )
+    assert accepted_viewer.status_code == 200
+
+    readable = viewer.get("/api/workspaces/planning_intel/feedback-policy")
+    assert readable.status_code == 200
+    assert readable.json()["viewer_can_react"] is True
+
+    viewer_update = viewer.patch(
+        "/api/workspaces/planning_intel/feedback-policy",
+        json={"viewer_can_comment": False},
+    )
+    assert viewer_update.status_code == 403
+
+    updated = admin.patch(
+        "/api/workspaces/planning_intel/feedback-policy",
+        json={
+            "viewer_can_react": False,
+            "viewer_can_rate": False,
+            "viewer_can_comment": False,
+            "viewer_can_edit": False,
+            "notify_on_comment": True,
+            "notify_on_publish": True,
+        },
+    )
+    assert updated.status_code == 200
+    assert updated.json()["viewer_can_react"] is False
+    assert updated.json()["notify_on_publish"] is True
+
+    reread = viewer.get("/api/workspaces/planning_intel/feedback-policy")
+    assert reread.status_code == 200
+    assert reread.json()["viewer_can_comment"] is False
 
 
 def test_create_workspace_requires_authentication(monkeypatch, tmp_path):
@@ -283,3 +406,309 @@ def test_new_workspace_can_configure_own_sources(monkeypatch, tmp_path):
     match = [item for item in listed.json() if item["id"] == source_payload["source"]["id"]]
     assert match
     assert match[0]["workspace_link_enabled"] is True
+
+
+# --- workspace_sections 管理 API ---
+
+
+def _register_optional_section(engine, workspace_code="planning_intel", section_key="tool_catalog"):
+    """契约口径：可选模块是数据库注册、默认关闭的 workspace_sections 记录。"""
+    from sqlalchemy import select
+
+    from app.models.workspace import Workspace, WorkspaceSection
+
+    Session = sessionmaker(bind=engine)
+    with Session() as session:
+        workspace = session.scalar(select(Workspace).where(Workspace.code == workspace_code))
+        assert workspace is not None
+        session.add(
+            WorkspaceSection(
+                workspace_id=workspace.id,
+                section_key=section_key,
+                name="工具目录",
+                section_type="page",
+                route_path="/tools/catalog",
+                sort_order=95,
+                enabled=False,
+                config_json={"group": "system"},
+            ),
+        )
+        session.commit()
+
+
+def _section_keys(client, workspace_code="planning_intel"):
+    response = client.get(f"/api/workspaces/{workspace_code}/sections")
+    assert response.status_code == 200
+    return [item["section_key"] for item in response.json()]
+
+
+def test_section_management_toggles_optional_module(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+    login = client.post("/api/auth/login", json={"username": "admin", "password": "password"})
+    assert login.status_code == 200
+
+    engine = get_engine()
+    assert engine is not None
+    _register_optional_section(engine)
+
+    # 可选模块默认关闭，不出现在导航分区里
+    assert "tool_catalog" not in _section_keys(client)
+
+    enabled = client.patch(
+        "/api/workspaces/planning_intel/sections/tool_catalog",
+        json={"enabled": True},
+    )
+    assert enabled.status_code == 200
+    assert enabled.json() == {"section_key": "tool_catalog", "name": "工具目录", "enabled": True}
+    assert "tool_catalog" in _section_keys(client)
+
+    # bootstrap 重播种会把定义外分区的 enabled 列重置为 False，
+    # 但用户在管理 API 里的启停决定（config_json.user_enabled）不回滚
+    Session = sessionmaker(bind=engine)
+    with Session() as session:
+        ensure_auth_seed(session, get_settings())
+    assert "tool_catalog" in _section_keys(client)
+
+    disabled = client.patch(
+        "/api/workspaces/planning_intel/sections/tool_catalog",
+        json={"enabled": False},
+    )
+    assert disabled.status_code == 200
+    assert disabled.json()["enabled"] is False
+    assert "tool_catalog" not in _section_keys(client)
+
+
+def test_section_management_rejects_disabling_core_sections(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+    login = client.post("/api/auth/login", json={"username": "admin", "password": "password"})
+    assert login.status_code == 200
+
+    for core_key in ("source_management", "daily_reports"):
+        rejected = client.patch(
+            f"/api/workspaces/planning_intel/sections/{core_key}",
+            json={"enabled": False},
+        )
+        assert rejected.status_code == 400, core_key
+        assert "cannot be disabled" in rejected.json()["detail"]
+        assert core_key in _section_keys(client)
+
+    # 核心分区显式启用是幂等操作，不报错
+    accepted = client.patch(
+        "/api/workspaces/planning_intel/sections/daily_reports",
+        json={"enabled": True},
+    )
+    assert accepted.status_code == 200
+
+    missing = client.patch(
+        "/api/workspaces/planning_intel/sections/nonexistent_section",
+        json={"enabled": True},
+    )
+    assert missing.status_code == 404
+
+
+def test_workspace_settings_section_is_seeded_admin_only(monkeypatch, tmp_path):
+    """工作台配置中心注册为核心管理分区：所有工作台播种、min_role=admin、不可停用。"""
+    client = make_client(monkeypatch, tmp_path)
+    login = client.post("/api/auth/login", json={"username": "admin", "password": "password"})
+    assert login.status_code == 200
+
+    for workspace_code in ("planning_intel", "ai_tools"):
+        sections = client.get(f"/api/workspaces/{workspace_code}/sections")
+        assert sections.status_code == 200
+        settings_section = next(
+            item for item in sections.json() if item["section_key"] == "workspace_settings"
+        )
+        assert settings_section["name"] == "工作台配置"
+        assert settings_section["route_path"] == "/workspace-settings"
+        assert settings_section["group"] == "system"
+        assert settings_section["min_role"] == "admin"
+
+    rejected = client.patch(
+        "/api/workspaces/planning_intel/sections/workspace_settings",
+        json={"enabled": False},
+    )
+    assert rejected.status_code == 400
+    assert "cannot be disabled" in rejected.json()["detail"]
+
+    created = client.post(
+        "/api/workspaces",
+        json={"code": "settings_probe", "name": "配置探针工作台", "description": ""},
+    )
+    assert created.status_code == 201
+    probe_sections = client.get("/api/workspaces/settings_probe/sections")
+    probe_settings = next(
+        item for item in probe_sections.json() if item["section_key"] == "workspace_settings"
+    )
+    assert probe_settings["min_role"] == "admin"
+
+
+def test_sections_manage_view_lists_disabled_modules_for_admins(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+    login = client.post("/api/auth/login", json={"username": "admin", "password": "password"})
+    assert login.status_code == 200
+
+    engine = get_engine()
+    assert engine is not None
+    _register_optional_section(engine)
+
+    manage = client.get("/api/workspaces/planning_intel/sections/manage")
+    assert manage.status_code == 200
+    rows = {item["section_key"]: item for item in manage.json()}
+    # 管理视图包含默认关闭的可选模块（普通 GET /sections 看不到），核心分区带 core 标记。
+    assert rows["tool_catalog"] == {
+        "section_key": "tool_catalog",
+        "name": "工具目录",
+        "group": "system",
+        "sort_order": 95,
+        "enabled": False,
+        "core": False,
+    }
+    assert rows["workspace_settings"]["core"] is True
+    assert rows["daily_reports"]["core"] is True
+    assert rows["daily_reports"]["enabled"] is True
+
+
+def test_sections_manage_view_requires_workspace_admin(monkeypatch, tmp_path):
+    admin = make_client(monkeypatch, tmp_path)
+    login = admin.post("/api/auth/login", json={"username": "admin", "password": "password"})
+    assert login.status_code == 200
+
+    member_invite = admin.post(
+        "/api/auth/invites",
+        json={
+            "role_code": "viewer",
+            "workspaces": [{"code": "planning_intel", "workspace_role": "member"}],
+            "expires_in_days": 7,
+        },
+    )
+    assert member_invite.status_code == 200
+    member = TestClient(create_app())
+    assert member.post(
+        f"/api/auth/invites/{member_invite.json()['code']}/accept",
+        json={
+            "username": "manage-member",
+            "display_name": "分区管理成员",
+            "password": "strong-password",
+        },
+    ).status_code == 200
+
+    rejected = member.get("/api/workspaces/planning_intel/sections/manage")
+    assert rejected.status_code == 403
+
+
+def test_workspace_basic_info_is_editable_by_workspace_admin(monkeypatch, tmp_path):
+    """工作台配置中心「基本信息」卡片：owner/admin 可改名称/描述/主题域，
+    启停 enabled 仍是 super_admin 专属操作。"""
+    admin = make_client(monkeypatch, tmp_path)
+    login = admin.post("/api/auth/login", json={"username": "admin", "password": "password"})
+    assert login.status_code == 200
+
+    owner_invite = admin.post(
+        "/api/auth/invites",
+        json={
+            "role_code": "viewer",
+            "workspaces": [{"code": "planning_intel", "workspace_role": "admin"}],
+            "expires_in_days": 7,
+        },
+    )
+    assert owner_invite.status_code == 200
+    workspace_admin = TestClient(create_app())
+    assert workspace_admin.post(
+        f"/api/auth/invites/{owner_invite.json()['code']}/accept",
+        json={
+            "username": "settings-admin",
+            "display_name": "工作台配置管理员",
+            "password": "strong-password",
+        },
+    ).status_code == 200
+
+    renamed = workspace_admin.patch(
+        "/api/workspaces/planning_intel",
+        json={"name": "规划部情报中心", "description": "配置中心改描述", "default_domain_code": "ai"},
+    )
+    assert renamed.status_code == 200
+    assert renamed.json()["name"] == "规划部情报中心"
+    assert renamed.json()["description"] == "配置中心改描述"
+
+    cannot_toggle = workspace_admin.patch(
+        "/api/workspaces/planning_intel",
+        json={"enabled": False},
+    )
+    assert cannot_toggle.status_code == 403
+
+    viewer_invite = admin.post(
+        "/api/auth/invites",
+        json={
+            "role_code": "viewer",
+            "workspaces": [{"code": "planning_intel", "workspace_role": "member"}],
+            "expires_in_days": 7,
+        },
+    )
+    member = TestClient(create_app())
+    assert member.post(
+        f"/api/auth/invites/{viewer_invite.json()['code']}/accept",
+        json={
+            "username": "settings-member",
+            "display_name": "工作台普通成员",
+            "password": "strong-password",
+        },
+    ).status_code == 200
+    member_rejected = member.patch(
+        "/api/workspaces/planning_intel",
+        json={"name": "成员不能改"},
+    )
+    assert member_rejected.status_code == 403
+
+
+def test_section_management_requires_workspace_admin(monkeypatch, tmp_path):
+    admin = make_client(monkeypatch, tmp_path)
+    login = admin.post("/api/auth/login", json={"username": "admin", "password": "password"})
+    assert login.status_code == 200
+
+    engine = get_engine()
+    assert engine is not None
+    _register_optional_section(engine)
+
+    from sqlalchemy import select
+
+    from app.auth.passwords import hash_password
+    from app.models.identity import Role, User
+    from app.models.workspace import Workspace, WorkspaceMembership
+
+    Session = sessionmaker(bind=engine)
+    with Session() as session:
+        viewer_role = session.scalar(select(Role).where(Role.code == "viewer"))
+        workspace = session.scalar(select(Workspace).where(Workspace.code == "planning_intel"))
+        viewer = User(
+            external_provider="local",
+            external_id="section-viewer",
+            username="section-viewer",
+            display_name="分区只读用户",
+            password_hash=hash_password("password"),
+            status="active",
+            roles=[viewer_role],
+        )
+        session.add(viewer)
+        session.flush()
+        session.add(
+            WorkspaceMembership(
+                workspace_id=workspace.id,
+                user_id=viewer.id,
+                workspace_role="viewer",
+                enabled=True,
+            ),
+        )
+        session.commit()
+
+    viewer_client = TestClient(create_app())
+    viewer_login = viewer_client.post(
+        "/api/auth/login",
+        json={"username": "section-viewer", "password": "password"},
+    )
+    assert viewer_login.status_code == 200
+
+    rejected = viewer_client.patch(
+        "/api/workspaces/planning_intel/sections/tool_catalog",
+        json={"enabled": True},
+    )
+    assert rejected.status_code == 403

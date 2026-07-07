@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import {
+  Bell,
   CheckCircle2,
   CircleSlash2,
   ExternalLink,
@@ -15,9 +16,12 @@ import {
   X
 } from "lucide-vue-next";
 import { computed, onMounted, reactive, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 
 import {
   createDailyReportItemComment,
+  createDailyReportItemEntityMilestone,
+  createDailyReportItemInsight,
   createDailyPipelineRun,
   fetchDailyReportItemComments,
   fetchDailyReports,
@@ -34,15 +38,23 @@ import {
   createReportFormat,
   dailyRenditionExportUrl,
   deleteReportFormat,
+  fetchDailyRenditions,
   fetchReportFormats,
   regenerateDailyRendition,
   updateReportFormat,
   type ReportFormatRecord,
   type ReportRenditionRecord
 } from "../api/renditions";
+import {
+  fetchObjectWatcher,
+  updateObjectWatcher,
+  type ObjectWatcherRecord
+} from "../api/watchers";
+import { fetchWorkspaceFeedbackPolicy, type WorkspaceFeedbackPolicy } from "../api/workspaces";
 import { useWorkspaceStore } from "../stores/workspace";
 
 const workspace = useWorkspaceStore();
+const route = useRoute();
 const reports = ref<DailyReportRecord[]>([]);
 const loading = ref(false);
 const generating = ref(false);
@@ -54,12 +66,48 @@ const detailOpen = ref(false);
 const editingItemId = ref("");
 const savingItemId = ref("");
 const actingItemId = ref("");
+const strategyItemId = ref("");
+const milestoneItemId = ref("");
+const milestoneSavingId = ref("");
 const loadingCommentsId = ref("");
+const loadingWatcherId = ref("");
+const watchingItemId = ref("");
 const error = ref("");
 const message = ref("");
 const targetDayKey = ref(todayKey());
 const commentsByItem = ref<Record<string, CommentRecord[]>>({});
 const commentDrafts = ref<Record<string, string>>({});
+const milestoneDrafts = ref<Record<string, string>>({});
+const watchersByItem = ref<Record<string, ObjectWatcherRecord>>({});
+const feedbackPolicy = ref<WorkspaceFeedbackPolicy>({
+  workspace_code: "",
+  viewer_can_react: true,
+  viewer_can_rate: true,
+  viewer_can_comment: true,
+  viewer_can_edit: false,
+  notify_on_comment: true,
+  notify_on_publish: false
+});
+const pendingItemAnchorId = computed(() => {
+  const value = route.query.item_id;
+  return Array.isArray(value) ? value[0] ?? "" : value ?? "";
+});
+const pendingCommentAnchorId = computed(() => {
+  const value = route.query.comment_id;
+  return Array.isArray(value) ? value[0] ?? "" : value ?? "";
+});
+const pendingReportAnchorId = computed(() => {
+  const value = route.query.report_id;
+  return Array.isArray(value) ? value[0] ?? "" : value ?? "";
+});
+const pendingRenditionAnchorId = computed(() => {
+  const value = route.query.rendition_id;
+  return Array.isArray(value) ? value[0] ?? "" : value ?? "";
+});
+const pendingRenditionFormatCode = computed(() => {
+  const value = route.query.format_code;
+  return Array.isArray(value) ? value[0] ?? "" : value ?? "";
+});
 const contentFieldLabels = [
   ["background", "背景"],
   ["effects", "效果总结"],
@@ -133,6 +181,21 @@ const selectedItem = computed(() => {
 const detailItem = computed(() => (detailOpen.value ? selectedItem.value : null));
 
 const adoptedCount = computed(() => reportItems.value.filter((item) => item.adoption_status === 2).length);
+const roleRank: Record<string, number> = {
+  viewer: 0,
+  member: 1,
+  admin: 2,
+  owner: 3
+};
+const currentWorkspaceRole = computed(() => workspace.current?.current_user_workspace_role ?? "");
+const isViewerOnly = computed(() => roleRank[currentWorkspaceRole.value] === 0);
+const canReact = computed(() => !isViewerOnly.value || feedbackPolicy.value.viewer_can_react);
+const canRate = computed(() => !isViewerOnly.value || feedbackPolicy.value.viewer_can_rate);
+const canComment = computed(() => !isViewerOnly.value || feedbackPolicy.value.viewer_can_comment);
+const canCreateStrategyLoop = computed(() => roleRank[currentWorkspaceRole.value] >= 2);
+const canCreateEntityMilestone = computed(() => roleRank[currentWorkspaceRole.value] >= 1);
+// viewer（游客）纯阅读：生成/发布/重跑/采信/编辑/头条/格式管理等编审操作整组隐藏。
+const canManageReports = computed(() => roleRank[currentWorkspaceRole.value] >= 1);
 
 // ---- 成稿格式（renditions）----
 const formats = ref<ReportFormatRecord[]>([]);
@@ -193,6 +256,9 @@ async function loadFormats() {
   if (!enabledFormats.value.some((fmt) => fmt.format_code === activeFormatCode.value)) {
     activeFormatCode.value = "company_sql_v1";
   }
+  if (applyPendingRenditionAnchor()) {
+    return;
+  }
   // 对齐快报心智：默认打开成品阅读（技术洞察版），编审是其中一个视图
   if (
     activeFormatCode.value === "company_sql_v1" &&
@@ -200,6 +266,17 @@ async function loadFormats() {
   ) {
     activeFormatCode.value = "tech_insight_v1";
     void loadRendition();
+  }
+}
+
+async function loadFeedbackPolicy() {
+  if (!workspace.currentCode) {
+    return;
+  }
+  try {
+    feedbackPolicy.value = await fetchWorkspaceFeedbackPolicy(workspace.currentCode);
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "加载反馈策略失败";
   }
 }
 
@@ -218,7 +295,14 @@ async function loadRendition() {
   }
   renditionLoading.value = true;
   try {
-    rendition.value = await regenerateDailyRendition(report.id, activeFormatCode.value);
+    if (canManageReports.value) {
+      rendition.value = await regenerateDailyRendition(report.id, activeFormatCode.value);
+    } else {
+      // viewer 只读：读取发布时已投影的成稿快照，不触发 member 权限的重投影。
+      const renditions = await fetchDailyRenditions(report.id);
+      rendition.value =
+        renditions.find((candidate) => candidate.format_code === activeFormatCode.value) ?? null;
+    }
   } catch (exc) {
     error.value = exc instanceof Error ? exc.message : "生成成稿失败";
     rendition.value = null;
@@ -356,6 +440,9 @@ async function loadReports() {
     if (!reports.value.some((report) => report.id === selectedReportId.value)) {
       selectedReportId.value = reports.value[0]?.id ?? "";
     }
+    applyPendingReportAnchor();
+    applyPendingItemAnchor();
+    applyPendingRenditionAnchor();
     ensureSelectedItem();
   } catch (exc) {
     error.value = exc instanceof Error ? exc.message : "加载日报失败";
@@ -383,7 +470,7 @@ async function generateDraft() {
       create_daily_draft: true,
       run_ingestion: true
     });
-    message.value = `已生成 ${result.day_key ?? "当日"} 草稿：raw 扫描 ${result.raw_scanned}，候选 ${result.candidates_total}，采信 ${result.selected_total}，成稿 ${result.generated_total}`;
+    message.value = `已生成 ${result.day_key ?? "当日"} 草稿：raw 扫描 ${result.raw_scanned}，候选 ${result.candidates_total}，采信 ${result.selected_total}，成稿 ${result.generated_total}${result.auto_published ? "（已按工作台策略自动发布）" : ""}`;
     await loadReports();
     if (result.daily_report_id) {
       selectedReportId.value = result.daily_report_id;
@@ -444,6 +531,53 @@ function ensureSelectedItem() {
     detailOpen.value = false;
     editingItemId.value = "";
   }
+}
+
+function applyPendingItemAnchor() {
+  const itemId = pendingItemAnchorId.value;
+  if (!itemId || reports.value.length === 0) {
+    return;
+  }
+  const report = reports.value.find((candidate) => candidate.items.some((item) => item.id === itemId));
+  if (!report) {
+    return;
+  }
+  selectedReportId.value = report.id;
+  selectedItemId.value = itemId;
+  detailOpen.value = true;
+}
+
+function applyPendingReportAnchor() {
+  const reportId = pendingReportAnchorId.value;
+  if (!reportId || reports.value.length === 0) {
+    return;
+  }
+  const report = reports.value.find((candidate) => candidate.id === reportId);
+  if (!report) {
+    return;
+  }
+  selectedReportId.value = report.id;
+  if (!pendingItemAnchorId.value) {
+    selectedItemId.value = "";
+    detailOpen.value = false;
+  }
+}
+
+function applyPendingRenditionAnchor() {
+  const formatCode = pendingRenditionFormatCode.value;
+  if (!pendingRenditionAnchorId.value || !formatCode) {
+    return false;
+  }
+  if (!enabledFormats.value.some((fmt) => fmt.format_code === formatCode)) {
+    return false;
+  }
+  activeFormatCode.value = formatCode;
+  if (formatCode === "company_sql_v1") {
+    rendition.value = null;
+  } else {
+    void loadRendition();
+  }
+  return true;
 }
 
 function selectReport(report: DailyReportRecord) {
@@ -547,6 +681,10 @@ function sourceLineage(item: DailyReportItemRecord, key: string) {
   return typeof value === "string" ? value : "";
 }
 
+function isAnchoredComment(comment: CommentRecord) {
+  return pendingCommentAnchorId.value === comment.id;
+}
+
 function statusLabel(status: string) {
   return status === "published" ? "已发布" : "草稿";
 }
@@ -641,6 +779,9 @@ async function setAdoption(item: DailyReportItemRecord, status: number) {
 }
 
 async function likeItem(item: DailyReportItemRecord) {
+  if (!canReact.value) {
+    return;
+  }
   actingItemId.value = item.id;
   error.value = "";
   try {
@@ -654,6 +795,9 @@ async function likeItem(item: DailyReportItemRecord) {
 }
 
 async function rateItem(item: DailyReportItemRecord, score: number) {
+  if (!canRate.value) {
+    return;
+  }
   actingItemId.value = item.id;
   error.value = "";
   try {
@@ -681,9 +825,52 @@ async function loadComments(item: DailyReportItemRecord) {
   }
 }
 
+async function loadWatcherStatus(item: DailyReportItemRecord) {
+  if (watchersByItem.value[item.id]) {
+    return;
+  }
+  loadingWatcherId.value = item.id;
+  try {
+    watchersByItem.value = {
+      ...watchersByItem.value,
+      [item.id]: await fetchObjectWatcher("daily_report_item", item.id)
+    };
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "加载关注状态失败";
+  } finally {
+    loadingWatcherId.value = "";
+  }
+}
+
+function watcherStatus(item: DailyReportItemRecord) {
+  return watchersByItem.value[item.id] ?? null;
+}
+
+async function toggleWatchItem(item: DailyReportItemRecord) {
+  const current = watcherStatus(item);
+  watchingItemId.value = item.id;
+  error.value = "";
+  message.value = "";
+  try {
+    const updated = await updateObjectWatcher("daily_report_item", item.id, !(current?.watching ?? false));
+    watchersByItem.value = {
+      ...watchersByItem.value,
+      [item.id]: updated
+    };
+    message.value = updated.watching ? "已关注该日报条目" : "已取消关注该日报条目";
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "更新关注状态失败";
+  } finally {
+    watchingItemId.value = "";
+  }
+}
+
 async function submitComment(item: DailyReportItemRecord) {
   const body = (commentDrafts.value[item.id] || "").trim();
   if (!body) {
+    return;
+  }
+  if (!canComment.value) {
     return;
   }
   actingItemId.value = item.id;
@@ -703,6 +890,73 @@ async function submitComment(item: DailyReportItemRecord) {
   }
 }
 
+async function createStrategyLoop(item: DailyReportItemRecord) {
+  const report = selectedReport.value;
+  if (!canCreateStrategyLoop.value) {
+    return;
+  }
+  strategyItemId.value = item.id;
+  error.value = "";
+  message.value = "";
+  try {
+    const result = await createDailyReportItemInsight(item.id, {
+      insight_title: displayTitle(item),
+      insight_summary: displaySummary(item),
+      implication_title: `研判：${displayTitle(item)}`,
+      implication_description: displaySummary(item),
+      requirement_title: `跟进：${displayTitle(item)}`,
+      requirement_description: displaySummary(item),
+      requirement_status: "draft",
+      source_note: report ? `由 ${report.day_key} 日报条目沉淀` : "由日报条目沉淀"
+    });
+    message.value = `已沉淀内部需求：${result.requirement.title}`;
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "沉淀内部需求失败";
+  } finally {
+    strategyItemId.value = "";
+  }
+}
+
+function toggleMilestoneForm(item: DailyReportItemRecord) {
+  milestoneItemId.value = milestoneItemId.value === item.id ? "" : item.id;
+  milestoneDrafts.value = {
+    ...milestoneDrafts.value,
+    [item.id]: milestoneDrafts.value[item.id] ?? ""
+  };
+}
+
+async function createEntityMilestone(item: DailyReportItemRecord) {
+  if (!canCreateEntityMilestone.value) {
+    return;
+  }
+  const entityName = (milestoneDrafts.value[item.id] || "").trim();
+  if (!entityName) {
+    error.value = "请先填写实体名称";
+    return;
+  }
+  const report = selectedReport.value;
+  milestoneSavingId.value = item.id;
+  error.value = "";
+  message.value = "";
+  try {
+    const result = await createDailyReportItemEntityMilestone(item.id, {
+      entity_name: entityName,
+      event_title: displayTitle(item),
+      event_brief: displaySummary(item),
+      impact_brief: displaySummary(item),
+      board: item.generated_news.category,
+      source_note: report ? `由 ${report.day_key} 日报条目登记` : "由日报条目登记"
+    });
+    milestoneDrafts.value = { ...milestoneDrafts.value, [item.id]: "" };
+    milestoneItemId.value = "";
+    message.value = `已登记实体事件：${result.entity_name} · ${result.title}`;
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "登记实体事件失败";
+  } finally {
+    milestoneSavingId.value = "";
+  }
+}
+
 function replaceItem(updated: DailyReportItemRecord) {
   const report = selectedReport.value;
   if (!report) {
@@ -714,11 +968,31 @@ function replaceItem(updated: DailyReportItemRecord) {
   }
 }
 
+function isAnchoredRenditionFormat(fmt: ReportFormatRecord) {
+  return Boolean(pendingRenditionAnchorId.value && pendingRenditionFormatCode.value === fmt.format_code);
+}
+
+function isAnchoredRenditionView() {
+  return Boolean(pendingRenditionAnchorId.value && rendition.value?.id === pendingRenditionAnchorId.value);
+}
+
 watch(selectedReport, ensureSelectedItem);
+
+watch(pendingItemAnchorId, () => {
+  applyPendingItemAnchor();
+  ensureSelectedItem();
+});
+
+watch(pendingRenditionFormatCode, () => {
+  applyPendingRenditionAnchor();
+});
 
 watch(detailItem, (item) => {
   if (item && commentsByItem.value[item.id] === undefined) {
     void loadComments(item);
+  }
+  if (item) {
+    void loadWatcherStatus(item);
   }
 });
 
@@ -729,8 +1003,10 @@ watch(
     selectedItemId.value = "";
     detailOpen.value = false;
     editingItemId.value = "";
+    watchersByItem.value = {};
     activeFormatCode.value = "company_sql_v1";
     rendition.value = null;
+    void loadFeedbackPolicy();
     void loadReports();
     void loadFormats();
   }
@@ -743,6 +1019,7 @@ watch(selectedReportId, () => {
 });
 
 onMounted(() => {
+  void loadFeedbackPolicy();
   void loadReports();
   void loadFormats();
 });
@@ -756,7 +1033,7 @@ onMounted(() => {
       <p>从推荐链路生成日报草稿，也支持把已校验公司 SQL 预览回填为可查看、可采信、可导出的日报。</p>
     </div>
     <div class="toolbar-actions">
-      <label class="date-control" title="日报日期">
+      <label v-if="canManageReports" class="date-control" title="日报日期">
         <span>日期</span>
         <input v-model="targetDayKey" type="date" />
       </label>
@@ -764,7 +1041,13 @@ onMounted(() => {
         <RefreshCw :size="18" />
         <span>刷新</span>
       </button>
-      <button type="button" class="icon-button" :disabled="generating" @click="generateDraft">
+      <button
+        v-if="canManageReports"
+        type="button"
+        class="icon-button"
+        :disabled="generating"
+        @click="generateDraft"
+      >
         <Sparkles :size="18" />
         <span>{{ generating ? "生成中" : "生成日报草稿" }}</span>
       </button>
@@ -799,7 +1082,7 @@ onMounted(() => {
         </div>
         <div class="toolbar-actions compact">
           <button
-            v-if="selectedReport.status !== 'published'"
+            v-if="canManageReports && selectedReport.status !== 'published'"
             type="button"
             class="icon-button secondary"
             :disabled="regeneratingReportId === selectedReport.id"
@@ -809,7 +1092,7 @@ onMounted(() => {
             <span>{{ regeneratingReportId === selectedReport.id ? "重跑中" : "重跑生成稿" }}</span>
           </button>
           <button
-            v-if="selectedReport.status !== 'published'"
+            v-if="canManageReports && selectedReport.status !== 'published'"
             type="button"
             class="icon-button secondary"
             :disabled="publishingId === selectedReport.id"
@@ -833,7 +1116,8 @@ onMounted(() => {
             v-for="fmt in enabledFormats"
             :key="fmt.format_code"
             type="button"
-            :class="{ active: activeFormatCode === fmt.format_code }"
+            :class="{ active: activeFormatCode === fmt.format_code, anchored: isAnchoredRenditionFormat(fmt) }"
+            :aria-current="isAnchoredRenditionFormat(fmt) ? 'true' : undefined"
             @click="switchFormat(fmt.format_code)"
           >
             {{ fmt.format_code === "company_sql_v1" ? `${fmt.name} · 编审` : fmt.name }}
@@ -856,11 +1140,23 @@ onMounted(() => {
           >
             导出 HTML
           </a>
-          <button type="button" class="table-action" @click="showFormatPanel = true">格式</button>
+          <button
+            v-if="canManageReports"
+            type="button"
+            class="table-action"
+            @click="showFormatPanel = true"
+          >
+            格式
+          </button>
         </div>
       </div>
 
-      <div v-if="activeFormatCode !== 'company_sql_v1'" class="rendition-view">
+      <div
+        v-if="activeFormatCode !== 'company_sql_v1'"
+        class="rendition-view"
+        :class="{ anchored: isAnchoredRenditionView() }"
+        :aria-current="isAnchoredRenditionView() ? 'true' : undefined"
+      >
         <p v-if="renditionLoading" class="empty-state">正在生成成稿…</p>
         <template v-else-if="rendition">
           <section v-if="activeFormat?.headline_enabled && renditionHeadlines.length" class="rendition-headlines">
@@ -886,7 +1182,7 @@ onMounted(() => {
                 <div class="rendition-item-head">
                   <h5>{{ index + 1 }}、{{ renditionSnapshots[itemId].title }}</h5>
                   <button
-                    v-if="activeFormat?.headline_enabled"
+                    v-if="canManageReports && activeFormat?.headline_enabled"
                     type="button"
                     class="headline-toggle"
                     :class="{ active: renditionSnapshots[itemId].is_headline }"
@@ -930,6 +1226,9 @@ onMounted(() => {
             本报告暂无采信条目，先在内网版视图完成采信。
           </p>
         </template>
+        <p v-else class="empty-state">
+          该格式的成稿尚未生成：日报发布时会自动投影，请等待发布或联系编辑。
+        </p>
       </div>
 
       <div v-if="activeFormatCode === 'company_sql_v1'" class="daily-item-list">
@@ -1014,10 +1313,14 @@ onMounted(() => {
           </article>
 
           <aside class="modal-editor-panel">
-            <div class="editor-panel-section">
+            <div
+              v-if="canManageReports || canCreateStrategyLoop || canCreateEntityMilestone"
+              class="editor-panel-section"
+            >
               <p class="eyebrow">当前处理</p>
               <div class="editor-actions">
                 <button
+                  v-if="canManageReports"
                   type="button"
                   class="mini-action"
                   :class="{ active: detailItem.adoption_status === 2 }"
@@ -1028,6 +1331,7 @@ onMounted(() => {
                   <span>采信</span>
                 </button>
                 <button
+                  v-if="canManageReports"
                   type="button"
                   class="mini-action"
                   :class="{ active: detailItem.adoption_status === 1 }"
@@ -1038,6 +1342,7 @@ onMounted(() => {
                   <span>备选</span>
                 </button>
                 <button
+                  v-if="canManageReports"
                   type="button"
                   class="mini-action"
                   :class="{ active: detailItem.adoption_status === 0 }"
@@ -1047,14 +1352,48 @@ onMounted(() => {
                   <CircleSlash2 :size="15" />
                   <span>剔除</span>
                 </button>
+                <button
+                  v-if="canCreateStrategyLoop"
+                  type="button"
+                  class="mini-action"
+                  :disabled="strategyItemId === detailItem.id"
+                  @click="createStrategyLoop(detailItem)"
+                >
+                  <Sparkles :size="15" />
+                  <span>{{ strategyItemId === detailItem.id ? "沉淀中" : "沉淀需求" }}</span>
+                </button>
+                <button
+                  v-if="canCreateEntityMilestone"
+                  type="button"
+                  class="mini-action"
+                  :class="{ active: milestoneItemId === detailItem.id }"
+                  @click="toggleMilestoneForm(detailItem)"
+                >
+                  <FileText :size="15" />
+                  <span>登记事件</span>
+                </button>
               </div>
+              <form
+                v-if="milestoneItemId === detailItem.id"
+                class="inline-milestone-form"
+                @submit.prevent="createEntityMilestone(detailItem)"
+              >
+                <label>
+                  实体名称
+                  <input v-model="milestoneDrafts[detailItem.id]" placeholder="公司、模型、产品或技术名" />
+                </label>
+                <button type="submit" class="icon-button" :disabled="milestoneSavingId === detailItem.id">
+                  <Save :size="15" />
+                  <span>{{ milestoneSavingId === detailItem.id ? "登记中" : "保存事件" }}</span>
+                </button>
+              </form>
             </div>
 
             <div class="editor-panel-section">
               <div class="section-title-row">
                 <p class="eyebrow">编辑</p>
                 <button
-                  v-if="editingItemId !== detailItem.id"
+                  v-if="canManageReports && editingItemId !== detailItem.id"
                   type="button"
                   class="mini-action"
                   @click="beginEdit(detailItem)"
@@ -1119,7 +1458,19 @@ onMounted(() => {
                 <button
                   type="button"
                   class="mini-action"
-                  :disabled="actingItemId === detailItem.id"
+                  :class="{ active: watcherStatus(detailItem)?.watching }"
+                  :disabled="watchingItemId === detailItem.id || loadingWatcherId === detailItem.id"
+                  :aria-pressed="watcherStatus(detailItem)?.watching ? 'true' : 'false'"
+                  @click="toggleWatchItem(detailItem)"
+                >
+                  <Bell :size="15" />
+                  <span>{{ watcherStatus(detailItem)?.watching ? "已关注" : "关注" }}</span>
+                  <span v-if="watcherStatus(detailItem)">· {{ watcherStatus(detailItem)?.watcher_count }}</span>
+                </button>
+                <button
+                  type="button"
+                  class="mini-action"
+                  :disabled="actingItemId === detailItem.id || !canReact"
                   @click="likeItem(detailItem)"
                 >
                   <Heart :size="15" />
@@ -1130,22 +1481,26 @@ onMounted(() => {
                   :key="score"
                   type="button"
                   class="star-button"
-                  :disabled="actingItemId === detailItem.id"
+                  :disabled="actingItemId === detailItem.id || !canRate"
                   @click="rateItem(detailItem, score)"
                 >
                   <Star :size="15" :fill="score <= Math.round(detailItem.rating_avg) ? 'currentColor' : 'none'" />
                 </button>
               </div>
+              <p v-if="!canReact || !canRate || !canComment" class="muted-line">
+                当前工作台已关闭浏览者的部分反馈入口。
+              </p>
               <div class="comment-box">
                 <textarea
                   v-model="commentDrafts[detailItem.id]"
                   rows="3"
                   placeholder="写一条评论或判断依据"
+                  :disabled="!canComment"
                 />
                 <button
                   type="button"
                   class="mini-action active"
-                  :disabled="actingItemId === detailItem.id"
+                  :disabled="actingItemId === detailItem.id || !canComment"
                   @click="submitComment(detailItem)"
                 >
                   <Send :size="15" />
@@ -1154,7 +1509,13 @@ onMounted(() => {
               </div>
               <div class="comment-list">
                 <p v-if="loadingCommentsId === detailItem.id" class="muted-line">评论加载中</p>
-                <article v-for="comment in commentsByItem[detailItem.id] || []" :key="comment.id">
+                <article
+                  v-for="comment in commentsByItem[detailItem.id] || []"
+                  :key="comment.id"
+                  class="comment-row"
+                  :class="{ anchored: isAnchoredComment(comment) }"
+                  :aria-current="isAnchoredComment(comment) ? 'true' : undefined"
+                >
                   <MessageCircle :size="14" />
                   <p>{{ comment.body }}</p>
                 </article>

@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "description": "Audit, ops and observability contract. Design: docs/backend/audit-ops-observability-design.md.",
+  "owned_by": "Audit / Ops / Observability",
+  "tables": {
+    "audit_logs": {
+      "purpose": "Append-only management and sensitive business operation trail.",
+      "required_fields": [
+        "id",
+        "user_id",
+        "workspace_code",
+        "action",
+        "object_type",
+        "object_id",
+        "ip_address",
+        "user_agent",
+        "detail_json",
+        "created_at"
+      ],
+      "workspace_code": {
+        "default": "global",
+        "rule": "Workspace-scoped operations must write the concrete workspace_code. Global identity/login operations use global unless a workspace is present in detail_json."
+      },
+      "detail_json": {
+        "privacy_rule": "Must not contain token, cookie, password, OIDC code, .env content, or raw secret-like values.",
+        "redaction_rule": "write_audit must pass detail_json through the shared secret-like redactor. Keys containing token, secret, password, cookie, authorization, api_key, .env, client_secret, or session are stored as [REDACTED]."
+      }
+    }
+  },
+  "api": {
+    "list_audit_logs": {
+      "method": "GET",
+      "path": "/api/audit-logs",
+      "query": {
+        "workspace_code": {
+          "type": "string",
+          "required": false,
+          "rule": "When present, response is filtered to that workspace and caller must be super_admin or workspace admin."
+        },
+        "action": {
+          "type": "string",
+          "required": false
+        },
+        "object_type": {
+          "type": "string",
+          "required": false
+        },
+        "limit": {
+          "type": "integer",
+          "default": 80,
+          "minimum": 1,
+          "maximum": 300
+        }
+      },
+      "permissions": {
+        "without_workspace_code": "Requires global super_admin and returns global query scope.",
+        "with_workspace_code": "Requires global super_admin or workspace admin membership for that workspace.",
+        "workspace_viewer": "403"
+      },
+      "response_fields": [
+        "id",
+        "user_id",
+        "user_name",
+        "workspace_code",
+        "action",
+        "object_type",
+        "object_id",
+        "ip_address",
+        "user_agent",
+        "detail_json",
+        "created_at"
+      ]
+    }
+  },
+  "frontend": {
+    "audit_logs_page": {
+      "route": "/audit-logs",
+      "request_rule": "Call GET /api/audit-logs with the current workspace_code and limit=80.",
+      "empty_state": "Must explain which actions create audit records.",
+      "error_state": "Must show API errors instead of rendering an empty success state."
+    }
+  },
+  "evidence": {
+    "backend_tests": [
+      "backend/tests/test_operations_api.py::test_audit_logs_are_workspace_scoped_for_workspace_admin",
+      "backend/tests/test_operations_api.py::test_audit_details_redact_secret_like_values"
+    ],
+    "frontend_tests": [
+      "frontend/src/pages/AuditLogsPage.spec.ts"
+    ]
+  }
+}

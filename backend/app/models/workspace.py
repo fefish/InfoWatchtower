@@ -17,6 +17,11 @@ class Workspace(IdMixin, SyncMixin, TimestampMixin, Base):
     workspace_type: Mapped[str] = mapped_column(String(64), default="intelligence", index=True)
     default_domain_code: Mapped[str] = mapped_column(String(64), default="ai")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    # 工作台可见性：private（仅成员可见）| internal_public（登录用户可在
+    # GET /api/workspaces/discover 发现并自助订阅为 viewer；游客会话可只读浏览）。
+    # 种子只在建台时赋初值（planning_intel=internal_public），之后由
+    # PATCH /api/workspaces/{code}/visibility 管理，重播种不回滚。
+    visibility: Mapped[str] = mapped_column(String(32), default="private", index=True)
     config_json: Mapped[JsonDict] = mapped_column(JsonColumn, default=dict)
 
     sections: Mapped[list[WorkspaceSection]] = relationship(back_populates="workspace")

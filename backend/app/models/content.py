@@ -180,7 +180,12 @@ class RecommendationItem(IdMixin, ScopeMixin, SyncMixin, TimestampMixin, Base):
 class GeneratedNews(IdMixin, ScopeMixin, SyncMixin, TimestampMixin, Base):
     __tablename__ = "generated_news"
 
-    recommendation_item_id: Mapped[str] = mapped_column(ForeignKey("recommendation_items.id"), index=True)
+    # nullable：intranet 侧联动同步的成稿没有本地推荐链（docs/deployment/deployment-topology.md §3.4）
+    recommendation_item_id: Mapped[str | None] = mapped_column(
+        ForeignKey("recommendation_items.id"),
+        nullable=True,
+        index=True,
+    )
     news_item_id: Mapped[str] = mapped_column(ForeignKey("news_items.id"), index=True)
     category: Mapped[str] = mapped_column(String(64), default="基础竞争力", index=True)
     title: Mapped[str] = mapped_column(Text)
@@ -194,6 +199,6 @@ class GeneratedNews(IdMixin, ScopeMixin, SyncMixin, TimestampMixin, Base):
     generated_by: Mapped[str] = mapped_column(String(64), default="system")
     generation_status: Mapped[str] = mapped_column(String(32), default="draft", index=True)
 
-    recommendation_item: Mapped[RecommendationItem] = relationship(back_populates="generated_news")
+    recommendation_item: Mapped[RecommendationItem | None] = relationship(back_populates="generated_news")
     news_item: Mapped[NewsItem] = relationship(back_populates="generated_news_items")
     daily_report_items: Mapped[list[DailyReportItem]] = relationship(back_populates="generated_news")

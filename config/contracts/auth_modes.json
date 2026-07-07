@@ -2,6 +2,8 @@
   "schema_version": 1,
   "description": "Unified authentication modes for public deployment and company intranet deployment.",
   "principal_key": "employee_no_or_public_user_id",
+  "implemented_auth_modes": ["local", "public_password", "oidc", "intranet_header"],
+  "implemented_auth_modes_note": "Only these values are legal AUTH_MODE settings today; per-deploy-mode combinations are whitelisted by config/contracts/deployment_modes.json modes.*.allowed_auth_modes and enforced at startup. Modes marked status=planned below are contract placeholders with zero implementation.",
   "modes": {
     "local": {
       "purpose": "Local development and early public beta.",
@@ -16,13 +18,15 @@
     "public_oidc": {
       "purpose": "Public internet deployment through OAuth/OIDC provider.",
       "identity_source": "OIDC claims",
-      "auto_provision": true
+      "auto_provision": true,
+      "status": "planned; use the generic oidc mode today"
     },
     "oidc": {
-      "purpose": "Reserved generic OIDC mode.",
+      "purpose": "Generic OIDC authorization code flow with PKCE for cloud/extranet SSO.",
       "identity_source": "OIDC claims",
       "auto_provision": true,
-      "status": "adapter protocol only; login returns 501 until provider config is added"
+      "status": "implemented via GET /api/auth/oidc/start and GET /api/auth/oidc/callback; requires OIDC_CLIENT_ID and OIDC_ISSUER or explicit endpoints; supports configured claim mapping, guarded next redirect, friendly auth_error redirect, and automatic workspace membership",
+      "id_token_verification": "Once the token endpoint returns an id_token it is verified as a whole: alg=none is always rejected. When a JWKS is available (OIDC_JWKS_URI env, or jwks_uri from issuer discovery) RS256/RS384/RS512 signatures are verified (stdlib RSASSA-PKCS1-v1_5, kid-matched JWK; non-RS* algs are rejected when JWKS is configured). Without a JWKS, iss/aud/exp are strictly validated and nonce must be present and match. The userinfo main path still enforces the id_token nonce; userinfo itself needs no nonce because it is a server-side direct TLS call bound by PKCE."
     },
     "intranet_header": {
       "purpose": "Company intranet deployment behind trusted gateway/portal.",
@@ -33,17 +37,20 @@
         "display_name": "X-Employee-Name",
         "department": "X-Department",
         "email": "X-Email"
-      }
+      },
+      "trusted_proxy_rule": "When AUTH_TRUSTED_PROXY_CIDRS is non-empty, identity headers are only trusted when the direct peer (request.client.host) falls inside the CIDR whitelist; requests from untrusted peers are treated as anonymous (401). Empty config keeps the legacy trust-any-peer behavior and logs a startup warning; invalid CIDRs fail startup."
     },
     "intranet_oidc": {
       "purpose": "Company intranet deployment through enterprise OIDC.",
       "identity_source": "enterprise OIDC claims",
-      "auto_provision": true
+      "auto_provision": true,
+      "status": "planned"
     },
     "intranet_saml": {
       "purpose": "Company intranet deployment through enterprise SAML.",
       "identity_source": "SAML attributes",
-      "auto_provision": true
+      "auto_provision": true,
+      "status": "planned"
     }
   },
   "local_user_fields": [
@@ -64,23 +71,129 @@
     "password_reset_tokens": "Hashed reset tokens only; plaintext token is never stored.",
     "login_attempts": "Username + IP success/failure events for local rate limiting and audit support."
   },
+  "user_groups": {
+    "purpose": "Operational grouping of users. A group is NOT a third permission layer: it grants no capability by itself; permissions stay with global roles and workspace memberships.",
+    "tables": {
+      "user_groups": "code/name/description",
+      "user_group_members": "group_id/user_id, unique per group"
+    },
+    "endpoints": [
+      "GET /api/user-groups",
+      "POST /api/user-groups",
+      "GET /api/user-groups/{group_code}",
+      "PATCH /api/user-groups/{group_code}",
+      "DELETE /api/user-groups/{group_code}",
+      "POST /api/user-groups/{group_code}/members",
+      "DELETE /api/user-groups/{group_code}/members/{user_id}"
+    ],
+    "permission": "super_admin or editor_admin for group CRUD and group membership; bulk workspace enrollment additionally requires workspace admin on the target workspace",
+    "uses": [
+      "Bulk workspace enrollment: POST /api/workspaces/{workspace_code}/members/bulk expands group_code into per-user memberships idempotently (rules in workspace_model.json membership_management).",
+      "Task collaboration organization: assignment pickers group workspace members; assignment semantics live in strategic_loop.json task_assignment_v1."
+    ],
+    "audit_actions": [
+      "user_group.create",
+      "user_group.update",
+      "user_group.delete",
+      "user_group.member.add",
+      "user_group.member.remove",
+      "workspace.member.bulk_upsert"
+    ]
+  },
+  "guest_access": {
+    "env_key": "AUTH_GUEST_ENABLED",
+    "default": false,
+    "endpoint": "POST /api/auth/guest-login (CSRF-exempt like /api/auth/login: the caller has no session or CSRF cookie yet)",
+    "meta_field": "GET /api/meta/runtime exposes auth_guest_enabled so the login page can render the guest entry",
+    "scope": "Overlay switch on top of AUTH_MODE (not an AUTH_MODE value). Startup fail-fast restricts it to DEPLOY_MODE standalone/cloud; intranet gateways and extranet machine feeds must never carry anonymous sessions.",
+    "semantics": [
+      "Guest is one shared read-only local account: external_provider=guest, external_id=guest, global role viewer, no password (cannot use password login or change-password flows).",
+      "Guest sessions hold no workspace memberships. They browse enabled workspaces with visibility=internal_public through an implicit viewer perspective (workspace_model.json discovery_and_subscription); private workspaces stay invisible.",
+      "Every unsafe-method request from a guest session is rejected 403 by one central gate in get_current_user (only /api/auth/logout passes), with a register-first hint; reactions/comments/subscriptions never need per-endpoint guest checks.",
+      "Turning AUTH_GUEST_ENABLED off invalidates existing guest sessions immediately (treated as unauthenticated).",
+      "Guest logins are audited as auth.guest_login."
+    ]
+  },
   "password_flows": {
     "invite_accept": "Anonymous users can accept a pending invite code, create a local password account, receive the configured global role and explicit workspace memberships, and get a session cookie.",
-    "change_password": "Local users can change password with current_password; must_change_password users may only call /api/auth/me, /api/auth/logout and /api/auth/password/change until complete.",
+    "change_password": "Only users with external_provider=local can change password with current_password. OIDC/intranet_header and other external identities return Password is managed externally; frontend /account must hide local password fields for those identities. must_change_password users may only call /api/auth/me, /api/auth/logout and /api/auth/password/change until complete.",
     "forgot_password": "Always returns 200; without SMTP it writes audit only and does not create a token.",
-    "admin_reset": "Super admins can issue one temporary password and set users.status=must_change_password."
+    "admin_reset": "Super admins can issue one temporary password and set users.status=must_change_password only for external_provider=local users; external identities are managed by their provider."
+  },
+  "invite_statuses": [
+    "pending",
+    "accepted",
+    "revoked",
+    "expired"
+  ],
+  "invite_public_page": {
+    "route": "/invite/:code",
+    "read_endpoint": "GET /api/auth/invites/{code}",
+    "accept_endpoint": "POST /api/auth/invites/{code}/accept",
+    "render_rule": "Only pending invites render the account creation form. accepted, revoked and expired invites must render readable status explanations and no submit form.",
+    "client_validation": "username and display_name are required; password must be at least 8 characters and match confirmPassword before calling the API.",
+    "error_mapping": "Invite not found, Invite is accepted/revoked/expired, Username already exists and HTTP 422 must be shown as user-facing messages."
+  },
+  "oidc_claim_mapping": {
+    "external_id_env": "OIDC_CLAIM_EXTERNAL_ID",
+    "employee_no_env": "OIDC_CLAIM_EMPLOYEE_NO",
+    "username_env": "OIDC_CLAIM_USERNAME",
+    "display_name_env": "OIDC_CLAIM_DISPLAY_NAME",
+    "department_env": "OIDC_CLAIM_DEPARTMENT",
+    "email_env": "OIDC_CLAIM_EMAIL",
+    "supports_dot_path": true,
+    "missing_external_id_error": "OIDC claims missing configured external id claim: <claim>"
+  },
+  "auto_membership_mapping": {
+    "default_workspace_codes_env": "AUTH_DEFAULT_WORKSPACE_CODES",
+    "department_workspace_map_env": "AUTH_DEPARTMENT_WORKSPACE_MAP",
+    "default_format": "workspace_code[:workspace_role],workspace_code[:workspace_role]",
+    "department_format": "department:workspace_code[:workspace_role],department:workspace_code[:workspace_role]",
+    "default_workspace_role": "viewer",
+    "role_update_rule": "add missing memberships and upgrade to the configured role when higher; never downgrade existing workspace roles",
+    "applies_to": ["oidc", "intranet_header"],
+    "runtime_visibility": "GET /api/meta/runtime exposes sanitized env default_workspaces and department_workspaces for read-only deployment-layer display.",
+    "workspace_edit_api": {
+      "get": "GET /api/workspaces/{workspace_code}/auth-membership-mapping",
+      "patch": "PATCH /api/workspaces/{workspace_code}/auth-membership-mapping",
+      "permission": "super_admin",
+      "storage": "workspaces.config_json.auth_membership_mapping.department_workspaces",
+      "rule": "Stored workspace department mappings are merged with env mappings during oidc and intranet_header auto provisioning; higher workspace_role wins and existing manual roles are never downgraded."
+    }
+  },
+  "login_redirect": {
+    "oidc_start_query": "GET /api/auth/oidc/start?next=/target",
+    "allowed_next": "same-app relative paths starting with / but not //",
+    "local_password_login": "frontend /login honors the redirect query from router guard",
+    "oidc_error_redirect": "Browser OIDC start/callback failures redirect to /login?auth_error=<code> instead of exposing provider/backend details",
+    "oidc_error_codes": [
+      "identity_resolution_failed",
+      "membership_mapping_failed",
+      "oidc_not_configured",
+      "provider_error",
+      "state_mismatch",
+      "state_missing",
+      "token_exchange_failed"
+    ]
   },
   "login_rate_limit": {
     "window_minutes": 15,
     "max_failures_per_username_ip": 5,
     "blocked_status": 429,
-    "success_clears_window": true
+    "success_clears_window": true,
+    "client_ip_rule": "The rate-limit IP shares the trusted-proxy decision with header identity: X-Forwarded-For (first hop) is only honored when the direct peer is inside AUTH_TRUSTED_PROXY_CIDRS; otherwise (including when the CIDR list is unset) the direct peer IP is used, so rotating forged XFF values cannot bypass the 5-failures/15-minutes window by default."
   },
   "session_hardening": {
     "cookie_max_age_seconds_env": "AUTH_SESSION_TTL_SECONDS",
     "cookie_secure_env": "AUTH_SESSION_COOKIE_SECURE; defaults to true when APP_ENV=production, but local HTTP Docker acceptance may set false",
     "payload_nonce": "users.updated_at serialized as sv; changing password or admin reset invalidates old cookies",
-    "startup_self_check": "APP_ENV=production requires DATABASE_URL; AUTH_MODE=public_password requires AUTH_SESSION_SECRET at API startup"
+    "secret_rotation": {
+      "env": "AUTH_SESSION_SECRETS",
+      "format": "comma-separated secret list; when set it overrides the single-value AUTH_SESSION_SECRET",
+      "semantics": "The first entry signs newly issued session cookies; every entry can verify existing cookies. To rotate without logging users out, prepend the new secret and keep the old one at the tail; removing a secret from the list immediately invalidates cookies signed with it.",
+      "startup_check": "The fail-fast secret check passes when either AUTH_SESSION_SECRET or AUTH_SESSION_SECRETS is non-empty (Settings syncs the first rotation entry back into auth_session_secret so all single-value read points see the signing secret)."
+    },
+    "startup_self_check": "APP_ENV=production requires DATABASE_URL. AUTH_SESSION_SECRET (or the AUTH_SESSION_SECRETS rotation list) must be non-empty for every auth mode (local/public_password/oidc/intranet_header all sign session cookies); the check runs in validate_deploy_settings shared by the API, scheduler and worker entrypoints, with the original public_password check in main.py kept as a fallback."
   },
   "setup_flow": {
     "status_endpoint": "GET /api/setup/status -> {needs_setup}",
@@ -101,17 +214,19 @@
     "route_min_roles": {
       "viewer": [
         "workspace sections and label policy read",
+        "workspace feedback policy read",
         "sources list for a workspace",
         "news items and dedupe groups",
         "ingestion and recommendation run reads when workspace_code is provided",
         "daily and weekly report reads",
+        "daily report item reactions, ratings and comments when workspace feedback_policy allows viewer feedback",
         "report format list and rendition export",
         "export job list/detail/trace when workspace_code or job workspace is known"
       ],
       "member": [
         "daily and weekly report publish",
         "daily and weekly report item edit",
-        "daily report item reactions, ratings and comments",
+        "daily report item reactions, ratings and comments when viewer feedback is closed",
         "daily generated-news rerun",
         "weekly report creation",
         "rendition regeneration",
@@ -119,7 +234,9 @@
       ],
       "admin": [
         "workspace label policy update",
+        "workspace feedback policy update",
         "workspace member list/add/remove in that workspace",
+        "workspace member owner downgrade or owner removal requires confirm_dangerous_change and last owner is still blocked",
         "user candidate list with workspace_code",
         "custom source create/update/link in that workspace",
         "news normalization, ingestion, backfill, recommendation and daily pipeline runs",
@@ -137,12 +254,60 @@
       ]
     }
   },
+  "permission_change_operations": {
+    "list_endpoint": "GET /api/identity/permission-changes",
+    "rollback_endpoint": "POST /api/identity/permission-rollbacks",
+    "permission": "super_admin",
+    "rollback_request": {
+      "audit_log_ids": "1-20 audit log ids from supported permission change actions",
+      "confirm_dangerous_change": "Required when a rollback could downgrade or remove an owner; backend still blocks the last super_admin and last workspace owner"
+    },
+    "supported_actions": [
+      "users.roles.update",
+      "workspace.member.upsert",
+      "workspace.member.remove",
+      "workspace.feedback_policy.update",
+      "workspace.auth_membership_mapping.update"
+    ],
+    "rules": [
+      "Supported audit logs must include before/after snapshots sufficient to explain the diff and restore the previous value.",
+      "Rollback writes audit_logs.action=identity.permission_rollback with the source audit log id and before/after rollback snapshots.",
+      "Rollback cannot remove the last active super_admin or the last enabled workspace owner.",
+      "The /users policy view may render diffs and batch rollback only from this API; it must not infer recoverability from raw audit JSON alone."
+    ]
+  },
   "audit_snapshot_fields": [
     "user_id",
     "external_provider",
     "external_id_snapshot",
     "employee_no_snapshot",
     "display_name_snapshot"
+  ],
+  "identity_audit_actions": [
+    "auth.guest_login",
+    "invite.accept",
+    "invite.create",
+    "invite.revoke",
+    "password.admin_reset",
+    "password.change",
+    "password.forgot",
+    "password.reset",
+    "user_group.create",
+    "user_group.update",
+    "user_group.delete",
+    "user_group.member.add",
+    "user_group.member.remove",
+    "workspace.auth_membership_mapping.update",
+    "identity.permission_rollback",
+    "users.patch",
+    "users.roles.update",
+    "workspace.feedback_policy.update",
+    "workspace.member.bulk_upsert",
+    "workspace.member.remove",
+    "workspace.member.subscribe",
+    "workspace.member.unsubscribe",
+    "workspace.member.upsert",
+    "workspace.visibility.update"
   ],
   "rbac_rule": "External identity proves who the user is; InfoWatchtower roles decide what the user can do."
 }

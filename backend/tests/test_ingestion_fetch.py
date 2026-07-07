@@ -99,3 +99,59 @@ def test_raw_entry_key_is_deterministically_shortened_for_long_feed_ids():
     assert normalized == normalize_raw_entry_key(long_key)
     assert normalized != long_key
     assert "#" in normalized
+
+
+class DuplicateLinkListingAdapter:
+    """真实列表页形态：同一篇文章在轮播位与列表位出现两次，entry_key 相同。"""
+
+    source_type = "page_monitor"
+
+    async def fetch(self, data_source: DataSource) -> list[RawItemInput]:
+        first = RawItemInput(
+            entry_key="https://example.com/news/ocr/",
+            source_title="OCR announcement (hero)",
+            source_url="https://example.com/news/ocr/",
+            raw_content="hero copy",
+            published_at=None,
+            raw_payload_json={"slot": "hero"},
+        )
+        second = RawItemInput(
+            entry_key="https://example.com/news/ocr/",
+            source_title="OCR announcement (list)",
+            source_url="https://example.com/news/ocr/",
+            raw_content="list copy",
+            published_at=None,
+            raw_payload_json={"slot": "list"},
+        )
+        return [first, second]
+
+
+@pytest.mark.asyncio
+async def test_duplicate_entry_keys_within_one_batch_upsert_once():
+    session = make_session()
+    data_source = DataSource(
+        workspace_code="shared",
+        domain_code="ai",
+        source_type="page_monitor",
+        name="Example Pages",
+        url="https://example.com/news/",
+    )
+    session.add(data_source)
+    session.commit()
+
+    registry = AdapterRegistry()
+    registry.register(DuplicateLinkListingAdapter())
+    fetched_at = datetime(2026, 7, 7, 9, tzinfo=UTC)
+
+    outcome = await fetch_source_to_raw_items(session, data_source.id, registry, fetched_at)
+    session.commit()
+
+    # 批内重复 entry_key 只落一行，不撞 uq_raw_items_source_entry
+    assert session.scalar(select(func.count(RawItem.id))) == 1
+    assert outcome.created == 1
+    assert outcome.updated == 0
+
+    row = session.scalar(select(RawItem))
+    assert row is not None
+    # 后出现者覆盖先出现者，与"同 entry_key 重抓刷新"语义一致
+    assert row.raw_payload_json["slot"] == "list"

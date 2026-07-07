@@ -1,33 +1,74 @@
 from __future__ import annotations
 
+from collections import Counter
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.api.routes.auth import assert_workspace_member, get_current_user, require_super_admin
+from app.api.routes.auth import (
+    assert_workspace_member,
+    get_current_user,
+    require_capability,
+    require_super_admin,
+)
 from app.auth.service import write_audit
 from app.core.config import Settings, get_settings
 from app.core.database import get_db_session
 from app.ingestion.fetch import SourceFetchError, SourceNotFoundError, fetch_source_to_raw_items
-from app.ingestion.source_seeds import import_legacy_sources, import_tech_insight_loop_sources
-from app.models.content import DataSource
+from app.ingestion.source_seeds import (
+    import_legacy_sources,
+    import_tech_insight_loop_sources,
+    preview_legacy_sources,
+    preview_tech_insight_loop_sources,
+)
+from app.models.content import DataSource, IngestionRun, NewsItem, RawItem
 from app.models.identity import User
 from app.models.workspace import Workspace, WorkspaceSourceLink
 from app.schemas.sources import (
     CUSTOM_SOURCE_TYPES,
     DataSourceCreate,
     DataSourceCreateRead,
+    DataSourceDetailRead,
     DataSourceDefinitionUpdate,
+    DataSourceRecentRawRead,
     DataSourceRead,
+    DataSourceRunSummaryRead,
+    DataSourceTrendPointRead,
     DataSourceWorkspaceConfigUpdate,
     LegacySeedImportRead,
     SourceFetchRead,
+    SourceImportPreviewRead,
     TechInsightLoopImportRead,
 )
 
 router = APIRouter(prefix="/api/sources", tags=["sources"])
+INGESTION_CAPABILITY = Depends(require_capability("ingestion"))
+
+
+def _require_source_definition_write_capability(settings: Settings = Depends(get_settings)) -> None:
+    """源本体写操作跟随 ingestion 能力门（叠加在既有 RBAC 之外）。
+
+    intranet 形态的数据源经 sync 拉取，属只读镜像：本地新建/修改源定义会在
+    下次拉取时产生 revision/content_hash 冲突并污染共享源台账，因此关闭。
+    workspace-link 的启停/权重是消费侧工作台配置（不进 sync feed），不挂此门。
+    """
+    if not settings.capability_ingestion:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "capability_disabled",
+                "capability": "ingestion",
+                "message": (
+                    "当前实例的数据源为同步只读镜像，不能在本地新建或修改源定义；"
+                    "如需调整本工作台对某个源的启用/权重，请使用 workspace-link 配置。"
+                ),
+            },
+        )
+
+
+SOURCE_DEFINITION_WRITE_CAPABILITY = Depends(_require_source_definition_write_capability)
 
 
 @router.get("", response_model=list[DataSourceRead])
@@ -48,7 +89,12 @@ def list_sources(
     return [_source_to_read(source, links_by_source_id.get(source.id)) for source in sources]
 
 
-@router.post("", response_model=DataSourceCreateRead, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=DataSourceCreateRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[SOURCE_DEFINITION_WRITE_CAPABILITY],
+)
 def create_source(
     payload: DataSourceCreate,
     current_user: User = Depends(get_current_user),
@@ -110,7 +156,11 @@ def create_source(
     return DataSourceCreateRead(source=_source_to_read(source, link), created=created)
 
 
-@router.patch("/{source_id}", response_model=DataSourceRead)
+@router.patch(
+    "/{source_id}",
+    response_model=DataSourceRead,
+    dependencies=[SOURCE_DEFINITION_WRITE_CAPABILITY],
+)
 def update_source_definition(
     source_id: str,
     payload: DataSourceDefinitionUpdate,
@@ -178,7 +228,107 @@ def update_source_definition(
     return _source_to_read(source, link)
 
 
-@router.post("/import-legacy-seeds", response_model=LegacySeedImportRead)
+@router.get("/import-preview", response_model=SourceImportPreviewRead)
+def preview_source_import(
+    catalog: str = Query(pattern="^(legacy|tech)$"),
+    _: User = Depends(require_super_admin),
+    session: Session = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> SourceImportPreviewRead:
+    if catalog == "tech":
+        csv_path = Path(settings.tech_insight_loop_source_csv)
+        if not csv_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Tech Insight Loop source CSV does not exist: {csv_path}",
+            )
+        preview = preview_tech_insight_loop_sources(session, csv_path)
+    else:
+        seed_root = Path(settings.legacy_seed_root)
+        if not seed_root.exists():
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Legacy seed root does not exist: {seed_root}",
+            )
+        preview = preview_legacy_sources(session, seed_root)
+    return SourceImportPreviewRead(
+        catalog=preview.catalog,
+        total=preview.total,
+        would_create=preview.would_create,
+        would_update=preview.would_update,
+        samples=[
+            {
+                "name": sample.name,
+                "source_type": sample.source_type,
+                "url": sample.url,
+            }
+            for sample in preview.samples
+        ],
+    )
+
+
+@router.get("/{source_id}", response_model=DataSourceDetailRead)
+def get_source_detail(
+    source_id: str,
+    workspace_code: str | None = Query(default=None),
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> DataSourceDetailRead:
+    source = session.get(DataSource, source_id)
+    if source is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Data source not found")
+    if workspace_code:
+        workspace = _get_enabled_workspace(session, workspace_code)
+        assert_workspace_member(session, current_user, workspace.code, min_role="viewer")
+    else:
+        require_super_admin(current_user)
+
+    workspace_link = _workspace_links_by_source_id(session, workspace_code).get(source.id)
+    raw_count = int(session.scalar(select(func.count(RawItem.id)).where(RawItem.data_source_id == source.id)) or 0)
+    news_statement = select(func.count(NewsItem.id)).where(NewsItem.data_source_id == source.id)
+    if workspace_code:
+        news_statement = news_statement.where(NewsItem.workspace_code == workspace_code)
+    news_count = int(session.scalar(news_statement) or 0)
+
+    recent_raw = session.scalars(
+        select(RawItem)
+        .where(RawItem.data_source_id == source.id)
+        .order_by(RawItem.fetched_at.desc(), RawItem.id.desc())
+        .limit(8),
+    ).all()
+    trend_raw = session.scalars(
+        select(RawItem)
+        .where(RawItem.data_source_id == source.id)
+        .order_by(RawItem.fetched_at.desc(), RawItem.id.desc())
+        .limit(500),
+    ).all()
+    run_summaries = _source_run_summaries(session, source.id, workspace_code)
+    return DataSourceDetailRead(
+        source=_source_to_read(source, workspace_link),
+        raw_count=raw_count,
+        news_count=news_count,
+        recent_raw_items=[
+            DataSourceRecentRawRead(
+                id=item.id,
+                source_title=item.source_title,
+                source_url=item.source_url,
+                raw_content_excerpt=_excerpt(item.raw_content),
+                fetched_at=item.fetched_at,
+                published_at=item.published_at,
+            )
+            for item in recent_raw
+        ],
+        recent_runs=run_summaries[:10],
+        error_logs=[summary for summary in run_summaries if summary.error][:8],
+        raw_trend=_raw_trend_points(trend_raw),
+    )
+
+
+@router.post(
+    "/import-legacy-seeds",
+    response_model=LegacySeedImportRead,
+    dependencies=[INGESTION_CAPABILITY],
+)
 def import_legacy_seed_sources(
     _: User = Depends(require_super_admin),
     session: Session = Depends(get_db_session),
@@ -196,7 +346,11 @@ def import_legacy_seed_sources(
     return LegacySeedImportRead(created=result.created, updated=result.updated, total=result.total)
 
 
-@router.post("/import-tech-insight-loop", response_model=TechInsightLoopImportRead)
+@router.post(
+    "/import-tech-insight-loop",
+    response_model=TechInsightLoopImportRead,
+    dependencies=[INGESTION_CAPABILITY],
+)
 def import_tech_insight_loop_seed_sources(
     _: User = Depends(require_super_admin),
     session: Session = Depends(get_db_session),
@@ -272,7 +426,11 @@ def update_source_workspace_link(
     return _source_to_read(source, link)
 
 
-@router.post("/{source_id}/fetch", response_model=SourceFetchRead)
+@router.post(
+    "/{source_id}/fetch",
+    response_model=SourceFetchRead,
+    dependencies=[INGESTION_CAPABILITY],
+)
 async def fetch_source(
     source_id: str,
     workspace_code: str | None = Query(default=None),
@@ -389,6 +547,73 @@ def _workspace_links_by_source_id(
         select(WorkspaceSourceLink).where(WorkspaceSourceLink.workspace_id == workspace.id),
     ).all()
     return {link.data_source_id: link for link in links}
+
+
+def _source_run_summaries(
+    session: Session,
+    source_id: str,
+    workspace_code: str | None,
+) -> list[DataSourceRunSummaryRead]:
+    statement = select(IngestionRun).order_by(IngestionRun.created_at.desc()).limit(80)
+    if workspace_code:
+        statement = statement.where(IngestionRun.workspace_code == workspace_code)
+    runs = session.scalars(statement).all()
+    summaries: list[DataSourceRunSummaryRead] = []
+    for run in runs:
+        source_summary = _run_source_summary(run, source_id)
+        if source_summary is None:
+            continue
+        summaries.append(
+            DataSourceRunSummaryRead(
+                run_id=run.id,
+                run_key=run.run_key,
+                run_type=run.run_type,
+                status=str(source_summary.get("status") or run.status),
+                completed_at=run.completed_at,
+                fetched=_int_value(source_summary.get("fetched")),
+                created=_int_value(source_summary.get("created")),
+                updated=_int_value(source_summary.get("updated")),
+                error=str(source_summary.get("error") or ""),
+            ),
+        )
+    return summaries
+
+
+def _run_source_summary(run: IngestionRun, source_id: str) -> dict[str, object] | None:
+    sources = (run.summary_json or {}).get("sources")
+    if not isinstance(sources, list):
+        return None
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        if str(source.get("data_source_id") or "") == source_id:
+            return source
+    return None
+
+
+def _raw_trend_points(items: list[RawItem]) -> list[DataSourceTrendPointRead]:
+    counts: Counter[str] = Counter()
+    for item in items:
+        value = item.published_at or item.fetched_at
+        counts[value.date().isoformat()] += 1
+    return [
+        DataSourceTrendPointRead(day_key=day_key, raw_count=count)
+        for day_key, count in sorted(counts.items())[-14:]
+    ]
+
+
+def _excerpt(value: object, limit: int = 180) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit].rstrip()}..."
+
+
+def _int_value(value: object) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _source_to_read(source: DataSource, workspace_link: WorkspaceSourceLink | None = None) -> DataSourceRead:

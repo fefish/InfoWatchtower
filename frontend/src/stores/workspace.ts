@@ -18,9 +18,21 @@ export const useWorkspaceStore = defineStore("workspace", {
     error: ""
   }),
   getters: {
-    current: (state) => state.options.find((item) => item.code === state.currentCode)
+    current: (state) => state.options.find((item) => item.code === state.currentCode),
+    // 当前工作台角色（viewer/member/admin/owner），未加载或无 membership 时为 null。
+    // super_admin 后端会折算成 owner（见 workspaces 路由 _current_workspace_role）。
+    currentRole(): string | null {
+      return this.current?.current_user_workspace_role ?? null;
+    }
   },
   actions: {
+    // 路由守卫用：只在还没加载过工作台列表时加载一次，避免每次导航重复请求。
+    async ensureLoaded() {
+      if (this.options.length > 0 || this.loading) {
+        return;
+      }
+      await this.loadWorkspaces();
+    },
     async loadWorkspaces() {
       this.loading = true;
       this.error = "";

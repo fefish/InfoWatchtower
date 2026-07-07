@@ -1,3 +1,5 @@
+import { apiUrl, requestJson, requestVoid } from "./http";
+
 export interface ReportFormatRecord {
   id: string;
   workspace_code: string;
@@ -76,6 +78,10 @@ export interface ReportRenditionRecord {
     group_distribution?: Record<string, number>;
     headline_titles?: string[];
     source_total?: number;
+    top_groups?: Array<{ name: string; count: number }>;
+    key_highlights?: string[];
+    summary_text?: string;
+    summary_generated_by?: string;
   };
   body_json: {
     format_code?: string;
@@ -87,23 +93,6 @@ export interface ReportRenditionRecord {
   };
   generated_by: string;
   generated_at: string | null;
-}
-
-async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    credentials: "same-origin",
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {})
-    },
-    ...init
-  });
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    const detail = typeof body.detail === "string" ? body.detail : `HTTP ${response.status}`;
-    throw new Error(detail);
-  }
-  return response.json() as Promise<T>;
 }
 
 export async function fetchReportFormats(workspaceCode: string): Promise<ReportFormatRecord[]> {
@@ -129,15 +118,13 @@ export async function updateReportFormat(
 }
 
 export async function deleteReportFormat(formatId: string): Promise<void> {
-  const response = await fetch(`/api/report-formats/${formatId}`, {
-    method: "DELETE",
-    credentials: "same-origin"
+  await requestVoid(`/api/report-formats/${formatId}`, {
+    method: "DELETE"
   });
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    const detail = typeof body.detail === "string" ? body.detail : `HTTP ${response.status}`;
-    throw new Error(detail);
-  }
+}
+
+export async function fetchDailyRenditions(reportId: string): Promise<ReportRenditionRecord[]> {
+  return requestJson<ReportRenditionRecord[]>(`/api/daily-reports/${reportId}/renditions`);
 }
 
 export async function regenerateDailyRendition(
@@ -151,9 +138,9 @@ export async function regenerateDailyRendition(
 }
 
 export function dailyRenditionExportUrl(reportId: string, formatCode: string, target: "md" | "html") {
-  return `/api/daily-reports/${reportId}/renditions/${formatCode}/export?target=${target}`;
+  return apiUrl(`/api/daily-reports/${reportId}/renditions/${formatCode}/export?target=${target}`);
 }
 
 export function weeklyRenditionExportUrl(reportId: string, formatCode: string, target: "md" | "html") {
-  return `/api/weekly-reports/${reportId}/renditions/${formatCode}/export?target=${target}`;
+  return apiUrl(`/api/weekly-reports/${reportId}/renditions/${formatCode}/export?target=${target}`);
 }

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
+from app.core.config import get_settings
 from app.core.database import get_session_factory
 from app.ingestion.runs import (
     DEFAULT_BACKFILL_SOURCE_TYPES,
@@ -14,7 +16,33 @@ from app.ingestion.runs import (
     run_workspace_ingestion,
 )
 
+logger = logging.getLogger(__name__)
+
 INGESTION_QUEUE_NAME = "infowatchtower"
+
+
+def ingestion_capability_skip(job_name: str, workspace_code: str) -> dict[str, Any] | None:
+    """采集类 job 的执行侧能力门（第二道防线）。
+
+    投递侧（API 403、scheduler 不投递、前端隐藏入口）都已有 ingestion 门，
+    但直接向 Redis 队列投递的任务仍会被 worker 照跑；契约 intranet 硬约束
+    “不跑外网 crawler”要求执行侧也校验一次：能力关闭时记日志并返回 skipped，
+    不触碰数据库。
+    """
+    settings = get_settings()
+    if settings.capability_ingestion:
+        return None
+    logger.warning(
+        "Refusing %s job for workspace %s: capability_ingestion is disabled (DEPLOY_MODE=%s).",
+        job_name,
+        workspace_code,
+        settings.deploy_mode,
+    )
+    return {
+        "status": "skipped",
+        "reason": "capability_ingestion_disabled",
+        "workspace_code": workspace_code,
+    }
 
 
 def run_workspace_ingestion_job(
@@ -25,6 +53,9 @@ def run_workspace_ingestion_job(
     source_timeout_seconds: float = DEFAULT_SOURCE_TIMEOUT_SECONDS,
     max_items_per_source: int | None = None,
 ) -> dict[str, Any]:
+    skipped = ingestion_capability_skip("workspace_ingestion", workspace_code)
+    if skipped is not None:
+        return skipped
     return asyncio.run(
         _run_workspace_ingestion_job(
             workspace_code,
@@ -50,6 +81,9 @@ def run_historical_backfill_job(
     retry_policy: str = "manual_run_no_retry",
     include_undated: bool = False,
 ) -> dict[str, Any]:
+    skipped = ingestion_capability_skip("historical_backfill", workspace_code)
+    if skipped is not None:
+        return skipped
     return asyncio.run(
         _run_historical_backfill_job(
             workspace_code,

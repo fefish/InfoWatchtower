@@ -9,7 +9,8 @@ from app.auth.service import ensure_auth_seed
 from app.core.config import get_settings
 from app.core.database import Base, get_engine
 from app.main import create_app
-from app.models.content import GeneratedNews, RawItem, RecommendationItem, RecommendationRun
+from app.models.content import GeneratedNews, NewsItem, RawItem, RecommendationItem, RecommendationRun
+from app.models.feedback import EditorialAction
 from app.models.reports import DailyReport, DailyReportItem
 from app.models.workspace import Workspace, WorkspaceSourceLink
 from app.normalization.news import NewsNormalizationRequest, normalize_workspace_raw_items
@@ -190,6 +191,61 @@ def test_rule_generated_key_points_use_content_keywords_not_source_metadata():
     assert "canonical_url" not in keywords
 
 
+def test_requirement_feedback_enters_recommendation_feedback_score():
+    session = make_session()
+    workspace = seed_workspace(session)
+    source = seed_source(session, workspace, name="Requirement Feedback Source")
+    add_raw_item(
+        session,
+        source,
+        "rss:requirement-feedback",
+        "Agent memory benchmark informs internal platform roadmap",
+        "https://example.com/requirement-feedback",
+        (
+            "The article describes agent memory architecture, retrieval quality, inference "
+            "latency, benchmark methodology, deployment constraints, and product roadmap impact."
+        ),
+    )
+    normalize_workspace_raw_items(
+        session,
+        NewsNormalizationRequest(workspace_code="planning_intel", source_types=[], limit=None),
+    )
+    news_item = session.scalar(select(NewsItem))
+    assert news_item is not None
+    session.add(
+        EditorialAction(
+            object_type="news_item",
+            object_id=news_item.id,
+            action_type="requirement.feedback_to_recommendation",
+            after_json={
+                "requirement_id": "req-feedback-1",
+                "outcome": "positive",
+                "score_delta": 80,
+                "source": "requirement_conclusion",
+            },
+            reason="已形成内部建设建议",
+        ),
+    )
+
+    run_daily_recommendation(
+        session,
+        RecommendationRunRequest(
+            workspace_code="planning_intel",
+            day_key="2026-05-05",
+            limit=15,
+            source_daily_limit=2,
+            create_daily_draft=True,
+        ),
+        now=datetime(2026, 5, 5, 10, tzinfo=UTC),
+    )
+    session.commit()
+
+    item = session.scalar(select(RecommendationItem).where(RecommendationItem.news_item_id == news_item.id))
+    assert item is not None
+    assert item.feedback_score == 80.0
+    assert "requirement_feedback_positive" in item.recommendation_reason
+
+
 def test_source_daily_limit_selects_at_most_configured_items_per_source():
     session = make_session()
     workspace = seed_workspace(session)
@@ -336,6 +392,131 @@ def test_selection_caps_pure_paper_concentration_when_vendor_items_exist():
     assert result.selected_total == 3
     assert len(selected_papers) <= 1
     assert len(selected_vendor) == 2
+
+
+def _seed_hardware_workspace(session):
+    """硬件工作台：关联 hardware domain pack + 自定义 label_set_code。"""
+    workspace = Workspace(
+        code="hardware_intel",
+        name="硬件情报工作台",
+        description="",
+        default_domain_code="hardware",
+        config_json={
+            "label_policy": {
+                "label_set_code": "hardware_intel_custom_categories",
+                "news_format_code": "tech_insight_v1",
+                "export_category_mode": "news_primary",
+                "allowed_primary_categories": ["算力芯片", "端侧设备", "供应链与制造"],
+                "secondary_labels_by_primary": {"算力芯片": ["GPU", "先进封装"]},
+                "default_category": "算力芯片",
+                "fallback_category": "算力芯片",
+            },
+        },
+    )
+    session.add(workspace)
+    session.flush()
+    return workspace
+
+
+def test_hardware_workspace_neutral_scoring_not_killed_by_ai_noise_rules():
+    """半导体/硬件工作台的核心内容（手机、可穿戴等端侧硬件）不被
+    planning_intel 的 AI 噪声规则（consumer_product 等）误杀。"""
+    session = make_session()
+    workspace = _seed_hardware_workspace(session)
+    source = seed_source(session, workspace, name="半导体产业观察")
+    add_raw_item(
+        session,
+        source,
+        "rss:hw-consumer",
+        "手机与可穿戴端侧芯片出货带动先进封装产能",
+        "https://example.com/hw-consumer",
+        (
+            "报道覆盖手机、可穿戴等端侧设备的 GPU 与 HBM 需求，"
+            "以及晶圆代工与封测产能的排产变化。"
+        ),
+    )
+    normalize_workspace_raw_items(
+        session,
+        NewsNormalizationRequest(workspace_code="hardware_intel", source_types=[], limit=None),
+    )
+
+    result = run_daily_recommendation(
+        session,
+        RecommendationRunRequest(
+            workspace_code="hardware_intel",
+            day_key="2026-05-05",
+            limit=15,
+            source_daily_limit=2,
+            create_daily_draft=True,
+        ),
+        now=datetime(2026, 5, 5, 10, tzinfo=UTC),
+    )
+    session.commit()
+
+    item = session.scalar(select(RecommendationItem))
+    assert item is not None
+    # 中性口径：无 AI 噪声降权，pack 先验关键词命中后进入日报候选
+    assert item.noise_types_json == []
+    assert item.admission_level in {"P0", "P1", "P2"}
+    assert item.selected is True
+    assert item.scorer_breakdown_json["mode"] == "workspace_neutral"
+    assert item.scorer_breakdown_json["policy_source"] == "domain_pack:hardware"
+    assert result.selected_total == 1
+
+    # 分类降级按 pack/policy 类目映射，不落 AI 十分类
+    generated = session.scalar(select(GeneratedNews))
+    assert generated is not None
+    assert generated.category == "算力芯片"
+    # 生成降级文案人称取自工作台，不再自称规划部
+    assert "硬件情报工作台" in generated.content_json["effects"]
+    assert "规划部" not in generated.content_json["effects"]
+
+    # 自定义 label_set_code 随推荐链路运行 upsert 成 LabelSet 记录
+    from app.models.labels import LabelSet
+
+    stored = session.scalar(
+        select(LabelSet).where(LabelSet.code == "hardware_intel_custom_categories"),
+    )
+    assert stored is not None
+    assert stored.workspace_code == "hardware_intel"
+
+
+def test_planning_workspace_keeps_ai_noise_rules_for_consumer_content():
+    """planning_intel 的 AI 情报口径保持不变：消费电子内容仍被噪声规则拦截。"""
+    session = make_session()
+    workspace = seed_workspace(session)
+    source = seed_source(session, workspace, name="Consumer Gadget News")
+    add_raw_item(
+        session,
+        source,
+        "rss:consumer",
+        "新款手机与可穿戴设备发布",
+        "https://example.com/consumer-phone",
+        "新款手机和可穿戴设备上市，主打外观、价格与家电联动。",
+    )
+    normalize_workspace_raw_items(
+        session,
+        NewsNormalizationRequest(workspace_code="planning_intel", source_types=[], limit=None),
+    )
+
+    run_daily_recommendation(
+        session,
+        RecommendationRunRequest(
+            workspace_code="planning_intel",
+            day_key="2026-05-05",
+            limit=15,
+            source_daily_limit=2,
+            create_daily_draft=True,
+        ),
+        now=datetime(2026, 5, 5, 10, tzinfo=UTC),
+    )
+    session.commit()
+
+    item = session.scalar(select(RecommendationItem))
+    assert item is not None
+    assert "consumer_product" in item.noise_types_json
+    assert item.admission_level == "R"
+    assert item.selected is False
 
 
 def test_recommendation_can_rerun_same_day_with_same_scoring_time():
@@ -616,3 +797,117 @@ def test_recommendation_api_creates_daily_report_and_accepts_feedback(monkeypatc
     assert isinstance(group_payload["recommendation"]["noise_types"], list)
     assert group_payload["daily_report"]["daily_report_id"] == report_id
     assert group_payload["daily_report"]["adoption_status"] == 2
+
+
+def test_recommendation_run_detail_exposes_daily_report_review_trace(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+    login = client.post("/api/auth/login", json={"username": "admin", "password": "password"})
+    assert login.status_code == 200
+
+    created = client.post(
+        "/api/recommendation/runs",
+        json={
+            "workspace_code": "planning_intel",
+            "day_key": "2026-05-05",
+            "limit": 5,
+            "source_daily_limit": 2,
+            "create_daily_draft": False,
+        },
+    )
+    assert created.status_code == 200
+    run_id = created.json()["run"]["id"]
+
+    run_before = client.get(f"/api/recommendation/runs/{run_id}")
+    assert run_before.status_code == 200
+    item_before = run_before.json()["items"][0]
+    assert item_before["daily_report"] is None
+
+    groups = client.get("/api/dedupe-groups", params={"workspace_code": "planning_intel"})
+    assert groups.status_code == 200
+    group_id = groups.json()[0]["id"]
+    adopted = client.post(
+        "/api/daily-reports/bulk-adopt-from-candidates",
+        json={
+            "workspace_code": "planning_intel",
+            "day_key": "2026-05-05",
+            "dedupe_group_ids": [group_id],
+        },
+    )
+    assert adopted.status_code == 200
+    assert adopted.json()["created_total"] == 1
+
+    run_after = client.get(f"/api/recommendation/runs/{run_id}")
+    assert run_after.status_code == 200
+    item_after = run_after.json()["items"][0]
+    assert item_after["daily_report"]["day_key"] == "2026-05-05"
+    assert item_after["daily_report"]["report_status"] == "draft"
+    assert item_after["daily_report"]["adoption_status"] == 2
+    assert item_after["daily_report"]["daily_report_item_id"]
+
+
+def test_scorer_policy_api_exposes_operational_summary(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+    login = client.post("/api/auth/login", json={"username": "admin", "password": "password"})
+    assert login.status_code == 200
+
+    response = client.get(
+        "/api/recommendation/scorer-policy",
+        params={"workspace_code": "planning_intel"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["workspace_code"] == "planning_intel"
+    assert payload["config_loaded"] is True
+    assert payload["enabled"] is True
+    assert payload["config_version"].startswith("content-scorer")
+    assert payload["thresholds"]["P1"] == 84
+    assert "P1" in payload["daily_levels"]
+    assert "P2" in payload["weekly_levels"]
+    assert payload["noise_rule_count"] > 0
+    assert payload["weights"]
+    assert payload["top_topics"]
+    assert "topic_fields" not in payload
+
+
+def test_scorer_preview_api_scores_without_creating_recommendation_run(monkeypatch, tmp_path):
+    client = make_client(monkeypatch, tmp_path)
+    login = client.post("/api/auth/login", json={"username": "admin", "password": "password"})
+    assert login.status_code == 200
+    before_runs = client.get("/api/recommendation/runs", params={"workspace_code": "planning_intel"})
+    assert before_runs.status_code == 200
+    assert before_runs.json() == []
+
+    response = client.post(
+        "/api/recommendation/scorer-preview",
+        json={
+            "workspace_code": "planning_intel",
+            "source_title": "New inference serving architecture improves agent latency benchmark",
+            "summary": "The release explains inference serving, KV cache, throughput and benchmark tradeoffs.",
+            "content": "Architecture details include model serving, latency, throughput, benchmark and deployment cost.",
+            "source_type": "rss",
+            "source_name": "Example Official RSS",
+            "source_url": "https://example.com/inference-serving",
+            "source_tier": "P0",
+            "source_channel_type": "官方技术规范/标准/RFC/Release",
+            "source_score": 92,
+            "source_tags": ["AI基础设施"],
+            "source_secondary_tags": ["推理服务"],
+            "board_relevance_json": {"AI Infra": "强相关"},
+            "freshness_score": 90,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["workspace_code"] == "planning_intel"
+    assert payload["source_title"].startswith("New inference serving")
+    assert payload["admission_level"] in {"P0", "P1", "P2", "P3", "R"}
+    assert payload["admission_score"] >= 0
+    assert payload["admission_pool"]
+    assert payload["persistence"] == "not_persisted"
+    assert isinstance(payload["scorer_breakdown"], dict)
+
+    after_runs = client.get("/api/recommendation/runs", params={"workspace_code": "planning_intel"})
+    assert after_runs.status_code == 200
+    assert after_runs.json() == []

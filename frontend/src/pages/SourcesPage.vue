@@ -5,13 +5,12 @@ import {
   DownloadCloud,
   FileText,
   Globe2,
+  MessageCircle,
   Monitor,
   Plus,
   RefreshCw,
   Rss,
   Settings,
-  Tag,
-  Trash2,
   X
 } from "lucide-vue-next";
 import { computed, reactive, ref, watch } from "vue";
@@ -22,99 +21,29 @@ import {
   fetchSources,
   importLegacySources,
   importTechInsightLoopSources,
+  previewSourceImport,
   updateSourceDefinition,
   updateSourceWorkspaceConfig,
-  type DataSourceRecord
+  type DataSourceRecord,
+  type SourceImportPreview
 } from "../api/sources";
-import {
-  fetchWorkspaceLabelPolicy,
-  updateWorkspaceLabelPolicy,
-  type WorkspaceLabelPolicy
-} from "../api/workspaces";
+import { useRuntimeStore } from "../stores/runtime";
 import { useWorkspaceStore } from "../stores/workspace";
 
 const workspace = useWorkspaceStore();
+const runtime = useRuntimeStore();
 const sources = ref<DataSourceRecord[]>([]);
 const loading = ref(false);
 const importing = ref(false);
-const savingPolicy = ref(false);
 const savingConfig = ref(false);
 const fetchingSourceId = ref("");
 const error = ref("");
 const lastImportMessage = ref("");
+const lastImportTone = ref<"success" | "info" | "warning">("success");
+const importPreview = ref<SourceImportPreview | null>(null);
+const importPreviewCatalog = ref<"legacy" | "tech">("legacy");
+const previewLoading = ref(false);
 const selectedSource = ref<DataSourceRecord | null>(null);
-const activePolicyTab = ref<"level1" | "level2" | "format">("level1");
-
-const aiSqlPrimaryCategories = [
-  "AI Infra",
-  "AI 应用",
-  "测评技术",
-  "大厂动态",
-  "模型",
-  "算法",
-  "推理加速",
-  "训练技术",
-  "智能体",
-  "基础竞争力"
-];
-const companySqlContentFields = [
-  "background",
-  "effects",
-  "eventSummary",
-  "technologyAndInnovation",
-  "valueAndImpact"
-];
-const contentFieldLabels: Record<string, string> = {
-  background: "背景",
-  effects: "效果总结",
-  eventSummary: "事件总结",
-  technologyAndInnovation: "技术和创新点总结",
-  valueAndImpact: "价值和影响"
-};
-const aiToolPrimaryCategories = ["工具新功能", "工具新案例", "工具新技术"];
-const aiToolSecondaryLabels = ["cursor", "claude code", "opencode", "codex"];
-
-const workspacePolicyPresets = {
-  ai_sql: {
-    labelSetCode: "ai_sql_categories",
-    newsFormatCode: "company_sql_v1",
-    exportCategoryMode: "news_primary",
-    requiredContentFields: [...companySqlContentFields],
-    primaryCategories: aiSqlPrimaryCategories,
-    secondaryLabelsByPrimary: {},
-    defaultCategory: "AI 应用",
-    fallbackCategory: "AI 应用"
-  },
-  ai_tools: {
-    labelSetCode: "ai_tools_categories",
-    newsFormatCode: "tool_intel_v1",
-    exportCategoryMode: "news_primary",
-    requiredContentFields: [...companySqlContentFields],
-    primaryCategories: aiToolPrimaryCategories,
-    secondaryLabelsByPrimary: Object.fromEntries(
-      aiToolPrimaryCategories.map((category) => [category, [...aiToolSecondaryLabels]])
-    ) as Record<string, string[]>,
-    defaultCategory: "工具新功能",
-    fallbackCategory: "工具新功能"
-  }
-};
-
-const policyForm = reactive({
-  labelSetCode: "ai_sql_categories",
-  newsFormatCode: "company_sql_v1",
-  exportCategoryMode: "news_primary",
-  requiredContentFields: [...companySqlContentFields],
-  allowedPrimaryCategories: [...aiSqlPrimaryCategories],
-  secondaryLabelsByPrimary: {} as Record<string, string[]>,
-  defaultCategory: "AI 应用",
-  fallbackCategory: "AI 应用"
-});
-const categoryDraft = ref("");
-const contentFieldDraft = ref("");
-const secondaryDraft = reactive({
-  primary: "",
-  label: ""
-});
 
 const configForm = reactive({
   enabled: true,
@@ -132,6 +61,7 @@ const savingDefinition = ref(false);
 const customSourceTypes = [
   { value: "rss", label: "RSS" },
   { value: "paper_rss", label: "论文 RSS" },
+  { value: "paper_api", label: "论文 API" },
   { value: "page_manual", label: "页面手工" },
   { value: "page_monitor", label: "页面监控" }
 ];
@@ -157,50 +87,12 @@ const enabledInWorkspaceCount = computed(
   () => sources.value.filter((source) => source.workspace_link_enabled).length
 );
 
-const activePrimaryCategories = computed(() =>
-  policyForm.allowedPrimaryCategories.length > 0 ? policyForm.allowedPrimaryCategories : aiSqlPrimaryCategories
+const canManageIngestion = computed(() => runtime.canIngest);
+const createUrlPlaceholder = computed(() =>
+  createForm.sourceType === "paper_api"
+    ? "https://api.semanticscholar.org/graph/v1/paper/search/bulk?query=artificial%20intelligence"
+    : "https://..."
 );
-const secondaryLabelTotal = computed(() =>
-  activePrimaryCategories.value.reduce(
-    (total: number, category: string) => total + secondaryLabelsFor(category).length,
-    0
-  )
-);
-
-const currentPolicyPreset = computed(() => {
-  if (workspace.currentCode === "ai_tools") {
-    return workspacePolicyPresets.ai_tools;
-  }
-  return workspacePolicyPresets.ai_sql;
-});
-
-async function loadWorkspacePolicy() {
-  if (!workspace.currentCode) {
-    return;
-  }
-  try {
-    const policy = await fetchWorkspaceLabelPolicy(workspace.currentCode);
-    fillPolicyForm(policy);
-  } catch (exc) {
-    error.value = exc instanceof Error ? exc.message : "加载工作台标签策略失败";
-  }
-}
-
-function fillPolicyForm(policy: WorkspaceLabelPolicy) {
-  policyForm.labelSetCode = policy.label_set_code;
-  policyForm.newsFormatCode = policy.news_format_code;
-  policyForm.exportCategoryMode = policy.export_category_mode || "news_primary";
-  policyForm.requiredContentFields = normalizeContentFields(policy.required_content_fields);
-  policyForm.allowedPrimaryCategories = [...policy.allowed_primary_categories];
-  policyForm.secondaryLabelsByPrimary = normalizeSecondaryLabels(
-    policy.secondary_labels_by_primary ?? {},
-    policyForm.allowedPrimaryCategories
-  );
-  policyForm.defaultCategory = policy.default_category;
-  policyForm.fallbackCategory = policy.fallback_category;
-  secondaryDraft.primary = policyForm.allowedPrimaryCategories[0] ?? "";
-  syncPolicyFallbacks();
-}
 
 async function loadSources() {
   loading.value = true;
@@ -221,13 +113,102 @@ async function loadSources() {
   }
 }
 
+const importMessageClass = computed(() => {
+  if (lastImportTone.value === "info") {
+    return "form-info";
+  }
+  if (lastImportTone.value === "warning") {
+    return "form-warning";
+  }
+  return "form-success";
+});
+
+function setResultMessage(text: string, tone: "success" | "info" | "warning" = "success") {
+  lastImportMessage.value = text;
+  lastImportTone.value = tone;
+}
+
+async function openImportPreview(catalog: "legacy" | "tech") {
+  if (!canManageIngestion.value) {
+    setResultMessage("当前部署形态为只读消费模式，不能导入或抓取数据源。", "warning");
+    return;
+  }
+  previewLoading.value = true;
+  error.value = "";
+  lastImportMessage.value = "";
+  try {
+    importPreviewCatalog.value = catalog;
+    importPreview.value = await previewSourceImport(catalog);
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : "加载导入预览失败";
+  } finally {
+    previewLoading.value = false;
+  }
+}
+
+function closeImportPreview() {
+  importPreview.value = null;
+}
+
+function previewTypeNote(type: string) {
+  if (type === "manual" || type === "internal") {
+    return PUSH_BASED_HINT;
+  }
+  if (type === "wechat") {
+    return "微信公众号源导入后保持待配置（metadata-only），需等待 RSSHub 公众号入口或 wechat 桥就绪后启用抓取";
+  }
+  return "";
+}
+
+// 导入预览样本按 source_type 分组小计：推入式/微信待配置类型附语义提示，
+// 避免导入后把这些源的 0 条抓取误读为失败。
+const importPreviewGroups = computed(() => {
+  const preview = importPreview.value;
+  if (!preview) {
+    return [];
+  }
+  const groups = new Map<string, SourceImportPreview["samples"]>();
+  for (const sample of preview.samples) {
+    const list = groups.get(sample.source_type) ?? [];
+    list.push(sample);
+    groups.set(sample.source_type, list);
+  }
+  return Array.from(groups.entries())
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([type, samples]) => ({ type, samples, note: previewTypeNote(type) }));
+});
+
+async function confirmImport() {
+  if (!importPreview.value || !canManageIngestion.value) {
+    return;
+  }
+  const catalog = importPreviewCatalog.value;
+  importPreview.value = null;
+  if (catalog === "tech") {
+    await importTechSources();
+  } else {
+    await importSeeds();
+  }
+}
+
 async function importSeeds() {
   importing.value = true;
   error.value = "";
   lastImportMessage.value = "";
   try {
     const result = await importLegacySources();
-    lastImportMessage.value = `导入完成：新增 ${result.created}，更新 ${result.updated}，总计 ${result.total}`;
+    if (result.total === 0) {
+      setResultMessage("未发现可导入的旧种子源：请检查种子文件路径或部署挂载是否缺失。", "warning");
+    } else if (result.created === 0) {
+      setResultMessage(
+        result.updated > 0
+          ? `源已全部存在，本次更新 ${result.updated} 条元数据`
+          : "源已全部存在，本次未发生变更",
+        "info"
+      );
+    } else {
+      setResultMessage(`导入完成：新增 ${result.created}，更新 ${result.updated}，总计 ${result.total}`);
+    }
     await loadSources();
   } catch (exc) {
     error.value = exc instanceof Error ? exc.message : "导入旧种子源失败";
@@ -242,7 +223,20 @@ async function importTechSources() {
   lastImportMessage.value = "";
   try {
     const result = await importTechInsightLoopSources();
-    lastImportMessage.value = `Tech 源导入完成：新增 ${result.created}，更新 ${result.updated}，识别 ${result.total} 行，可抓取入口 ${result.fetchable}，待补入口 ${result.metadata_only}`;
+    if (result.total === 0) {
+      setResultMessage("未识别到 Tech 源数据：请检查种子文件路径或部署挂载是否缺失。", "warning");
+    } else if (result.created === 0) {
+      setResultMessage(
+        result.updated > 0
+          ? `源已全部存在，本次更新 ${result.updated} 条元数据（识别 ${result.total} 行）`
+          : "源已全部存在，本次未发生变更",
+        "info"
+      );
+    } else {
+      setResultMessage(
+        `Tech 源导入完成：新增 ${result.created}，更新 ${result.updated}，识别 ${result.total} 行，可抓取入口 ${result.fetchable}，待补入口 ${result.metadata_only}`
+      );
+    }
     await loadSources();
   } catch (exc) {
     error.value = exc instanceof Error ? exc.message : "导入 Tech Insight Loop 源失败";
@@ -253,9 +247,10 @@ async function importTechSources() {
 
 function canFetchSource(source: DataSourceRecord) {
   return (
+    canManageIngestion.value &&
     source.enabled &&
     source.workspace_link_enabled &&
-    ["rss", "paper_rss", "page_manual", "page_monitor"].includes(source.source_type)
+    ["rss", "paper_rss", "paper_api", "page_manual", "page_monitor"].includes(source.source_type)
   );
 }
 
@@ -263,14 +258,39 @@ function shortExpertRoutes(source: DataSourceRecord) {
   return source.expert_routes.slice(0, 2).join(" / ");
 }
 
+// 推入式源语义（backend-capability-test-matrix §3.1）：manual/internal（未配 api_url）
+// 的条目由手工导入/内部系统写入，定时抓取如实返回 0 条新增是正常行为，不是源坏了。
+const PUSH_BASED_HINT = "推入式源：由手工导入/内部系统写入，定时抓取 0 条是正常行为";
+const WECHAT_PENDING_HINT =
+  "微信公众号源待配置：需就绪 RSSHub 公众号路由（RSSHUB_BASE_URL）或文章 URL 入口后才能抓取";
+
+function isPushBasedSource(source: DataSourceRecord) {
+  if (source.source_type === "manual") {
+    return true;
+  }
+  // internal 配置 fetch_config.api_url 后会升级为拉取器；API 未暴露 fetch_config，
+  // 前端以 url 入口作为「可拉取」代理信号：无 URL 视为纯推入式。
+  return source.source_type === "internal" && !source.url;
+}
+
+function isPendingWechatSource(source: DataSourceRecord) {
+  return source.source_type === "wechat" && (source.needs_entry || source.metadata_only);
+}
+
 function sourceTypeLabel(type: string) {
   const labels: Record<string, string> = {
     rss: "RSS",
     paper_rss: "论文 RSS",
+    paper_api: "论文 API",
+    paper_page: "论文页面",
     wiseflow: "Wiseflow",
+    crawler: "自定义爬虫",
     page_manual: "页面手工",
     page_monitor: "页面监控",
-    csv: "CSV"
+    csv: "CSV",
+    manual: "手工导入",
+    internal: "内部系统",
+    wechat: "微信公众号"
   };
   return labels[type] ?? type;
 }
@@ -279,19 +299,18 @@ function sourceIcon(type: string) {
   const icons = {
     rss: Rss,
     paper_rss: FileText,
+    paper_api: FileText,
+    paper_page: FileText,
     wiseflow: Bot,
+    crawler: Bot,
     page_manual: Globe2,
     page_monitor: Monitor,
-    csv: FileText
+    csv: FileText,
+    manual: DownloadCloud,
+    internal: Monitor,
+    wechat: MessageCircle
   };
   return icons[type as keyof typeof icons] ?? Globe2;
-}
-
-function tagInputWidth(value: string) {
-  const width = Array.from(value || "").reduce((total, character) => {
-    return total + (/[\u4e00-\u9fff]/.test(character) ? 14 : 8);
-  }, 18);
-  return `${Math.max(54, Math.min(128, width))}px`;
 }
 
 function formatDateTime(value: string | null) {
@@ -317,6 +336,10 @@ function fillConfigForm(source: DataSourceRecord) {
 }
 
 function openCreatePanel() {
+  if (!canManageIngestion.value) {
+    setResultMessage("当前部署形态为只读消费模式，不能新增本地采集源。", "warning");
+    return;
+  }
   createForm.name = "";
   createForm.sourceType = "rss";
   createForm.url = "";
@@ -426,203 +449,6 @@ function closeConfig() {
   selectedSource.value = null;
 }
 
-function syncPolicyFallbacks() {
-  if (!policyForm.allowedPrimaryCategories.includes(policyForm.defaultCategory)) {
-    policyForm.defaultCategory = policyForm.allowedPrimaryCategories[0];
-  }
-  if (!policyForm.allowedPrimaryCategories.includes(policyForm.fallbackCategory)) {
-    policyForm.fallbackCategory = policyForm.defaultCategory;
-  }
-  if (!policyForm.allowedPrimaryCategories.includes(secondaryDraft.primary)) {
-    secondaryDraft.primary = policyForm.allowedPrimaryCategories[0] ?? "";
-  }
-}
-
-function normalizedPolicyCategories() {
-  const next: string[] = [];
-  for (const category of policyForm.allowedPrimaryCategories) {
-    const value = category.trim();
-    if (value && !next.includes(value)) {
-      next.push(value);
-    }
-  }
-  return next;
-}
-
-function normalizeSecondaryLabels(labelsByPrimary: Record<string, string[]>, primaryCategories: string[]) {
-  const normalized: Record<string, string[]> = {};
-  for (const category of primaryCategories) {
-    const labels = labelsByPrimary[category] ?? [];
-    const next: string[] = [];
-    for (const label of labels) {
-      const value = label.trim();
-      if (value && !next.includes(value)) {
-        next.push(value);
-      }
-    }
-    if (next.length > 0) {
-      normalized[category] = next;
-    }
-  }
-  return normalized;
-}
-
-function secondaryLabelsFor(category: string) {
-  return policyForm.secondaryLabelsByPrimary[category] ?? [];
-}
-
-function addPolicyCategory() {
-  const value = categoryDraft.value.trim();
-  if (!value || policyForm.allowedPrimaryCategories.includes(value)) {
-    categoryDraft.value = "";
-    return;
-  }
-  policyForm.allowedPrimaryCategories.push(value);
-  policyForm.secondaryLabelsByPrimary[value] = [];
-  categoryDraft.value = "";
-  syncPolicyFallbacks();
-}
-
-function renamePolicyCategory(index: number, value: string) {
-  const previous = policyForm.allowedPrimaryCategories[index];
-  policyForm.allowedPrimaryCategories[index] = value;
-  if (previous !== value) {
-    policyForm.secondaryLabelsByPrimary[value] = policyForm.secondaryLabelsByPrimary[previous] ?? [];
-    delete policyForm.secondaryLabelsByPrimary[previous];
-  }
-  syncPolicyFallbacks();
-}
-
-function removePolicyCategory(index: number) {
-  if (policyForm.allowedPrimaryCategories.length <= 1) {
-    return;
-  }
-  const [removed] = policyForm.allowedPrimaryCategories.slice(index, index + 1);
-  policyForm.allowedPrimaryCategories.splice(index, 1);
-  delete policyForm.secondaryLabelsByPrimary[removed];
-  syncPolicyFallbacks();
-}
-
-function resetPolicyCategories() {
-  const preset = currentPolicyPreset.value;
-  policyForm.labelSetCode = preset.labelSetCode;
-  policyForm.newsFormatCode = preset.newsFormatCode;
-  policyForm.exportCategoryMode = preset.exportCategoryMode;
-  policyForm.requiredContentFields = [...preset.requiredContentFields];
-  policyForm.allowedPrimaryCategories = [...preset.primaryCategories];
-  policyForm.secondaryLabelsByPrimary = normalizeSecondaryLabels(
-    preset.secondaryLabelsByPrimary,
-    policyForm.allowedPrimaryCategories
-  );
-  policyForm.defaultCategory = preset.defaultCategory;
-  policyForm.fallbackCategory = preset.fallbackCategory;
-  secondaryDraft.primary = policyForm.allowedPrimaryCategories[0] ?? "";
-}
-
-function normalizeContentFields(fields: string[]) {
-  const next: string[] = [];
-  for (const field of fields) {
-    const value = field.trim();
-    if (value && !next.includes(value)) {
-      next.push(value);
-    }
-  }
-  return next.length ? next : [...companySqlContentFields];
-}
-
-function addContentField() {
-  const value = contentFieldDraft.value.trim();
-  if (!value || policyForm.requiredContentFields.includes(value)) {
-    contentFieldDraft.value = "";
-    return;
-  }
-  policyForm.requiredContentFields.push(value);
-  contentFieldDraft.value = "";
-}
-
-function contentFieldLabel(field: string) {
-  return contentFieldLabels[field] ?? "自定义字段";
-}
-
-function renameContentField(index: number, value: string) {
-  policyForm.requiredContentFields[index] = value;
-}
-
-function removeContentField(index: number) {
-  if (
-    policyForm.newsFormatCode === "company_sql_v1" &&
-    policyForm.requiredContentFields.length <= companySqlContentFields.length
-  ) {
-    error.value = "company_sql_v1 不能删除公司 SQL 必填字段";
-    return;
-  }
-  policyForm.requiredContentFields.splice(index, 1);
-}
-
-function addSecondaryLabel() {
-  const primary = secondaryDraft.primary || policyForm.allowedPrimaryCategories[0];
-  const label = secondaryDraft.label.trim();
-  if (!primary || !label) {
-    return;
-  }
-  const labels = policyForm.secondaryLabelsByPrimary[primary] ?? [];
-  if (!labels.includes(label)) {
-    policyForm.secondaryLabelsByPrimary[primary] = [...labels, label];
-  }
-  secondaryDraft.label = "";
-}
-
-function renameSecondaryLabel(primary: string, index: number, value: string) {
-  const labels = [...secondaryLabelsFor(primary)];
-  labels[index] = value;
-  policyForm.secondaryLabelsByPrimary[primary] = labels;
-}
-
-function removeSecondaryLabel(primary: string, index: number) {
-  const labels = [...secondaryLabelsFor(primary)];
-  labels.splice(index, 1);
-  policyForm.secondaryLabelsByPrimary[primary] = labels;
-}
-
-async function saveWorkspacePolicy() {
-  if (!workspace.currentCode) {
-    return;
-  }
-  const categories = normalizedPolicyCategories();
-  if (categories.length === 0) {
-    error.value = "至少保留一个一级标签";
-    return;
-  }
-  policyForm.allowedPrimaryCategories = categories;
-  policyForm.requiredContentFields = normalizeContentFields(policyForm.requiredContentFields);
-  policyForm.secondaryLabelsByPrimary = normalizeSecondaryLabels(
-    policyForm.secondaryLabelsByPrimary,
-    categories
-  );
-  syncPolicyFallbacks();
-  savingPolicy.value = true;
-  error.value = "";
-  lastImportMessage.value = "";
-  try {
-    const updated = await updateWorkspaceLabelPolicy(workspace.currentCode, {
-      label_set_code: policyForm.labelSetCode,
-      news_format_code: policyForm.newsFormatCode,
-      export_category_mode: policyForm.exportCategoryMode,
-      required_content_fields: policyForm.requiredContentFields,
-      allowed_primary_categories: categories,
-      secondary_labels_by_primary: policyForm.secondaryLabelsByPrimary,
-      default_category: policyForm.defaultCategory,
-      fallback_category: policyForm.fallbackCategory
-    });
-    fillPolicyForm(updated);
-    lastImportMessage.value = `已保存：${workspace.current?.name} 的统一标签策略`;
-  } catch (exc) {
-    error.value = exc instanceof Error ? exc.message : "保存工作台标签策略失败";
-  } finally {
-    savingPolicy.value = false;
-  }
-}
-
 async function saveConfig() {
   if (!selectedSource.value || !workspace.currentCode) {
     return;
@@ -660,12 +486,20 @@ async function saveConfig() {
 }
 
 async function fetchOneSource(source: DataSourceRecord) {
+  if (!canFetchSource(source)) {
+    setResultMessage("该源当前不可抓取：请确认部署形态、源入口和工作台启用状态。", "warning");
+    return;
+  }
   fetchingSourceId.value = source.id;
   error.value = "";
   lastImportMessage.value = "";
   try {
-    const result = await fetchSource(source.id);
-    lastImportMessage.value = `抓取完成：${source.name}，拉取 ${result.fetched}，新增 ${result.created}，更新 ${result.updated}`;
+    const result = await fetchSource(source.id, workspace.currentCode || undefined);
+    if (result.fetched === 0) {
+      setResultMessage(`抓取完成但未返回条目：${source.name}。请检查源当天是否发布、RSS 窗口和最近失败原因。`, "info");
+    } else {
+      setResultMessage(`抓取完成：${source.name}，拉取 ${result.fetched}，新增 ${result.created}，更新 ${result.updated}`);
+    }
     await loadSources();
   } catch (exc) {
     error.value = exc instanceof Error ? exc.message : "抓取数据源失败";
@@ -678,7 +512,6 @@ watch(
   () => workspace.currentCode,
   (code) => {
     if (code) {
-      void loadWorkspacePolicy();
       void loadSources();
     }
   },
@@ -707,7 +540,13 @@ watch(
       </div>
 
       <div class="source-stats-actions">
-        <button type="button" class="icon-button" @click="openCreatePanel" title="自建信息源">
+        <button
+          v-if="canManageIngestion"
+          type="button"
+          class="icon-button"
+          @click="openCreatePanel"
+          title="自建信息源"
+        >
           <Plus :size="16" />
           <span>新增源</span>
         </button>
@@ -715,15 +554,23 @@ watch(
           <RefreshCw :size="16" />
           <span>刷新</span>
         </button>
-        <button type="button" class="icon-button" :disabled="importing" @click="importSeeds" title="导入旧种子源">
+        <button
+          v-if="canManageIngestion"
+          type="button"
+          class="icon-button"
+          :disabled="importing || previewLoading"
+          @click="openImportPreview('legacy')"
+          title="导入旧种子源"
+        >
           <DownloadCloud :size="16" />
-          <span>{{ importing ? "导入中" : "导入数据" }}</span>
+          <span>{{ importing || previewLoading ? "检查中" : "导入数据" }}</span>
         </button>
         <button
+          v-if="canManageIngestion"
           type="button"
           class="icon-button secondary"
-          :disabled="importing"
-          @click="importTechSources"
+          :disabled="importing || previewLoading"
+          @click="openImportPreview('tech')"
           title="导入 Tech Insight Loop 源治理"
         >
           <DownloadCloud :size="16" />
@@ -732,10 +579,16 @@ watch(
       </div>
     </section>
 
-    <p v-if="error" class="form-error">{{ error }}</p>
-    <p v-if="lastImportMessage" class="form-success">{{ lastImportMessage }}</p>
+    <p class="workspace-form-hint sources-policy-note">
+      标签策略与报告格式已移至
+      <RouterLink to="/workspace-settings#labels">工作台配置</RouterLink>
+      统一管理。
+    </p>
 
-    <section class="source-page-grid">
+    <p v-if="error" class="form-error">{{ error }}</p>
+    <p v-if="lastImportMessage" :class="importMessageClass">{{ lastImportMessage }}</p>
+
+    <section class="source-page-grid single-column">
       <div class="source-list">
       <header class="source-list-title">
         <div>
@@ -775,6 +628,20 @@ watch(
 
             <div class="source-meta-line">
               <span class="type-badge">{{ sourceTypeLabel(source.source_type) }}</span>
+              <span
+                v-if="isPushBasedSource(source)"
+                class="meta-chip push-based-chip"
+                :title="PUSH_BASED_HINT"
+              >
+                推入式
+              </span>
+              <span
+                v-else-if="isPendingWechatSource(source)"
+                class="meta-chip needs-entry-chip wechat-pending-chip"
+                :title="WECHAT_PENDING_HINT"
+              >
+                待配置
+              </span>
               <span v-if="source.source_tier" class="meta-chip source-tier-chip">{{ source.source_tier }}</span>
               <span v-if="source.source_channel_type" class="meta-chip">{{ source.source_channel_type }}</span>
               <span v-if="source.source_score" class="meta-chip">质量 {{ source.source_score.toFixed(1) }}</span>
@@ -797,6 +664,10 @@ watch(
           </div>
 
           <div class="source-actions">
+            <RouterLink class="table-action" :to="`/sources/${source.id}`" title="查看数据源详情">
+              <FileText :size="14" />
+              <span>详情</span>
+            </RouterLink>
             <button type="button" class="table-action" @click="openConfig(source)" title="配置数据源">
               <Settings :size="14" />
               <span>配置</span>
@@ -816,219 +687,10 @@ watch(
         </article>
       </div>
 
-      <p v-if="!loading && sources.length === 0" class="empty-state">暂无数据源，可先导入旧种子源。</p>
+      <p v-if="!loading && sources.length === 0" class="empty-state">
+        {{ canManageIngestion ? "暂无数据源，可先导入旧种子源。" : "当前为只读消费模式，等待外网同步后会显示数据源。" }}
+      </p>
       </div>
-
-      <aside class="control-rail">
-        <section class="policy-panel">
-        <header class="policy-header">
-          <div>
-            <p class="policy-kicker">
-              <Tag :size="16" />
-              <span>标签策略设置</span>
-            </p>
-            <h3>{{ policyForm.labelSetCode }}</h3>
-            <p>配置用于模型分类与去重后定稿的工作台标签。</p>
-          </div>
-          <div class="policy-stats">
-            <span>{{ activePrimaryCategories.length }} 一级</span>
-            <span>{{ secondaryLabelTotal }} 二级</span>
-          </div>
-        </header>
-
-        <div class="label-policy-grid">
-          <div class="policy-tabs" role="tablist" aria-label="标签策略配置">
-            <button
-              type="button"
-              :class="{ active: activePolicyTab === 'level1' }"
-              @click="activePolicyTab = 'level1'"
-            >
-              一级标签 {{ activePrimaryCategories.length }}
-            </button>
-            <button
-              type="button"
-              :class="{ active: activePolicyTab === 'level2' }"
-              @click="activePolicyTab = 'level2'"
-            >
-              二级标签 {{ secondaryLabelTotal }}
-            </button>
-            <button
-              type="button"
-              :class="{ active: activePolicyTab === 'format' }"
-              @click="activePolicyTab = 'format'"
-            >
-              新闻结构
-            </button>
-          </div>
-
-          <section v-if="activePolicyTab === 'level1'" class="policy-tab-panel">
-            <div class="label-section-title">
-              <span>一级标签</span>
-              <small>用于模型分类与去重后定稿</small>
-            </div>
-            <div class="tag-cloud editable">
-              <label
-                v-for="(category, index) in policyForm.allowedPrimaryCategories"
-                :key="`${category}-${index}`"
-                class="tag-chip-edit"
-              >
-                <input
-                  :value="category"
-                  :style="{ width: tagInputWidth(category) }"
-                  @input="renamePolicyCategory(index, ($event.target as HTMLInputElement).value)"
-                  aria-label="一级标签名称"
-                />
-                <button
-                  type="button"
-                  :disabled="policyForm.allowedPrimaryCategories.length <= 1"
-                  @click="removePolicyCategory(index)"
-                  title="删除一级标签"
-                >
-                  <Trash2 :size="13" />
-                </button>
-              </label>
-            </div>
-            <div class="quick-add-card">
-              <label>
-                <span>新增一级标签</span>
-                <div class="inline-control">
-                  <input v-model="categoryDraft" placeholder="输入标签名称" @keydown.enter.prevent="addPolicyCategory" />
-                  <button type="button" class="mini-icon-button add" @click="addPolicyCategory" title="新增一级标签">
-                    <Plus :size="16" />
-                  </button>
-                </div>
-              </label>
-            </div>
-          </section>
-
-          <section v-else-if="activePolicyTab === 'level2'" class="policy-tab-panel">
-            <div class="label-section-title">
-              <span>二级标签</span>
-              <small>只显示已配置项</small>
-            </div>
-            <div v-if="secondaryLabelTotal > 0" class="secondary-groups">
-              <div
-                v-for="category in activePrimaryCategories"
-                v-show="secondaryLabelsFor(category).length > 0"
-                :key="category"
-                class="secondary-group"
-              >
-                <strong>{{ category }}</strong>
-                <div class="secondary-line">
-                  <label
-                    v-for="(label, labelIndex) in secondaryLabelsFor(category)"
-                    :key="`${category}-${label}-${labelIndex}`"
-                    class="secondary-pill"
-                  >
-                    <input
-                      :value="label"
-                      @input="renameSecondaryLabel(category, labelIndex, ($event.target as HTMLInputElement).value)"
-                      aria-label="二级标签名称"
-                    />
-                    <button type="button" @click="removeSecondaryLabel(category, labelIndex)" title="删除二级标签">
-                      <X :size="12" />
-                    </button>
-                  </label>
-                </div>
-              </div>
-            </div>
-            <div v-else class="empty-policy-card">
-              <Tag :size="24" />
-              <p>暂无二级标签</p>
-            </div>
-            <div class="quick-add-card">
-              <label>
-                <span>新增二级标签</span>
-                <div class="inline-control stackable">
-                  <select v-model="secondaryDraft.primary">
-                    <option v-for="category in activePrimaryCategories" :key="category" :value="category">
-                      {{ category }}
-                    </option>
-                  </select>
-                  <input v-model="secondaryDraft.label" placeholder="输入二级标签名" @keydown.enter.prevent="addSecondaryLabel" />
-                  <button type="button" class="mini-icon-button add" @click="addSecondaryLabel" title="新增二级标签">
-                    <Plus :size="16" />
-                  </button>
-                </div>
-              </label>
-            </div>
-          </section>
-
-          <section v-else class="policy-tab-panel">
-            <div class="label-section-title">
-              <span>新闻结构</span>
-              <small>生成稿与 SQL 导出字段</small>
-            </div>
-            <label class="format-code-field">
-              <span>格式代码</span>
-              <input v-model="policyForm.newsFormatCode" placeholder="company_sql_v1" />
-            </label>
-            <label class="format-code-field">
-              <span>SQL category 模式</span>
-              <select v-model="policyForm.exportCategoryMode">
-                <option value="news_primary">跟随新闻一级标签（AI 十分类）</option>
-              </select>
-            </label>
-            <div class="format-field-list">
-              <label
-                v-for="(field, index) in policyForm.requiredContentFields"
-                :key="`${field}-${index}`"
-                class="tag-chip-edit format-chip"
-              >
-                <input
-                  :value="field"
-                  @input="renameContentField(index, ($event.target as HTMLInputElement).value)"
-                  aria-label="新闻内容字段"
-                />
-                <small>{{ contentFieldLabel(field) }}</small>
-                <button type="button" @click="removeContentField(index)" title="删除新闻字段">
-                  <Trash2 :size="13" />
-                </button>
-              </label>
-            </div>
-            <div class="quick-add-card">
-              <label>
-                <span>新增新闻字段</span>
-                <div class="inline-control">
-                  <input v-model="contentFieldDraft" placeholder="新增字段" @keydown.enter.prevent="addContentField" />
-                  <button type="button" class="mini-icon-button add" @click="addContentField" title="新增新闻字段">
-                    <Plus :size="16" />
-                  </button>
-                </div>
-              </label>
-            </div>
-          </section>
-        </div>
-
-        <footer class="policy-footer">
-          <div class="policy-selects">
-            <label>
-              <span>默认标签</span>
-              <select v-model="policyForm.defaultCategory">
-                <option v-for="category in activePrimaryCategories" :key="category" :value="category">
-                  {{ category }}
-                </option>
-              </select>
-            </label>
-            <label>
-              <span>兜底标签</span>
-              <select v-model="policyForm.fallbackCategory">
-                <option v-for="category in activePrimaryCategories" :key="category" :value="category">
-                  {{ category }}
-                </option>
-              </select>
-            </label>
-          </div>
-
-          <div class="policy-actions">
-            <button type="button" class="ghost-button" @click="resetPolicyCategories">恢复默认</button>
-            <button type="button" class="config-save" :disabled="savingPolicy" @click="saveWorkspacePolicy">
-              {{ savingPolicy ? "保存中" : "保存策略" }}
-            </button>
-          </div>
-        </footer>
-        </section>
-      </aside>
     </section>
   </section>
 
@@ -1131,11 +793,49 @@ watch(
     </div>
     <label class="config-url-field">
       <span>URL / RSS 入口</span>
-      <input v-model="createForm.url" placeholder="https://..." />
+      <input v-model="createForm.url" :placeholder="createUrlPlaceholder" />
     </label>
 
     <button type="button" class="config-save" :disabled="creatingSource" @click="submitCreateSource">
       {{ creatingSource ? "创建中" : "创建并启用" }}
+    </button>
+  </aside>
+
+  <div v-if="importPreview" class="config-backdrop" @click="closeImportPreview"></div>
+  <aside v-if="importPreview" class="config-panel import-preview-panel" aria-label="数据源导入预览">
+    <header>
+      <div>
+        <p class="eyebrow">导入预览</p>
+        <h3>{{ importPreviewCatalog === "tech" ? "Tech Insight Loop 源治理" : "旧种子源" }}</h3>
+      </div>
+      <button type="button" class="panel-close" @click="closeImportPreview" title="关闭">
+        <X :size="18" />
+      </button>
+    </header>
+
+    <div class="preview-metrics">
+      <span><strong>{{ importPreview.total }}</strong> 识别记录</span>
+      <span><strong>{{ importPreview.would_create }}</strong> 将新增</span>
+      <span><strong>{{ importPreview.would_update }}</strong> 将更新</span>
+    </div>
+
+    <div class="preview-list">
+      <section v-for="group in importPreviewGroups" :key="group.type" class="preview-group">
+        <header class="preview-group-head">
+          <span class="type-badge">{{ sourceTypeLabel(group.type) }}</span>
+          <small>样本 {{ group.samples.length }} 条</small>
+        </header>
+        <p v-if="group.note" class="preview-group-note">{{ group.note }}</p>
+        <article v-for="sample in group.samples" :key="`${group.type}-${sample.name}-${sample.url}`">
+          <strong>{{ sample.name }}</strong>
+          <span>{{ sourceTypeLabel(sample.source_type) }}</span>
+          <small>{{ sample.url || "无 URL" }}</small>
+        </article>
+      </section>
+    </div>
+
+    <button type="button" class="config-save" :disabled="importing" @click="confirmImport">
+      {{ importing ? "导入中" : "确认导入" }}
     </button>
   </aside>
 </template>

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "description": "One adoption, many renditions: report format registry and rendition projection contract. Design doc: docs/report-renditions-design.md",
+  "description": "One adoption, many renditions: report format registry and rendition projection contract. Design doc: docs/backend/report-renditions-design.md",
   "core_rule": "Renditions are projections of adopted report items. Regenerating or deleting a rendition never mutates adoption status, generated_news, recommendation chain or the company SQL export. Business boards live only in insight fields and rendition grouping; they must never be written to generated_news.category or company SQL category.",
   "tables": {
     "report_formats": [
@@ -13,13 +13,32 @@
       "export_targets.targets (subset of: md/html; company SQL export is NOT configured here)",
       "enabled/sort_order"
     ],
-    "report_renditions": [
-      "report_type (daily|weekly) + report_id + format_code (unique)",
-      "status (draft|ready)",
-      "title/summary_json/body_json (projection snapshot)",
-      "generated_by (rule_projection_v1)/generated_at"
-    ]
-  },
+        "report_renditions": [
+            "report_type (daily|weekly) + report_id + format_code (unique)",
+            "status (draft|ready)",
+            "title/summary_json/body_json (projection snapshot)",
+            "generated_by (rule_projection_v1)/generated_at"
+        ]
+    },
+    "summary_json_contract": {
+        "required_v1_fields": [
+            "period_key",
+            "item_total",
+            "group_distribution",
+            "headline_titles",
+            "source_total",
+            "top_groups",
+            "key_highlights",
+            "summary_text",
+            "summary_generated_by"
+        ],
+        "summary_generated_by_values": [
+            "rule_daily_summary_v1",
+            "rule_weekly_summary_v1"
+        ],
+        "weekly_rule_v1": "Weekly rendition summaries are generated from adopted weekly_report_items. The API-facing weekly_reports.summary is refreshed by the backend when a weekly draft is created or a weekly item is edited, so the frontend never computes report summaries locally.",
+        "future_model_slot": "A later MiniMax weekly summary generator may replace summary_text/key_highlights while preserving the same summary_json fields and keeping rendition regeneration idempotent."
+    },
   "column_additions": {
     "generated_news.insight_json": "Model-generated auxiliary fields for tech-insight renditions: board (from config/taxonomy/business_boards.json), bullet_points[], takeaway, tag_line[]. Strictly separate from content_json; company SQL export never reads it.",
     "daily_report_items.is_headline": "Editor-adjustable headline flag. Auto-initialized to recommendation-score top-N on first headline-enabled rendition build; never auto-overwritten afterwards."

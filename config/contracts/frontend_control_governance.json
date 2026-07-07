@@ -1,0 +1,119 @@
+{
+  "version": 1,
+  "purpose": "Prevent decorative frontend controls from entering the product without a real route, API, contract or test-backed behavior.",
+  "button_action_rule": {
+    "scanned_paths": [
+      "frontend/src/layouts",
+      "frontend/src/pages"
+    ],
+    "required_markers": [
+      "@click",
+      "v-on:click",
+      "type=\"submit\"",
+      "type='submit'"
+    ],
+    "rule": "Every <button> in page and shell Vue files must either invoke an action or submit a form. Pure decorative buttons are forbidden."
+  },
+  "router_link_rule": {
+    "required_markers": [
+      "to=",
+      ":to="
+    ],
+    "rule": "Every <RouterLink> in page and shell Vue files must point to a route. If an entry needs custom behavior, use a button with an explicit handler instead."
+  },
+  "banned_placeholder_text": [
+    "点击无效",
+    "敬请期待",
+    "待开发",
+    "TODO"
+  ],
+  "global_controls": [
+    {
+      "id": "app_shell.global_search",
+      "source_file": "frontend/src/layouts/AppShell.vue",
+      "required_source_markers": [
+        "class=\"global-search\"",
+        "type=\"search\"",
+        "searchWorkspace("
+      ],
+      "api_files": [
+        "frontend/src/api/search.ts"
+      ],
+      "contract_files": [
+        "config/contracts/search.json"
+      ],
+      "test_files": [
+        {
+          "path": "frontend/src/layouts/AppShell.spec.ts",
+          "required_markers": [
+            "searches workspace objects",
+            "groups search results",
+            "recent search results"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "app_shell.notifications",
+      "source_file": "frontend/src/layouts/AppShell.vue",
+      "required_source_markers": [
+        "class=\"notification-button\"",
+        "to=\"/notifications\"",
+        "notificationUnreadCount"
+      ],
+      "api_files": [
+        "frontend/src/api/notifications.ts"
+      ],
+      "contract_files": [
+        "config/contracts/notifications.json"
+      ],
+      "test_files": [
+        {
+          "path": "frontend/src/layouts/AppShell.spec.ts",
+          "required_markers": [
+            "uses the notifications entry",
+            "aria-label=\"消息通知\""
+          ]
+        },
+        {
+          "path": "frontend/src/pages/NotificationsPage.spec.ts",
+          "required_markers": [
+            "notifications",
+            "mark"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "app_shell.user_account",
+      "source_file": "frontend/src/layouts/AppShell.vue",
+      "required_source_markers": [
+        "class=\"user-pill\"",
+        "to=\"/account\"",
+        "aria-label=\"账号设置\""
+      ],
+      "api_files": [
+        "frontend/src/api/auth.ts"
+      ],
+      "contract_files": [
+        "config/contracts/auth_modes.json"
+      ],
+      "test_files": [
+        {
+          "path": "frontend/src/layouts/AppShell.spec.ts",
+          "required_markers": [
+            "uses the top-right user pill as a real account entry",
+            "账号设置"
+          ]
+        },
+        {
+          "path": "frontend/src/pages/AccountPage.spec.ts",
+          "required_markers": [
+            "account",
+            "password"
+          ]
+        }
+      ]
+    }
+  ]
+}

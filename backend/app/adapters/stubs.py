@@ -1,6 +1,14 @@
+"""未实现 adapter 的占位实现。
+
+注意：六类源的真实现已迁出本模块（wiseflow.py / crawler.py / csv_file.py /
+paper_page.py / push_based.py），create_default_registry 注册的是真实现。
+本模块保留同名 stub 仅用于验证 run 层 skipped_unimplemented 语义
+（tests/test_ingestion_runs.py 显式注册 stub），请勿再向注册表注册这些类。
+"""
+
 from __future__ import annotations
 
-from app.adapters.base import RawItemInput
+from app.adapters.base import AdapterNotImplementedError, RawItemInput
 from app.models.content import DataSource
 
 
@@ -8,19 +16,11 @@ class EmptyAdapter:
     source_type = "manual"
 
     async def fetch(self, data_source: DataSource) -> list[RawItemInput]:
-        return []
+        raise AdapterNotImplementedError(self.source_type)
 
 
 class WiseflowReadInfoAdapter(EmptyAdapter):
     source_type = "wiseflow"
-
-
-class PageListingAdapter(EmptyAdapter):
-    source_type = "page_monitor"
-
-
-class ManualPageAdapter(EmptyAdapter):
-    source_type = "page_manual"
 
 
 class CustomCrawlerAdapter(EmptyAdapter):
@@ -29,10 +29,6 @@ class CustomCrawlerAdapter(EmptyAdapter):
 
 class CsvFileAdapter(EmptyAdapter):
     source_type = "csv"
-
-
-class PaperApiAdapter(EmptyAdapter):
-    source_type = "paper_api"
 
 
 class PaperPageAdapter(EmptyAdapter):

@@ -1,6 +1,8 @@
 import { defineStore } from "pinia";
+import type { Router } from "vue-router";
 
-import { changePassword, fetchMe, login, logout, type SessionUser } from "../api/auth";
+import { changePassword, fetchMe, guestLogin, login, logout, type SessionUser } from "../api/auth";
+import { onUnauthorized } from "../api/http";
 
 export const useSessionStore = defineStore("session", {
   state: () => ({
@@ -9,7 +11,9 @@ export const useSessionStore = defineStore("session", {
     loading: false
   }),
   getters: {
-    isAuthenticated: (state) => Boolean(state.user)
+    isAuthenticated: (state) => Boolean(state.user),
+    // 游客会话（共享只读 guest 账号）：顶栏显示「游客」、隐藏订阅等写入口。
+    isGuest: (state) => state.user?.external_provider === "guest"
   },
   actions: {
     async loadCurrentUser() {
@@ -28,6 +32,16 @@ export const useSessionStore = defineStore("session", {
       this.loading = true;
       try {
         const response = await login(username, password);
+        this.user = response.user;
+        this.checked = true;
+      } finally {
+        this.loading = false;
+      }
+    },
+    async guestLogin() {
+      this.loading = true;
+      try {
+        const response = await guestLogin();
         this.user = response.user;
         this.checked = true;
       } finally {
@@ -54,3 +68,27 @@ export const useSessionStore = defineStore("session", {
     }
   }
 });
+
+// 匿名可达路由：401 联动时已在这些页面就不再重复跳转（router 守卫各自兜底）。
+const UNAUTHENTICATED_SAFE_PATHS = ["/login", "/setup"];
+
+/**
+ * 全局 401 联动装配（main.ts 调用）：运行中任何 API 收到 401
+ * （/api/auth/login、/api/auth/me 除外，见 api/http.ts 豁免清单）时，
+ * 清空 session store 并跳转 /login?redirect=当前路由，登录成功后可回到原页面。
+ * 放在 store 模块内而不是 http.ts，是为了让 http.ts 保持零 store/router 依赖。
+ */
+export function installUnauthorizedRedirect(router: Router): void {
+  onUnauthorized(() => {
+    const session = useSessionStore();
+    session.clear();
+    const current = router.currentRoute.value;
+    if (
+      UNAUTHENTICATED_SAFE_PATHS.includes(current.path) ||
+      current.path.startsWith("/invite/")
+    ) {
+      return;
+    }
+    void router.push({ path: "/login", query: { redirect: current.fullPath } });
+  });
+}

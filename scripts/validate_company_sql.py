@@ -16,6 +16,8 @@ DEFAULT_BASELINE = (
     REPO_ROOT
     / "outputs/sql/previews/planning_intel_2026-05-05_company_sql_preview.sql"
 )
+# 0505 基准的锁列夹具（随仓库分发）：DEFAULT_BASELINE 不存在时的回落 schema 来源。
+CONTRACT_BASELINE = REPO_ROOT / "config/contracts/company_sql_baseline_20260505.sql"
 
 EXPECTED_COLUMNS = {
     "ai_journal": ["source_url", "source_title", "content", "created_at"],
@@ -134,6 +136,10 @@ def main() -> int:
     files = args.files or sorted(Path(REPO_ROOT / "outputs/sql/previews").glob("*.sql"))
     files = [path if path.is_absolute() else REPO_ROOT / path for path in files]
     baseline = args.baseline if args.baseline.is_absolute() else REPO_ROOT / args.baseline
+    if baseline == DEFAULT_BASELINE and not baseline.exists():
+        # 全新 checkout（如 CI）没有 outputs/ 本地基准；回落到仓库内锁列夹具。
+        # 显式 --baseline 传入的路径不回落，缺失仍按错误处理。
+        baseline = CONTRACT_BASELINE
 
     issues: list[ValidationIssue] = []
     if not baseline.exists():

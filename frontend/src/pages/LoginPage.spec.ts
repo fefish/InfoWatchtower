@@ -1,0 +1,226 @@
+import { flushPromises, mount } from "@vue/test-utils";
+import { createPinia, setActivePinia } from "pinia";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import LoginPage from "./LoginPage.vue";
+import { useRuntimeStore } from "../stores/runtime";
+
+const routerPush = vi.hoisted(() => vi.fn());
+const routeState = vi.hoisted(() => ({ query: {} as Record<string, string | string[]> }));
+const api = vi.hoisted(() => ({
+  forgotPassword: vi.fn(),
+  startOidcLogin: vi.fn(),
+  login: vi.fn(),
+  guestLogin: vi.fn(),
+  logout: vi.fn(),
+  fetchMe: vi.fn(),
+  changePassword: vi.fn()
+}));
+
+vi.mock("vue-router", () => ({
+  useRoute: () => routeState,
+  useRouter: () => ({ push: routerPush })
+}));
+
+vi.mock("../api/auth", () => ({
+  forgotPassword: api.forgotPassword,
+  startOidcLogin: api.startOidcLogin,
+  login: api.login,
+  guestLogin: api.guestLogin,
+  logout: api.logout,
+  fetchMe: api.fetchMe,
+  changePassword: api.changePassword
+}));
+
+function mountLoginPage(
+  authMode: string,
+  redirect = "",
+  query: Record<string, string | string[]> = {},
+  guestEnabled = false
+) {
+  const pinia = createPinia();
+  setActivePinia(pinia);
+  const runtime = useRuntimeStore();
+  runtime.checked = true;
+  runtime.authMode = authMode;
+  runtime.authGuestEnabled = guestEnabled;
+  routeState.query = { ...(redirect ? { redirect } : {}), ...query };
+
+  return mount(LoginPage, {
+    global: {
+      plugins: [pinia]
+    }
+  });
+}
+
+function buttonByText(wrapper: ReturnType<typeof mount>, text: string) {
+  const button = wrapper.findAll("button").find((item) => item.text().includes(text));
+  if (!button) {
+    throw new Error(`Button not found: ${text}`);
+  }
+  return button;
+}
+
+describe("LoginPage", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    routeState.query = {};
+    api.login.mockResolvedValue({
+      user: {
+        id: "u1",
+        external_provider: "local",
+        external_id: "admin",
+        employee_no: null,
+        username: "admin",
+        display_name: "管理员",
+        department: null,
+        email: null,
+        status: "active",
+        is_active: true,
+        roles: ["super_admin"]
+      }
+    });
+  });
+
+  it("shows the password login form for public password auth", () => {
+    const wrapper = mountLoginPage("public_password");
+
+    expect(wrapper.text()).toContain("账号");
+    expect(wrapper.text()).toContain("密码");
+    expect(wrapper.text()).toContain("忘记密码");
+    expect(wrapper.text()).not.toContain("使用单点登录");
+  });
+
+  it("shows the SSO entry and starts OIDC login for oidc auth", async () => {
+    const wrapper = mountLoginPage("oidc");
+
+    expect(wrapper.text()).toContain("使用单点登录");
+    expect(wrapper.find('input[autocomplete="username"]').exists()).toBe(false);
+    expect(wrapper.find('input[autocomplete="current-password"]').exists()).toBe(false);
+
+    await buttonByText(wrapper, "使用单点登录").trigger("click");
+
+    expect(api.startOidcLogin).toHaveBeenCalledWith("/dashboard");
+    expect(api.login).not.toHaveBeenCalled();
+  });
+
+  it("passes the guarded redirect target to OIDC login", async () => {
+    const wrapper = mountLoginPage("oidc", "/daily-reports?day=2026-07-05");
+
+    await buttonByText(wrapper, "使用单点登录").trigger("click");
+
+    expect(api.startOidcLogin).toHaveBeenCalledWith("/daily-reports?day=2026-07-05");
+  });
+
+  it("shows a friendly OIDC callback error on the login page", () => {
+    const wrapper = mountLoginPage("oidc", "", { auth_error: "state_mismatch" });
+
+    expect(wrapper.text()).toContain("单点登录状态已失效，请重新发起登录。");
+    expect(wrapper.text()).toContain("使用单点登录");
+  });
+
+  it("shows an SSO configuration error without exposing backend details", () => {
+    const wrapper = mountLoginPage("oidc", "", { auth_error: "oidc_not_configured" });
+
+    expect(wrapper.text()).toContain("单点登录服务尚未配置完成");
+    expect(wrapper.text()).not.toContain("OIDC_CLIENT_SECRET");
+  });
+
+  it("returns to the guarded redirect target after password login", async () => {
+    const wrapper = mountLoginPage("public_password", "/weekly-reports");
+
+    await wrapper.find("form").trigger("submit");
+    await flushPromises();
+
+    expect(api.login).toHaveBeenCalledWith("admin", "password");
+    expect(routerPush).toHaveBeenCalledWith("/weekly-reports");
+  });
+
+  it("sends must-change-password users to the account page after login", async () => {
+    api.login.mockResolvedValueOnce({
+      user: {
+        id: "u1",
+        external_provider: "local",
+        external_id: "admin",
+        employee_no: null,
+        username: "admin",
+        display_name: "管理员",
+        department: null,
+        email: null,
+        status: "must_change_password",
+        is_active: true,
+        roles: ["super_admin"]
+      }
+    });
+    const wrapper = mountLoginPage("public_password", "/weekly-reports");
+
+    await wrapper.find("form").trigger("submit");
+    await flushPromises();
+
+    expect(routerPush).toHaveBeenCalledWith("/account");
+  });
+
+  it("does not show local password login for intranet header auth", () => {
+    const wrapper = mountLoginPage("intranet_header");
+
+    expect(wrapper.text()).toContain("当前内网部署由门户登录态接入");
+    expect(wrapper.find('input[autocomplete="username"]').exists()).toBe(false);
+    expect(wrapper.find('input[autocomplete="current-password"]').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain("使用单点登录");
+  });
+
+  // ---- 游客登录（runtime.auth_guest_enabled 驱动的条件渲染） ----
+
+  it("hides the guest entry when guest login is disabled", () => {
+    const wrapper = mountLoginPage("public_password");
+
+    expect(wrapper.text()).not.toContain("以游客身份浏览");
+  });
+
+  it("shows the guest entry and enters as guest when enabled", async () => {
+    api.guestLogin.mockResolvedValue({
+      user: {
+        id: "guest-1",
+        external_provider: "guest",
+        external_id: "guest",
+        employee_no: null,
+        username: "guest",
+        display_name: "游客",
+        department: null,
+        email: null,
+        status: "active",
+        is_active: true,
+        roles: ["viewer"]
+      }
+    });
+    const wrapper = mountLoginPage("public_password", "", {}, true);
+
+    expect(wrapper.text()).toContain("以游客身份浏览");
+    expect(wrapper.text()).toContain("需注册账号");
+
+    await buttonByText(wrapper, "以游客身份浏览").trigger("click");
+    await flushPromises();
+
+    expect(api.guestLogin).toHaveBeenCalledTimes(1);
+    expect(api.login).not.toHaveBeenCalled();
+    expect(routerPush).toHaveBeenCalledWith("/dashboard");
+  });
+
+  it("keeps the guest entry alongside SSO when both are enabled", () => {
+    const wrapper = mountLoginPage("oidc", "", {}, true);
+
+    expect(wrapper.text()).toContain("使用单点登录");
+    expect(wrapper.text()).toContain("以游客身份浏览");
+  });
+
+  it("shows the guest login error on failure", async () => {
+    api.guestLogin.mockRejectedValue(new Error("Guest login is disabled"));
+    const wrapper = mountLoginPage("oidc", "", {}, true);
+
+    await buttonByText(wrapper, "以游客身份浏览").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.find(".login-guest-entry .form-error").text()).toContain("Guest login is disabled");
+    expect(routerPush).not.toHaveBeenCalled();
+  });
+});

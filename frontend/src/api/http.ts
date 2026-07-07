@@ -1,0 +1,124 @@
+/**
+ * 统一 HTTP client（docs/deployment/deployment-topology.md §4.3）。
+ * 所有 api 模块必须经由本模块请求：
+ * - same-origin cookie + JSON + !ok 抛 Error(detail)，行为对齐原各模块私有 requestJson；
+ * - unsafe 方法（POST/PUT/PATCH/DELETE）自动读取 infowatchtower_csrf cookie 附 X-CSRF-Token 头
+ *   （双提交 CSRF，配合后端 AUTH_CSRF_ENABLED）；
+ * - API 前缀统一从 import.meta.env.BASE_URL 拼接，支撑子路径部署（如 /watchtower/）；
+ * - 运行中收到 401（session 过期/被吊销）时触发 onUnauthorized 注册的回调，
+ *   由 main.ts 装配「清 session store + 跳 /login?redirect=当前路由」——
+ *   本模块只暴露注册点，不 import store/router，避免循环依赖。
+ */
+
+const CSRF_COOKIE_NAME = "infowatchtower_csrf";
+const CSRF_HEADER_NAME = "X-CSRF-Token";
+const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+/**
+ * 401 不触发全局回调的路径：登录本身的 401 是「密码错误」业务反馈，
+ * /api/auth/me 是 session 探测（router 守卫用 401 判定未登录并自带重定向）。
+ */
+const UNAUTHORIZED_EXEMPT_PATHS = new Set(["/api/auth/login", "/api/auth/me"]);
+
+type UnauthorizedHandler = (path: string) => void;
+
+let unauthorizedHandler: UnauthorizedHandler | null = null;
+
+/** 注册全局 401 回调（传 null 注销）。装配点在 main.ts，测试可自行替换。 */
+export function onUnauthorized(handler: UnauthorizedHandler | null): void {
+  unauthorizedHandler = handler;
+}
+
+function notifyUnauthorized(path: string): void {
+  const pathname = path.split("?")[0];
+  if (UNAUTHORIZED_EXEMPT_PATHS.has(pathname)) {
+    return;
+  }
+  unauthorizedHandler?.(path);
+}
+
+export function readCsrfToken(): string {
+  if (typeof document === "undefined") {
+    return "";
+  }
+  for (const part of document.cookie.split(";")) {
+    const [name, ...rest] = part.trim().split("=");
+    if (name === CSRF_COOKIE_NAME) {
+      return decodeURIComponent(rest.join("="));
+    }
+  }
+  return "";
+}
+
+export function apiUrl(path: string): string {
+  if (!path.startsWith("/")) {
+    return path;
+  }
+  const base = import.meta.env.BASE_URL ?? "/";
+  const trimmedBase = base.endsWith("/") ? base.slice(0, -1) : base;
+  return `${trimmedBase}${path}`;
+}
+
+function buildInit(init?: RequestInit): RequestInit {
+  const method = (init?.method ?? "GET").toUpperCase();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...((init?.headers as Record<string, string> | undefined) ?? {})
+  };
+  if (UNSAFE_METHODS.has(method)) {
+    const token = readCsrfToken();
+    if (token && !headers[CSRF_HEADER_NAME]) {
+      headers[CSRF_HEADER_NAME] = token;
+    }
+  }
+  return {
+    credentials: "same-origin",
+    ...init,
+    headers
+  };
+}
+
+/** 带状态码的请求错误：调用方可按 status 区分 404（路由缺失/后端版本过旧）、401 等；网络层失败没有 status。 */
+export class HttpError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "HttpError";
+    this.status = status;
+  }
+}
+
+async function raiseForStatus(response: Response, path: string): Promise<void> {
+  if (response.ok) {
+    return;
+  }
+  if (response.status === 401) {
+    notifyUnauthorized(path);
+  }
+  const body: { detail?: unknown } = await response.json().catch(() => ({}));
+  const detail = typeof body.detail === "string" ? body.detail : `HTTP ${response.status}`;
+  throw new HttpError(detail, response.status);
+}
+
+/** 底层入口：仅拼 base 前缀 + 附 cookie/CSRF，不检查状态码（logout 等特殊流程用）。 */
+export async function requestRaw(path: string, init?: RequestInit): Promise<Response> {
+  return fetch(apiUrl(path), buildInit(init));
+}
+
+export async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await requestRaw(path, init);
+  await raiseForStatus(response, path);
+  return response.json() as Promise<T>;
+}
+
+export async function requestVoid(path: string, init?: RequestInit): Promise<void> {
+  const response = await requestRaw(path, init);
+  await raiseForStatus(response, path);
+}
+
+export async function requestBlob(path: string, init?: RequestInit): Promise<Blob> {
+  const response = await requestRaw(path, init);
+  await raiseForStatus(response, path);
+  return response.blob();
+}

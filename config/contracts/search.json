@@ -1,0 +1,141 @@
+{
+  "schema_version": 1,
+  "description": "Global search contract for workspace-scoped intelligence objects. Design: docs/backend/search-design.md.",
+  "runtime_capability": "search",
+  "endpoint": {
+    "method": "GET",
+    "path": "/api/search",
+    "auth": "session",
+    "query": {
+      "q": {
+        "type": "string",
+        "required": true,
+        "empty": "422"
+      },
+      "workspace_code": {
+        "type": "string",
+        "required": true
+      },
+      "types": {
+        "type": "comma_separated_string",
+        "required": false,
+        "allowed_values": [
+          "daily_report",
+          "daily_report_item",
+          "weekly_report",
+          "weekly_report_item",
+          "news_item",
+          "generated_news",
+          "data_source",
+          "tracked_entity",
+          "entity_milestone",
+          "historical_report",
+          "requirement",
+          "topic_task",
+          "comment",
+          "export_job",
+          "export_job_item",
+          "report_rendition",
+          "sync_run",
+          "sync_conflict"
+        ],
+        "unknown_value": "422"
+      },
+      "limit": {
+        "type": "integer",
+        "default": 20,
+        "minimum": 1,
+        "maximum": 50
+      },
+      "cursor": {
+        "type": "string",
+        "required": false,
+        "status": "reserved_v1_returns_null"
+      }
+    },
+    "permission": {
+      "workspace_membership": "viewer",
+      "no_membership": "403",
+      "rule": "Search API must apply workspace and object permission filtering before returning title, summary, highlight, or route.",
+      "type_overrides": {
+        "sync_conflict": "requires global super_admin; explicit type search returns 403 for non-admins and default all-type search suppresses sync_conflict for non-admins",
+        "sync_run": "requires global super_admin; explicit type search returns 403 for non-admins and default all-type search suppresses sync_run for non-admins"
+      }
+    },
+    "response": {
+      "fields": [
+        "query",
+        "workspace_code",
+        "results",
+        "next_cursor"
+      ],
+      "result_fields": [
+        "object_type",
+        "object_id",
+        "title",
+        "summary",
+        "matched_fields",
+        "highlight",
+        "route",
+        "score",
+        "updated_at"
+      ],
+      "next_cursor": "null in database-query v1"
+    }
+  },
+  "object_routes_v1": {
+    "daily_report": "/daily-reports?report_id={id}",
+    "daily_report_item": "/daily-reports?item_id={id}",
+    "weekly_report": "/weekly-reports?report_id={id}",
+    "weekly_report_item": "/weekly-reports?report_id={weekly_report_id}&item_id={id}",
+    "news_item": "/news?news_item_id={id}",
+    "generated_news": "/daily-reports?item_id={daily_report_item_id} or /news?news_item_id={news_item_id}",
+    "data_source": "/sources/{id}",
+    "tracked_entity": "/entity-milestones?entity_id={id}",
+    "entity_milestone": "/entity-milestones?milestone_id={id}",
+    "historical_report": "/historical-reports?id={id}",
+    "requirement": "/requirements?requirement_id={id}",
+    "topic_task": "/tasks?task_id={id}",
+    "comment": "/daily-reports?item_id={daily_report_item_id}&comment_id={id}",
+    "export_job": "/exports?export_job_id={id}",
+    "export_job_item": "/exports?export_job_id={export_job_id}&export_job_item_id={id}",
+    "report_rendition": "/daily-reports?report_id={report_id}&rendition_id={id}&format_code={format_code} or /weekly-reports?report_id={report_id}&rendition_id={id}&format_code={format_code}",
+    "sync_run": "/sync?sync_run_id={id}",
+    "sync_conflict": "/sync?conflict_id={id}"
+  },
+  "frontend_gate": {
+    "meta_runtime_field": "capabilities.search",
+    "render_rule": "Topbar search is rendered only when runtime search capability is true.",
+    "minimum_trigger_length": 2,
+    "result_shell": "AppShell global search panel grouped by object_type with keyboard selection and local recent results scoped by user_id plus workspace_code; no standalone /search route in v1."
+  },
+  "deployment_filtering": {
+    "intranet": "data_source results are suppressed when capability_ingestion is false; content/report/requirement/task/comment results remain searchable by membership.",
+    "other_modes": "all supported object types may be returned after workspace permission filtering."
+  },
+  "privacy": {
+    "ordinary_logs": "must not log raw query text",
+    "allowed_audit_fields": [
+      "user_id",
+      "workspace_code",
+      "result_count",
+      "object_types",
+      "latency"
+    ]
+  },
+  "evidence": {
+    "backend_tests": [
+      "backend/tests/test_search_api.py"
+    ],
+    "frontend_tests": [
+      "frontend/src/layouts/AppShell.spec.ts",
+      "frontend/src/pages/HistoricalReportsPage.spec.ts",
+      "frontend/src/pages/EntityMilestonesPage.spec.ts",
+      "frontend/src/pages/NewsPage.spec.ts",
+      "frontend/src/pages/ExportsPage.spec.ts",
+      "frontend/src/pages/DailyReportsPage.spec.ts",
+      "frontend/src/pages/WeeklyReportsPage.spec.ts",
+      "frontend/src/pages/SyncRunsPage.spec.ts"
+    ]
+  }
+}

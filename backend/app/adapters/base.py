@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Protocol
 
 from app.models.content import DataSource
@@ -27,6 +27,19 @@ class RawItemInput:
     raw_payload_json: dict[str, Any]
     published_at: datetime | None = None
     source_specific_json: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class SourceFetchContext:
+    mode: str = "regular"
+    target_day_start: date | None = None
+    target_day_end: date | None = None
+
+
+class AdapterNotImplementedError(NotImplementedError):
+    def __init__(self, source_type: str) -> None:
+        super().__init__(f"source_type={source_type} adapter is not implemented")
+        self.source_type = source_type
 
 
 class SourceAdapter(Protocol):

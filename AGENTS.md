@@ -5,21 +5,23 @@
 接手任务前必须先读：
 
 1. `docs/00-system-design.md`
-2. `docs/implementation-handoff.md`
-3. `docs/01-implementation-plan.md`
+2. `docs/implementation/implementation-handoff.md`
+3. `docs/implementation/01-implementation-plan.md`
 4. `docs/README.md`
-5. `config/contracts/README.md`
-6. 相关 `config/contracts/*.json`
+5. `docs/architecture/design-governance.md`
+6. 相关目录的 `README.md`，例如 `docs/backend/README.md` 或 `docs/product/README.md`
+7. `config/contracts/README.md`
+8. 相关 `config/contracts/*.json`
 
 ## 单一事实源
 
 - 总纲：`docs/00-system-design.md`
-- 开发任务书：`docs/implementation-handoff.md`
-- 第一版施工计划：`docs/01-implementation-plan.md`
+- 开发任务书：`docs/implementation/implementation-handoff.md`
+- 第一版施工计划：`docs/implementation/01-implementation-plan.md`
 - 文档地图和修改规则：`docs/README.md`
 - 机器契约：`config/contracts/*.json`
 - 标签和板块：`config/taxonomy/*.json`
-- 旧系统事实：`docs/legacy-system-spec.md` 和私有参考仓 `InfoWatchtower-References`
+- 旧系统事实：`docs/reference/legacy-system-spec.md` 和私有参考仓 `InfoWatchtower-References`
 
 如果总纲、模块文档和 contract 冲突，不要擅自选一边实现。先同步修正冲突，再写代码。
 
@@ -32,10 +34,21 @@ contracts 管字段、流程、映射和接口边界。
 
 ## 修改同步规则
 
+改文档结构或新增设计文档：
+
+- 先查 `docs/README.md` 的权威关系和目录地图
+- 先查对应子目录的 `README.md`，确认新文档是事实源、附录、状态图还是运行手册
+- 专题设计文档必须放入 `docs/architecture/`、`docs/product/`、`docs/backend/`、`docs/deployment/`、`docs/implementation/` 或 `docs/reference/`
+- `docs/` 根目录只允许保留 `README.md` 和 `00-system-design.md`
+- 新增或移动的文档必须被最近一层目录的 `README.md` 索引，不能只把文件丢进子目录
+- 同步更新 `docs/README.md` 和对应子目录 `README.md` 的文档地图、阅读顺序和修改规则
+- 如果移动旧文档，必须同步修正文档内链和 README/AGENTS/contract 中的路径引用
+- 运行 `make docs-check`，确保 `docs/` 根目录没有专题文档、每份文档都被索引、所有 `docs/...md` 引用都可解析
+
 改主链路：
 
 - 更新 `docs/00-system-design.md`
-- 更新 `docs/implementation-handoff.md`
+- 更新 `docs/implementation/implementation-handoff.md`
 - 更新对应 `config/contracts/*.json`
 
 改某个模块：
@@ -47,30 +60,36 @@ contracts 管字段、流程、映射和接口边界。
 
 - 更新对应 contract
 - 更新模块文档
-- 更新 `docs/data-examples.md`
+- 更新 `docs/reference/data-examples.md`
 
 改 SQL 导出：
 
 - 更新 `config/contracts/news_sql_mapping.json`
-- 更新 `docs/data-format-mapping.md`
-- 更新 `docs/data-examples.md`
+- 更新 `docs/backend/data-format-mapping.md`
+- 更新 `docs/reference/data-examples.md`
 - 更新 `scripts/validate_company_sql.py` 或确认现有校验仍覆盖新字段
 - 运行 `scripts/validate_company_sql.py`
 
 改登录：
 
 - 更新 `config/contracts/auth_modes.json`
-- 更新 `docs/auth-unified-login.md`
-- 更新 `docs/deployment-ops.md`
+- 更新 `docs/backend/identity-access-design.md`
+- 更新 `docs/deployment/auth-unified-login.md`
+- 更新 `docs/deployment/deployment-ops.md`
 
 改公网/内网同步：
 
 - 更新 `config/contracts/sync_strategy.json`
-- 更新 `docs/multi-environment-sync.md`
+- 更新 `docs/deployment/deployment-topology.md`
+- 更新 `docs/deployment/multi-environment-sync.md`
+- 更新 `docs/backend/sync-conflict-distribution-design.md`
 
 改前端工作台样式或页面结构：
 
-- 更新 `docs/api-and-ui-implementation.md`
+- 更新 `docs/product/frontend-product-design.md`
+- 更新 `docs/product/page-specs/frontend-page-specs.md`
+- 更新 `docs/implementation/api-and-ui-implementation.md`
+- 如果涉及后端能力，先更新对应 `docs/backend/*.md` 和 `config/contracts/*.json`
 - 视觉基线是用户审批过的 Apple 液态玻璃（Liquid Glass）：柔光渐变底、磨砂玻璃侧边栏/顶栏/浮层、半透明玻璃卡片 + 1px 白内描边、大圆角、#0A84FF 强调色、胶囊控件、iOS 式开关、150-250ms 缓动
 - 主题表面样式只允许在 `frontend/src/styles/base.css` 末尾的「Liquid Glass 主题层」统一覆盖；不要在页面区块里再散落定义背景/阴影/圆角
 - 保留 `frontend/src/pages/SourcesPage.vue` 的信息流式数据源列表和右侧标签策略面板

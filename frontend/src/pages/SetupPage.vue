@@ -50,7 +50,7 @@ async function submitSetup() {
     await runOptionalImports();
     router.replace("/dashboard");
   } catch (exc) {
-    error.value = exc instanceof Error ? exc.message : "初始化失败";
+    error.value = setupErrorMessage(exc);
   } finally {
     loading.value = false;
   }
@@ -75,6 +75,16 @@ async function runOptionalImports() {
     importing.value = false;
   }
 }
+
+function setupErrorMessage(exc: unknown) {
+  if (!(exc instanceof Error)) {
+    return "初始化失败";
+  }
+  if (exc.message.includes("Setup already completed") || exc.message.includes("410")) {
+    return "首次设置已完成，请返回登录页。";
+  }
+  return exc.message;
+}
 </script>
 
 <template>
@@ -86,7 +96,7 @@ async function runOptionalImports() {
       </div>
 
       <p v-if="error" class="form-error">{{ error }}</p>
-      <p v-if="notice" class="empty-state">{{ notice }}</p>
+      <p v-if="notice" class="form-success">{{ notice }}</p>
 
       <form class="login-form" @submit.prevent="submitSetup">
         <label>

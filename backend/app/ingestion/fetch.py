@@ -7,7 +7,7 @@ from hashlib import sha1
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.adapters import AdapterRegistry, RawItemInput, create_default_registry
+from app.adapters import AdapterRegistry, RawItemInput, SourceFetchContext, create_default_registry
 from app.models.common import utc_now
 from app.models.content import DataSource, RawItem
 
@@ -66,9 +66,13 @@ async def fetch_source_to_raw_items(
 async def fetch_source_raw_inputs(
     data_source: DataSource,
     registry: AdapterRegistry | None = None,
+    context: SourceFetchContext | None = None,
 ) -> list[RawItemInput]:
     registry = registry or create_default_registry()
     adapter = registry.get(data_source.source_type)
+    fetch_with_context = getattr(adapter, "fetch_with_context", None)
+    if context is not None and callable(fetch_with_context):
+        return await fetch_with_context(data_source, context)
     return await adapter.fetch(data_source)
 
 
@@ -80,7 +84,14 @@ def upsert_raw_inputs(
 ) -> tuple[int, int]:
     created = 0
     updated = 0
+    # 同批内按规范化 entry_key 去重：真实列表页会把同一篇文章链接多次（如轮播位+列表位
+    # 指向同一 URL）。_upsert_raw_item 的存在性检查只能看到已 flush 的行，批内重复会在
+    # flush 时撞 uq_raw_items_source_entry。后出现者覆盖先出现者，与"同 entry_key 重抓
+    # 刷新"的既有语义一致。
+    deduped: dict[str, RawItemInput] = {}
     for raw_input in raw_inputs:
+        deduped[normalize_raw_entry_key(raw_input.entry_key)] = raw_input
+    for raw_input in deduped.values():
         if _upsert_raw_item(session, data_source, raw_input, fetched_at):
             created += 1
         else:

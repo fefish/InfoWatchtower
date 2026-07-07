@@ -7,19 +7,23 @@
     {
       "code": "compute_chips",
       "name": "算力芯片",
-      "description": "GPU、AI 加速器、推理芯片和先进封装相关动态。"
+      "description": "GPU、AI 加速器、推理芯片和先进封装相关动态。",
+      "suggested_categories": ["算力芯片", "产品发布"]
     },
     {
       "code": "edge_devices",
       "name": "端侧设备",
-      "description": "AI PC、手机、机器人、可穿戴和边缘盒子相关动态。"
+      "description": "AI PC、手机、机器人、可穿戴和边缘盒子相关动态。",
+      "suggested_categories": ["端侧设备"]
     },
     {
       "code": "supply_chain",
       "name": "供应链与制造",
-      "description": "代工、封测、材料、设备和产能约束相关动态。"
+      "description": "代工、封测、材料、设备和产能约束相关动态。",
+      "suggested_categories": ["供应链与制造", "生态合作", "监管与出口"]
     }
   ],
+  "fallback_board": "算力芯片",
   "label_sets": [
     {
       "workspace_code": "shared",
@@ -50,6 +54,14 @@
       }
     }
   ],
+  "category_keywords": {
+    "算力芯片": ["gpu", "asic", "hbm", "npu", "加速卡", "先进封装", "推理芯片", "芯片"],
+    "端侧设备": ["ai pc", "手机", "机器人", "可穿戴", "端侧", "边缘"],
+    "供应链与制造": ["代工", "封测", "晶圆", "产能", "材料", "光刻"],
+    "产品发布": ["发布", "上市", "release", "launch"],
+    "生态合作": ["合作", "生态", "伙伴", "联盟"],
+    "监管与出口": ["出口管制", "制裁", "监管", "许可证"]
+  },
   "scoring": {
     "prior_keywords": [
       "GPU",
@@ -59,7 +71,11 @@
       "advanced packaging",
       "edge AI",
       "semiconductor",
-      "foundry"
+      "foundry",
+      "芯片",
+      "晶圆",
+      "封测",
+      "算力"
     ],
     "source_weight_hints": {
       "compute_chips": 1.2,

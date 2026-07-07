@@ -5,6 +5,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
@@ -27,6 +28,43 @@ class TechInsightLoopImportResult:
     total: int
     fetchable: int
     metadata_only: int
+
+
+@dataclass(frozen=True)
+class SourceImportPreviewSample:
+    name: str
+    source_type: str
+    url: str | None
+
+
+@dataclass(frozen=True)
+class SourceImportPreviewResult:
+    catalog: str
+    total: int
+    would_create: int
+    would_update: int
+    samples: list[SourceImportPreviewSample]
+
+
+def preview_legacy_sources(session: Session, seed_root: Path) -> SourceImportPreviewResult:
+    sources = [
+        *_load_wiseflow_sources(seed_root / "wiseflow_sources.json"),
+        *_load_rss_sources(seed_root / "rss_sources.json"),
+        *_load_page_sources(seed_root / "page_sources.json"),
+        *_load_source_registry_csv_sources(seed_root / "source_catalog"),
+    ]
+    return _preview_sources(session, catalog="legacy", sources=sources, tech_identity=False)
+
+
+def preview_tech_insight_loop_sources(session: Session, csv_path: Path) -> SourceImportPreviewResult:
+    sources: list[DataSource] = []
+    with csv_path.open(encoding="utf-8-sig", newline="") as csv_file:
+        reader = csv.DictReader(csv_file)
+        for row in reader:
+            source = _tech_insight_loop_row_to_source(row, csv_path.name)
+            if source is not None:
+                sources.append(source)
+    return _preview_sources(session, catalog="tech", sources=sources, tech_identity=True)
 
 
 def import_legacy_sources(session: Session, seed_root: Path) -> SeedImportResult:
@@ -127,6 +165,53 @@ def import_tech_insight_loop_sources(session: Session, csv_path: Path) -> TechIn
         fetchable=fetchable,
         metadata_only=metadata_only,
     )
+
+
+def _preview_sources(
+    session: Session,
+    *,
+    catalog: str,
+    sources: list[DataSource],
+    tech_identity: bool,
+) -> SourceImportPreviewResult:
+    would_create = 0
+    would_update = 0
+    seen_keys: set[tuple[str, ...]] = set()
+    for source in sources:
+        key = _preview_identity_key(source, tech_identity=tech_identity)
+        if key in seen_keys:
+            would_update += 1
+            continue
+        seen_keys.add(key)
+        statement = _tech_source_identity_statement(source) if tech_identity else _source_identity_statement(source)
+        if session.scalar(statement) is None:
+            would_create += 1
+        else:
+            would_update += 1
+
+    samples = [
+        SourceImportPreviewSample(name=source.name, source_type=source.source_type, url=source.url)
+        for source in sources[:10]
+    ]
+    return SourceImportPreviewResult(
+        catalog=catalog,
+        total=len(sources),
+        would_create=would_create,
+        would_update=would_update,
+        samples=samples,
+    )
+
+
+def _preview_identity_key(source: DataSource, *, tech_identity: bool) -> tuple[str, ...]:
+    if source.url:
+        if tech_identity:
+            return ("url", source.url)
+        return ("source_type_url", source.source_type, source.url)
+    if tech_identity:
+        tech_source_id = str((source.metadata_json or {}).get("tech_insight_loop_source_id") or "")
+        if tech_source_id:
+            return ("tech_id", tech_source_id)
+    return ("source_type_name_null_url", source.source_type, source.name)
 
 
 def _load_json(path: Path) -> list[dict[str, Any]]:
@@ -402,7 +487,13 @@ def _tech_insight_loop_row_to_source(row: dict[str, str], filename: str) -> Data
     http_original_url = original_url if _is_http_url(original_url) else ""
     has_fetch_entry = bool(feed_url or http_original_url)
     metadata_only = not has_fetch_entry
-    source_type = _tech_source_type(row, feed_url, http_original_url)
+    if not has_fetch_entry and original_url.startswith("wx://"):
+        # wx:// 治理记录激活为 wechat 类型（第 12 类 adapter），但仍按契约保持
+        # enabled=false / metadata_only=true：rsshub_route 只是建议入口，
+        # 需要自建 RSSHub/微信转 RSS 桥 + RSSHUB_BASE_URL 就绪后再启用。
+        source_type = "wechat"
+    else:
+        source_type = _tech_source_type(row, feed_url, http_original_url)
     source_tags, source_secondary_tags = _source_tags_from_tech_insight_row(row)
     source_score = (
         _float_value(row.get("字段：source_quality_score"))
@@ -431,6 +522,17 @@ def _tech_insight_loop_row_to_source(row: dict[str, str], filename: str) -> Data
     elif source_type == "page_manual" and http_original_url:
         fetch_config["type"] = "manual"
         fetch_config["articles"] = [{"url": http_original_url}]
+    elif source_type == "wechat":
+        account_name, account_username = _wx_account_from_url(original_url)
+        account_ref = account_username or account_name
+        fetch_config["account_name"] = account_name
+        fetch_config["account_username"] = account_username
+        # rsshub_route 为建议值：配好 RSSHUB_BASE_URL（或 fetch_config.rsshub_base/
+        # rsshub_base_env）并确认自建实例的公众号路由后即可启用抓取；
+        # account 标识同时兼容未来 wx 桥（deployment-topology §5.1）。
+        fetch_config["rsshub_route"] = (
+            f"/wechat/mp/{quote(account_ref, safe='')}" if account_ref else ""
+        )
 
     return DataSource(
         workspace_code="shared",
@@ -653,6 +755,17 @@ def _is_relevant(value: str) -> bool:
 
 def _is_http_url(value: str) -> bool:
     return value.startswith(("http://", "https://"))
+
+
+def _wx_account_from_url(value: str) -> tuple[str, str]:
+    """解析旧台账 wx:// 记录：wx://biz/<url编码账号名>?username=gh_xxx →
+    (账号名, 原始ID gh_xxx)。"""
+    if not value.startswith("wx://"):
+        return "", ""
+    parts = urlsplit(value.strip())
+    account_name = unquote(parts.path.lstrip("/")).strip()
+    account_username = parse_qs(parts.query).get("username", [""])[0].strip()
+    return account_name, account_username
 
 
 def _clean(value: str | None) -> str:

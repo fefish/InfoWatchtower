@@ -1,0 +1,113 @@
+# intranet（内网嵌入）形态 compose：DEPLOY_MODE=intranet，禁采集、pull-only。
+# 与 docker-compose.prod.yml 的差异：
+# - backend 只绑宿主机回环（默认 127.0.0.1:8000），供门户网关直连注入身份头；
+#   不映射宿主机外网端口（契约 hard_constraint：backend 仅可信网关可达）。
+# - reverse_proxy（前端 nginx）同样只绑回环，由门户 nginx 以同站子路径反代承载
+#   iframe，样例见 deploy/nginx.portal.example.conf；前端按 VITE_BASE_PATH 子路径构建。
+# - worker/scheduler 保留：intranet 不跑外网采集（capability 关死），但 scheduler
+#   仍按 SYNC_PULL_INTERVAL_SECONDS 投递 sync_pull、worker 消费，从 extranet feed 拉数据。
+# - 服务镜像固定命名（infowatchtower-backend/-frontend），配合
+#   scripts/export_offline_bundle.sh + scripts/upgrade_offline.sh 离线导入升级。
+# env 模板：deploy/env.intranet.example -> /srv/infowatchtower/.env.intranet。
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-infowatchtower}
+      POSTGRES_USER: ${POSTGRES_USER:-infowatchtower}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - /srv/infowatchtower/postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-infowatchtower} -d ${POSTGRES_DB:-infowatchtower}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - /srv/infowatchtower/redis_data:/data
+
+  backend:
+    image: infowatchtower-backend:${APP_VERSION:-latest}
+    build:
+      context: ../backend
+    restart: unless-stopped
+    env_file:
+      - ${INFOWATCHTOWER_ENV_FILE:-/srv/infowatchtower/.env.intranet}
+    environment:
+      RUN_MIGRATIONS: "true"
+    volumes:
+      - ../config:/config:ro
+    ports:
+      # 仅绑宿主机回环：门户网关反代 /watchtower/api/ 到这里并注入身份头，
+      # 是唯一可信注入点；禁止改绑 0.0.0.0 或外网卡地址。
+      - "${BACKEND_HTTP_BIND:-127.0.0.1:8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3).read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  worker:
+    image: infowatchtower-backend:${APP_VERSION:-latest}
+    build:
+      context: ../backend
+    restart: unless-stopped
+    command: ["python", "-m", "app.workers.worker"]
+    env_file:
+      - ${INFOWATCHTOWER_ENV_FILE:-/srv/infowatchtower/.env.intranet}
+    environment:
+      RUN_MIGRATIONS: "false"
+    volumes:
+      - ../config:/config:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  scheduler:
+    image: infowatchtower-backend:${APP_VERSION:-latest}
+    build:
+      context: ../backend
+    restart: unless-stopped
+    command: ["python", "-m", "app.workers.scheduler"]
+    env_file:
+      - ${INFOWATCHTOWER_ENV_FILE:-/srv/infowatchtower/.env.intranet}
+    environment:
+      RUN_MIGRATIONS: "false"
+    volumes:
+      - ../config:/config:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  reverse_proxy:
+    image: infowatchtower-frontend:${APP_VERSION:-latest}
+    build:
+      context: ../frontend
+      args:
+        # 门户以 https://portal.example.com/watchtower/ 同站子路径承载 iframe，
+        # 前端静态资源与 router base 必须按同一子路径构建。
+        VITE_BASE_PATH: ${VITE_BASE_PATH:-/watchtower/}
+    restart: unless-stopped
+    environment:
+      # 门户域白名单：允许门户 iframe 嵌入（HTML 响应处的 frame-ancestors）。
+      EMBED_FRAME_ANCESTORS: ${EMBED_FRAME_ANCESTORS:-'self'}
+    ports:
+      # 仅绑宿主机回环：由门户 nginx 反代 /watchtower/ 到这里，不直接暴露外网。
+      - "${FRONTEND_HTTP_BIND:-127.0.0.1:8080}:80"
+    depends_on:
+      backend:
+        condition: service_healthy

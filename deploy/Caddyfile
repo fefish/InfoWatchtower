@@ -1,17 +1,11 @@
-:80 {
+# TLS 收口样例（C-6）：由 deploy/docker-compose.prod.yml / docker-compose.extranet.yml
+# 的可选 caddy 服务挂载（profiles: ["tls"]，docker compose --profile tls up -d 启用）。
+# 域名从 env 读取：CADDY_DOMAIN=your-domain.example；Caddy 按域名自动完成 ACME
+# 证书签发与续期（需要 80/443 对公网可达）。
+# 静态资源、/api 路由、身份头清洗与 CSP frame-ancestors 都由前端 nginx
+# （reverse_proxy 服务）处理，Caddy 只做 TLS 终端并透传。
+{$CADDY_DOMAIN:localhost} {
   encode zstd gzip
 
-  handle /healthz {
-    reverse_proxy backend:8000
-  }
-
-  handle /api/* {
-    reverse_proxy backend:8000
-  }
-
-  handle {
-    root * /usr/share/caddy
-    try_files {path} /index.html
-    file_server
-  }
+  reverse_proxy reverse_proxy:80
 }
