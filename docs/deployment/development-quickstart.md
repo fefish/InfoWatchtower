@@ -109,8 +109,11 @@ key 不进 Git：
 ```bash
 # GENERATION_* env 族（2026-07-08 已实现，backend/app/core/config.py）
 export GENERATION_ENABLED=true
-export GENERATION_PROVIDER=minimax            # minimax | openai_compatible
-export GENERATION_BASE_URL=https://api.minimaxi.com/v1   # openai_compatible 必填；minimax 有内置默认
+export GENERATION_PROVIDER=minimax            # 目录 9 code（openai/anthropic/deepseek/moonshot/
+                                              # zhipu_glm/minimax/openrouter/ollama/custom）+
+                                              # 别名 openai_compatible（=custom，deprecated）
+export GENERATION_BASE_URL=https://api.minimaxi.com/v1   # custom/openai_compatible 必填；
+                                              # 其余 provider 有目录默认（llm_providers.json）
 export GENERATION_API_KEY_REF=env:MY_LLM_KEY  # 或 GENERATION_API_KEY=... / file:/path
 export GENERATION_MODEL=MiniMax-M2.7-highspeed
 # 可选：GENERATION_MAX_TOKENS / GENERATION_TEMPERATURE / GENERATION_TIMEOUT_SECONDS /
@@ -121,13 +124,13 @@ export MINIMAX_GENERATION_ENABLED=true
 export MINIMAX_API_KEY=...
 ```
 
-启动自检（fail-fast，见 `config/contracts/deployment_modes.json`
-`startup_failfast_rules`）：`GENERATION_ENABLED=true` 且 key（含 REF 解析后）为空、
-`GENERATION_PROVIDER=openai_compatible` 且 `GENERATION_BASE_URL` 为空、
-provider 不在 `minimax|openai_compatible`，三种错配当前都会拒绝启动。
-（R2 修订随路径 A 一起落地：key 为空降级为启动 WARNING——key 可在运行期
-UI 落库；provider 值域扩展为预设目录全部 code；`custom` 缺 base_url 仍拒启。
-见 `docs/backend/generation-provider-design.md` §9.6。）
+启动自检（见 `config/contracts/deployment_modes.json` `startup_failfast_rules` /
+`startup_warning_rules`，2026-07-08 R2 已落地）：provider 值不在预设目录
+（含别名 `openai_compatible`）、`custom`/`openai_compatible` 缺
+`GENERATION_BASE_URL` 会拒绝启动；`GENERATION_ENABLED=true` 且 env key 为空
+只记启动 WARNING——key 可在运行期由 super_admin 在「生成模型」卡录入（加密
+落库 `llm_provider_credentials`，回显仅 masked 后 4 位），未配置期间生成走
+规则降级稿（预期行为）。见 `docs/backend/generation-provider-design.md` §9.6。
 
 模型名、温度、超时、每日预算、降级行为属于工作台级 `generation_policy`，
 在工作台配置中心「生成模型」卡配置（key 只显示"已配置/未配置"与 masked

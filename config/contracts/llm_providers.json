@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "description": "LLM generation provider preset catalog + instance-level credential storage contract. Design doc: docs/backend/generation-provider-design.md sections 8-10; decision change D-2026-07-08-KEY (keys may now be stored encrypted in DB, superseding the env-only rule).",
-  "status": "designed 2026-07-08, implementation pending. The catalog below is the value domain for GENERATION_PROVIDER and llm_provider_credentials.provider; until implemented, runtime still accepts only openai_compatible|minimax.",
+  "status": "implemented 2026-07-08 (WP4-B): catalog projection GET /api/generation/providers + credential CRUD in backend/app/api/routes/credentials.py, encrypted storage in backend/app/core/crypto.py + app/models/llm.py (migration f2b3c4d5e6a7), credential resolution in backend/app/llm/provider.py resolve_generation_config; covered by backend/tests/test_credentials_api.py. The catalog below is the value domain for GENERATION_PROVIDER and llm_provider_credentials.provider (GENERATION_PROVIDER additionally accepts openai_compatible as a deprecated alias of custom).",
   "core_rule": "The catalog is UI prefill data shipped with the code, not a security boundary and not a capability gate: base_url stays editable, model names stay free-form, and whether a combination works is decided by POST /api/generation/ping and the real generation chain. Plaintext keys never enter Git, sync feeds, manual sync packages, audit details or any API response; at-rest storage is Fernet-encrypted only.",
   "client_rule": "Every preset goes through the single OpenAI-compatible chat/completions client (backend/app/llm/provider.py request_chat_completion) with the existing /chat/completions URL completion rule. No provider-specific client branches: anthropic uses its OpenAI-compatible endpoint; native x-api-key or non-chat/completions protocols are out of scope (use custom + a gateway).",
   "catalog": [
@@ -117,7 +117,7 @@
     ],
     "encryption": {
       "algorithm": "Fernet (cryptography), key derived via HKDF-SHA256 from AUTH_SESSION_SECRET with salt 'infowatchtower/llm-credentials/v1' and info 'fernet-key'; no new env variable",
-      "rotation": "MultiFernet over Settings.auth_session_secret_list (AUTH_SESSION_SECRETS rotation list, first = current): encrypt with the first key, decrypt tries all; on startup rows decryptable only with an old key are re-encrypted idempotently. Dropping an old secret without the rotation list makes stored credentials undecryptable: behavior is degrade-to-unconfigured (key_source=credential_missing, rule-fallback drafts, ping key_missing), audited as generation.credential.decrypt_failed, never a crash and never silent env fallback."
+      "rotation": "MultiFernet over Settings.auth_session_secret_list (AUTH_SESSION_SECRETS rotation list, first = current): encrypt with the first key, decrypt tries all; rows decryptable only with an old key are re-encrypted with the current key idempotently at first resolution/use. Dropping an old secret without the rotation list makes stored credentials undecryptable: behavior is degrade-to-unconfigured (key_source=credential_missing, rule-fallback drafts, ping key_missing), audited as generation.credential.decrypt_failed, never a crash and never silent env fallback."
     },
     "masking": "Every API response (list, detail, policy resolved view, ping, errors) exposes at most key_masked = '****' + key_last4; neither plaintext nor the Fernet ciphertext ever appears in API responses or audit details.",
     "sync_export_exclusion": "llm_provider_credentials never enters sync feeds, manual sync packages or any export; secrets are re-entered per environment (pull-only intranet topology keeps its own rows)."
@@ -135,7 +135,7 @@
     "DELETE /api/generation/credentials/{id} (super_admin): soft-disable; audited generation.credential.disable",
     "POST /api/generation/ping accepts optional credential_id (takes precedence over workspace_code) for save-then-test; audit detail carries credential_id, never key material"
   ],
-  "startup_failfast_revision": "With DB credentials, 'GENERATION_ENABLED=true and empty env key' downgrades from fail-fast to a startup WARNING (key may be configured at runtime via UI). Kept fail-fast: provider value outside the catalog (openai_compatible allowed as deprecated custom alias) and custom/openai_compatible without GENERATION_BASE_URL. deployment_modes.json startup_failfast_rules must be synced 1:1 when this lands.",
+  "startup_failfast_revision": "Implemented with the credential store: 'GENERATION_ENABLED=true and empty env key' is a startup WARNING (key may be configured at runtime via UI; see deployment_modes.json startup_warning_rules). Kept fail-fast: provider value outside the catalog (openai_compatible allowed as deprecated custom alias) and custom/openai_compatible without GENERATION_BASE_URL. deployment_modes.json startup_failfast_rules stays 1:1 with backend/app/core/deploy_checks.py.",
   "invariants": [
     "Plaintext keys exist only in env values, credential_ref target files and the outbound Authorization header; the DB stores Fernet ciphertext only.",
     "workspaces.config_json.generation_policy still never contains key/base_url/provider fields; credential_id is a whitelisted pointer, and secret-like payload keys still answer 422.",

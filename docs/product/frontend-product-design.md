@@ -249,7 +249,7 @@ viewer 成稿只读回退）。
 | 账号资料编辑未实施 | 账号页 | §11 已定稿：本地账号 `PATCH /api/auth/me` 改 display_name/department/email，外部身份只读 |
 | 发现搜索与加入码未实施 | 工作台发现 | §12 已定稿：discover 搜索、workspace join_code、公开形态矩阵；后端契约见 `config/contracts/workspace_model.json` |
 | 报告页时间轴 IA 未实施 | 日报/周报页 | §13 已定稿：ReportTimeline 组件、按月分组全量历史、顶部筛选条、详情区 spacing 逐元素修正；实现待落 `ReportTimeline.vue` 与两页迁移 |
-| 归档页重定位未实施 | 历史报告库 | §13.4 已定稿：页头改跨来源定位、已发布条目跳报告页深链、月份导航降级为旧系统资产筛选 |
+| 归档页重定位已实施（2026-07） | 历史报告库 | §13.4：页头改跨来源定位、已发布条目跳报告页深链、月份导航降级为旧系统资产筛选均已落地；状态与断言见 page-specs §13.2/§13.4 |
 | 界面文案违例未清理 | 全站文案 | §14 已定稿：文案审计规则 + 现存违例清单（7 处前端 + 1 处后端 preflight 文案）；实现待逐条替换并落 `tests/test_blueprint_page_audit.py` 扩展断言 |
 
 逐页缺口、当前标记和测试优先级以 `docs/product/page-specs/frontend-page-specs.md` 为准。
@@ -686,16 +686,22 @@ legacy 筛选（legacy 报告不出现在报告页时间轴，按月回溯仍需
 
 ### 14.2 现存违例清单（2026-07-08 grep 证据，实现轮逐条替换）
 
-| # | 位置 | 违例文案 | 替换文案 |
-|---|---|---|---|
-| 1 | `frontend/src/pages/DailyReportsPage.vue:1037` 页头描述 | 「…也支持把已校验公司 SQL 预览回填为可查看、可采信、可导出的日报」 | 「生成当天的日报草稿，编审、采信并发布正式日报；历史日报从左侧时间轴回溯」 |
-| 2 | `frontend/src/pages/DailyReportsPage.vue:1230` 空态 | 「先在内网版视图完成采信」 | 「先在编审视图完成采信」（编审 tab 即 company_sql_v1 格式 tab 的用户名） |
-| 3 | `frontend/src/pages/WeeklyReportsPage.vue:626` 说明行 | 「只读取…采信状态为 2 的条目…暂不在本阶段启用」 | 「只读取已发布日报中已采信的条目；单次草稿最多 200 条，周报长文自动生成暂不支持」 |
-| 4 | `frontend/src/pages/WeeklyReportsPage.vue:673` 空态 | 「已校验 SQL 预览回填的日报也会进入这里」 | 删除该半句（回填是导入实现细节） |
-| 5 | `frontend/src/pages/WeeklyReportsPage.vue:715` 空态 | 「日报条目 `adoption_status = 2`」 | 「该周内有已发布日报，且日报里有已采信条目」 |
-| 6 | `frontend/src/pages/ExportsPage.vue:536` 说明 | 「只导出已发布日报中 adoption_status = 2 的采信条目」 | 「只导出已发布日报中已采信的条目」 |
-| 7 | `frontend/src/pages/WorkspaceSettingsPage.vue:1809` 选项 | 「规则降级稿（fallback_needs_review，不进公司 SQL）」 | 「规则降级稿（需人工复核，不进入公司 SQL 导出）」 |
-| 8 | `backend/app/exports/company_sql.py:345` preflight 错误（透传到 `/exports` 界面） | 「rule_v1/fallback 草稿不能进入标准公司 SQL。」 | 「规则降级草稿（非 AI 生成确认稿）不能进入标准公司 SQL。」——只改提示文案，`rule_fallback_blocked` 错误码与判定逻辑不变 |
+违例 #1-#8 已全部替换完成，清单清零，契约 `known_violations` 同步收缩为空，
+审计测试自此收紧为全量禁止：
+
+- #1-#6（日报页页头/空态、周报页说明行/两处空态、SQL 导出页说明）于 WP4-D
+  按替换文案落地并配 spec 断言（替换记录见 git 历史与 page-specs
+  §10.2/§12.2）。
+- #7（`WorkspaceSettingsPage.vue` 选项「规则降级稿（fallback_needs_review，
+  不进公司 SQL）」）随 WP4-B 生成模型卡重建替换为
+  「规则降级稿（进入待审队列，不进公司 SQL）」。
+- #8（`backend/app/exports/company_sql.py` preflight 错误，透传到 `/exports`
+  界面）于 WP4-E 由「rule_v1/fallback 草稿不能进入标准公司 SQL。」替换为
+  「规则降级草稿（非 AI 生成确认稿）不能进入标准公司 SQL。」——只改提示文案，
+  `rule_fallback_blocked` 错误码与判定逻辑不变（`test_company_sql_export.py`
+  断言同步）。
 
 清单变更规则：新增违例先进契约 `known_violations`，替换完成后从清单移除并由
-审计测试防回归；测试断言设计见 page-specs §10.4。
+审计测试防回归；测试断言设计见 page-specs §10.4，看护测试为
+`backend/tests/test_blueprint_page_audit.py`
+`test_blueprint_user_copy_bans_implementation_terms`（含扫描器自检断言）。

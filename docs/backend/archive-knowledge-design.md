@@ -131,14 +131,21 @@ inventory
 边界重申：时间轴消费只是只读投影复用，报告页不因此把采信/发布语义下放到归档层；
 归档层也不因供数而提前收录草稿。
 
-后续增量（实现按需做，做时同步 `config/contracts/archive_knowledge.json` 的
-`apis` 描述）：
+后续增量（2026-07 已随归档页重定位落地，契约
+`config/contracts/archive_knowledge.json` 的 `apis` 描述已同步）：
 
-1. `GET /api/report-archive/summary` 增加 `report_type`/`origin` 过滤，
-   让跳月桶按报告类型精确计数。
-2. 性能降级路径：`_report_archive_entries` 当前为全量内存聚合，工作台报告数
-   超过约 1000 份时列表接口延迟上升；届时把月桶与分页下推到 SQL 聚合，
-   API 形状不变，前端无感。
+1. `GET /api/report-archive/summary` 已支持 `report_type`/`origin` 过滤，
+   跳月桶按报告类型/来源精确计数（legacy 未知类型归一为 daily 参与
+   `report_type` 过滤；`origin=legacy` 时条目/采信统计与 `top_sources`
+   一律为 0/空，不给占位均值）；summary 同时新增 `top_sources` 字段
+   （已发布采信条目的来源 Top，SQL 聚合，legacy 无来源数据不参与），
+   供归档页跨来源对比卡使用。
+2. 性能降级路径已实现（`app/archive/report_archive.py`，阈值
+   `SQL_AGGREGATION_THRESHOLD = 1000`）：工作台报告总量超阈值时，列表接口
+   先用轻量列查询构建归档索引（SQL 侧完成来源/类型/关键词过滤），排序/月桶/
+   分页在索引上完成，仅对当前页命中的报告加载条目链补水；summary 的条目级
+   统计始终走 SQL GROUP BY。API 形状不变，前端无感；
+   `test_report_archive_api.py` 以阈值压 -1 断言两条路径输出一致。
 
 历史归档查询页面默认只读。任何导入动作只能由命令行或明确的运维流程触发，不能在普通查询页面隐藏执行。
 当前日报/周报页允许 workspace member 从条目登记新的实体事件，但该写入只进入
@@ -278,9 +285,13 @@ published daily/weekly item
 |---|---|
 | 生产主库全量导入验收未留证 | `validate_tech_import_acceptance.py` 对生产 check-only 报告通过 |
 | 历史知识跨对象体验仍需深化 | requirement/task 已可解释引用历史报告、实体事件和历史反馈；后续补更多对象联动体验和 E2E |
-| 归档页重定位未实施（R3 设计） | `/historical-reports` 已发布条目改深链跳报告页、月份导航收敛 legacy 视图、页头跨来源定位文案；断言见 page-specs §13.4 |
-| summary 跳月桶不分报告类型 | `GET /api/report-archive/summary` 支持 `report_type`/`origin` 过滤并同步 `config/contracts/archive_knowledge.json`（§5.1 后续增量 1） |
 | 跨工作台聚合检索（目标态 v2）未设计 | 本文档补多 workspace_code + membership 过滤的 API 设计后才允许前端入口 |
+
+已收口（2026-07）：归档页重定位（已发布条目深链跳报告页、月份导航收敛 legacy
+视图、页头跨来源定位文案，断言落 `HistoricalReportsPage.spec.ts`，见 page-specs
+§13.4）；summary 跳月桶分报告类型/来源（`GET /api/report-archive/summary` 的
+`report_type`/`origin` 过滤 + `top_sources`，契约与 §5.1 后续增量说明已同步，
+看护在 `test_report_archive_api.py`）。
 
 ## 11. 验收标准
 

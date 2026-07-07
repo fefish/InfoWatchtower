@@ -368,7 +368,7 @@ PATCH /api/weekly-report-items/{id}
 | 周报正文生成不足 | 周报摘要段规则投影 v1 已完成；后续补 LLM 摘要模型和整篇周报长文生成 |
 | 发布通知继续深化 | 已按 `feedback_policy.notify_on_publish` 写 activity event 并通知同工作台成员；后续与归档、邮件和更多对象关注者联动 |
 | 报告锁定和导出关系不清 | locked 报告可导出不可编辑 |
-| 模板驱动生成语义修订待实现 | §8.1（D-2026-07-08-TPL）+ `report-renditions-design.md` §10：逐条新闻 × 逐启用格式带模板 JSON 调 LLM 格式化，模板字段全 AI 填充、投影只排版；company_sql_v1 零影响不变。首版"投影优先"实现（`backend/tests/test_generation_template.py` 看护）需按 §10.7 修订断言重对齐 |
+| ~~模板驱动生成语义修订待实现~~（已重对齐，2026-07-08 WP4-C） | §8.1（D-2026-07-08-TPL）+ `report-renditions-design.md` §10：逐条新闻 × 逐启用格式带模板 JSON 调 LLM 格式化，模板字段全 AI 填充、投影只排版；company_sql_v1 零影响不变。实现已按 §10.7 修订断言 1-10 重对齐（`backend/app/reports/generation_template.py`，`backend/tests/test_generation_template.py` 看护，含公司 SQL 逐字节负向用例） |
 
 ## 12. 验收设计
 

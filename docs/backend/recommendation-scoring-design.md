@@ -1,6 +1,10 @@
 # Recommendation & Scoring 推荐与评分设计
 
-> 状态：目标态设计稿（2026-07 R1 大修：AI 推荐核心，`design_final_pending_implementation`）。
+> 状态：后端已实现（2026-07-08 WP4-A 落地 §4-§11/§17：三层管线 L3 精排、
+> recommendation_policy 与 rubric 编译/生效、purpose 预算三桶、反馈再估计每日 job、
+> 迁移 f1a2b3c4d5e6；测试 `backend/tests/test_recommendation_rerank.py`、
+> `test_recommendation_policy.py`）。§7 排序一致性/空指标的前端展示面与解释字段
+> 展示归 WP4-E；L2 语义层接口预留、默认关闭（§4.3）。
 > 本文是推荐准入、三层推荐管线（规则粗排 → 可选语义层 → LLM 精排）、内容导向
 > rubric、推荐 run、分数解释、排序一致性和反馈反哺的后端模块事实源。
 > 机器契约：`config/contracts/recommendation_ranking.json`。
@@ -551,6 +555,37 @@ effective_weight_t = clamp(
 需求结论反馈（`requirement.feedback_to_recommendation` → `feedback_score`）
 与热度/评分进 L1 的现状路径保持不变。禁止：推荐模块修改原始评论/通知状态/
 Strategy Loop 状态；把点赞逐条当通知；把反馈直接写回 rubric authored 字段。
+
+### 8.4 周/月反馈回哺工作流（延伸层，2026-07-08 定稿）
+
+> 状态：`design_final_pending_implementation`（实施工作包 WP4-G）。
+> 事实源：`docs/backend/feedback-heat-scoring.md` §11-§18；机器契约：
+> `config/contracts/recommendation_ranking.json` `feedback_workflow`。
+
+在本节每日再估计（§8.1-§8.3，WP4-A 已实现，不动）之上追加周/月两级节拍，
+把"采纳/不采纳"升级为完整反馈工作流。本节只记边界，细节归事实源：
+
+- **周 job `feedback_weekly_rollup`**（周一 03:00，接入方式复用
+  `feedback_reaggregate_daily` 的实例级固定时刻 + 心跳幂等模式）：产出周期
+  评估快照 `feedback_rollups`（precision@K 对照采信、rerank 相对粗排
+  uplift、覆盖多样性、位次去偏后的采信率、低数据源清单）、源分层升降建议
+  （advisory，不改 tier/enabled）、rubric 修订提案
+  `rubric_revision_proposals`（LLM 从本周采信 vs 驳回代表样本生成 diff 提案，
+  `pending_review` 入库，走 `purpose=feedback_rollup` 新预算桶，固定 4 次/
+  工作台/日）。
+- **月 job `feedback_monthly_review`**（每月 1 日 03:30，零 LLM 调用）：长期
+  漂移检测、失效源清理建议（advisory）、月度评估汇总。
+- **人审硬门**：提案 accept 由服务端原子登记 compile 记录并走本文档 §5.4 的
+  既有 activate 版本化链（`rubric_version += 1`、同一审计动作）；authored
+  导向永不被自动改写——§8.2 的"authored weight 永不被改写"约束原样覆盖
+  延伸层。
+- **零直接改分**：周/月层不写 `source_score_snapshots` /
+  `rubric_topic_priors` / `recommendation_items`；进分数的路径仍只有每日
+  job 的两个快照，§8.1/§8.2 公式与幅度上限不变。
+- **探索保留**：`recommendation_policy.feedback_workflow.exploration_epsilon`
+  （0..0.1，默认 0.0）在选择层为低数据源保留至多每 run 1 条探索位（确定性
+  抽签、不改准入、不绕 caps）；默认关闭，缺省行为与现状逐位一致——§18
+  断言 1 的回归红线原样覆盖。
 
 ## 9. 预算闸门、成本工程与降级路径
 

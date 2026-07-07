@@ -139,14 +139,19 @@
       "path": "/api/report-archive",
       "min_workspace_role": "viewer",
       "response": "list[ReportArchiveListItem]",
-      "rule": "Merged read-only view of published daily/weekly reports and imported historical reports with month/keyword/type/origin filters and per-report stats (item_count, adopted_count, headline_count, adoption_rate, top_sources)."
+      "rule": "Merged read-only view of published daily/weekly reports and imported historical reports with month/keyword/type/origin filters and per-report stats (item_count, adopted_count, headline_count, adoption_rate, top_sources). Above app.archive.report_archive.SQL_AGGREGATION_THRESHOLD total reports the endpoint switches to the SQL aggregation fallback (lightweight index for filter/sort/pagination; full item-chain hydration only for the requested page); the response shape is unchanged."
     },
     "get_report_archive_summary": {
       "method": "GET",
       "path": "/api/report-archive/summary",
       "min_workspace_role": "viewer",
+      "request_query": {
+        "workspace_code": "required",
+        "report_type": "optional daily|weekly: restricts totals and month buckets; legacy reports count under their normalized type (unknown -> daily)",
+        "origin": "optional published|legacy: origin=legacy zeroes item/adoption stats and top_sources instead of emitting placeholder averages"
+      },
       "response": "ReportArchiveSummaryRead",
-      "rule": "Aggregates archive totals, month buckets, and average adoption rate; never mutates reports."
+      "rule": "Aggregates archive totals, month buckets, average adoption rate, and top_sources of adopted published items (legacy imports carry no source data); never mutates reports. report_type/origin filters give per-type/per-origin month buckets for timeline anchors and the legacy view month nav; the SQL aggregation fallback applies above the same threshold with identical output."
     },
     "get_entity_timeline_summary": {
       "method": "GET",

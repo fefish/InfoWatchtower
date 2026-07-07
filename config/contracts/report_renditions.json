@@ -46,7 +46,7 @@
     "report_formats.generation_template + generation_template_source": "implemented (2026-07-08, backend/app/models/reports.py): canonical template (JSON) plus uploaded source text (JSON or XML carrier). Always null for builtin formats (company_sql_v1/tech_insight_v1)."
   },
   "generation_template": {
-    "status": "first version implemented 2026-07-08 (projection-first; backend/app/reports/generation_template.py, backend/tests/test_generation_template.py). Semantics revised same day by decision change D-2026-07-08-TPL (see decision_change below): design final, implementation re-alignment pending against report-renditions-design.md section 10.7 revised assertions.",
+    "status": "re-aligned to D-2026-07-08-TPL on 2026-07-08 (WP4-C): per-item x per-format full AI formatting implemented in backend/app/reports/generation_template.py (all-field outputSchema + map_from reference, projection-only rendering, degradation fallback), weekly per-item formatting hooked at weekly draft build and rendition regenerate; guarded by backend/tests/test_generation_template.py rewritten against report-renditions-design.md section 10.7 revised assertions 1-10 (incl. company SQL byte-identity + scripts/validate_company_sql.py negative case).",
     "spec": "docs/backend/reports-editorial-design.md section 8.1 (fact source: data-flow position and per-item formatting decision) + docs/backend/report-renditions-design.md section 10 (implementation-level detail, incl. budget formula and section 10.8 decision change record)",
     "carriers": ["json", "xml"],
     "canonical_form": "XML uploads are parsed with a DTD/external-entity-free parser and stored as the same canonical JSON template; runtime reads canonical form only.",

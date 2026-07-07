@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "status": "design_final_pending_implementation",
+  "status": "backend implemented 2026-07-08 (WP4-A): recommendation_policy read/write + compile-rubric/activate-rubric in backend/app/api/routes/recommendations.py, L3 listwise rerank engine in backend/app/recommendations/rerank.py, purpose buckets in backend/app/llm/budget.py, feedback_reaggregate_daily in backend/app/recommendations/reaggregate.py + workers/scheduler.py (migration f1a2b3c4d5e6); covered by backend/tests/test_recommendation_rerank.py + test_recommendation_policy.py. ordering_consistency/empty_metrics surfaces implemented 2026-07-08 (WP4-E): dashboard headline candidates today-only top6 final_score desc in DashboardPage.vue, GET /api/dedupe-groups default sort=score_desc with news_item_id asc tie-break in backend/app/api/routes/news.py, empty-metric hiding in DailyReportsPage/RecommendationsPage/NewsPage; guarded by DashboardPage/NewsPage/RecommendationsPage/DailyReportsPage specs + backend/tests/test_news_api.py. L2 semantic layer stays interface-reserved and disabled by default.",
   "description": "AI recommendation core: three-layer ranking pipeline (rule coarse ranking -> optional semantic layer -> LLM listwise rerank), workspace recommendation_policy with editorial-guidance rubric compilation, final_score fusion, ordering consistency, budget gates and degradation paths. Design doc: docs/backend/recommendation-scoring-design.md",
   "core_rule": "LLM rerank only produces ranking signals. It never changes admission_level/admission_pool/noise_types/reject_reasons, never writes raw_items/news_items/dedupe_groups, and never blocks the pipeline: any failure, disabled policy or exhausted budget degrades to pure coarse ranking (final_score = coarse_score). When recommendation_policy is absent or llm_rerank_enabled=false, item ordering must be bit-for-bit identical to the current rule-only implementation (regression red line).",
   "pipeline_layers": {
@@ -176,6 +176,139 @@
     "prohibitions": [
       "recommendation module never mutates comments, notifications or strategy-loop state",
       "feedback never writes back into the authored rubric or guidance"
+    ]
+  },
+  "feedback_workflow": {
+    "status": "implemented (2026-07-08 feedback-loop round, work package WP4-G; verified against backend/app/recommendations/rollup.py, app/workers/scheduler.py, app/api/routes/recommendations.py, migration f3c4d5e6f7a8 and tests test_feedback_rollup.py / test_rubric_proposals.py). Extends the implemented daily re-estimation layer (feedback_reestimation) with weekly/monthly cadences; it never replaces or alters the daily formulas. Design doc: docs/backend/feedback-heat-scoring.md §11-§18.",
+    "core_rule": "Weekly and monthly layers never mutate scores directly: the only score-affecting paths remain the daily job's source_score_snapshots and rubric_topic_priors (formulas and hard bounds unchanged). Weekly/monthly outputs are evaluation snapshots (feedback_rollups), advisory suggestions (source tier / stale-source cleanup, never auto-applied) and rubric revision proposals that only take effect through human review via the existing compile+activate versioned chain. The authored rubric and guidance are never rewritten automatically. With default policy (exploration_epsilon=0) selection and ordering behavior is bit-for-bit identical to the current implementation.",
+    "policy_extension": {
+      "stored_at": "workspaces.config_json.recommendation_policy.feedback_workflow",
+      "default": {
+        "weekly_rollup_enabled": true,
+        "monthly_review_enabled": true,
+        "proposal_generation_enabled": true,
+        "exploration_epsilon": 0.0
+      },
+      "field_rules": [
+        "weekly_rollup_enabled / monthly_review_enabled / proposal_generation_enabled: bool; rollups are pure snapshots (no score impact) so they default on; proposal generation additionally requires rubric_status=active.",
+        "exploration_epsilon: float 0..0.1, default 0.0 (recommended opt-in value 0.05); out-of-range PATCH answers 422; epsilon=0 keeps selection identical to current behavior (regression red line).",
+        "Same PATCH endpoint, secret-like detection, audit (workspace.recommendation_policy.update) and cross-workspace isolation rules as the rest of recommendation_policy."
+      ]
+    },
+    "signals": {
+      "note": "Aggregation weights for evaluation, exemplar selection and suggestion ranking only — never a scoring formula (zero direct score mutation). All surfaces verified against backend/app/models/.",
+      "list": [
+        { "signal": "requirement_conversion_positive", "source": "editorial_actions(action_type=requirement.feedback_to_recommendation, after_json.outcome=positive)", "weight": 10, "dedup": "once per (requirement_id, news_item_id); strongest one kept per news_item" },
+        { "signal": "daily_adopt", "source": "daily_report_items.adoption_status=2 with published report", "weight": 8, "dedup": "once per (news_item, daily_report); latest report wins across reports" },
+        { "signal": "weekly_adopt", "source": "weekly_report_items.adoption_status=2 with published report, traced back to news_item", "weight": 4, "dedup": "once per (news_item, weekly_report)" },
+        { "signal": "like", "source": "reactions(reaction_type=like, active=true), news_item and daily_report_item dimensions merged", "weight": 2, "dedup": "once per user x target" },
+        { "signal": "rating", "source": "ratings.score 1..5 (dimension=overall)", "weight": "avg>=4 -> +1, avg<=2 -> -1, else 0", "dedup": "latest per user x target, averaged per news_item before polarity" },
+        { "signal": "daily_reject", "source": "daily_report_items.adoption_status=3", "weight": -6, "dedup": "once per (news_item, daily_report)" },
+        { "signal": "weekly_reject", "source": "weekly_report_items.adoption_status=3", "weight": -2, "dedup": "once per (news_item, weekly_report)" },
+        { "signal": "requirement_conversion_negative", "source": "same as positive with outcome=negative", "weight": -4, "dedup": "once per (requirement_id, news_item_id)" },
+        { "signal": "editor_override", "source": "daily_report_items.editor_title/editor_summary/editor_content_json non-empty", "weight": "0 in v1 (observation-only edit_rate metric; polarity is ambiguous without labels; revisit after >=8 weeks of data)", "dedup": "once per daily_report_item" }
+      ],
+      "scope": "only items that entered recommendation (recommendation_items exists) within the window; event time is the feedback action's created_at; workspaces never cross-contaminate"
+    },
+    "position_bias_normalization": {
+      "rank_source": "daily_report_items.sort_order (assigned by final_score desc); fallback: recommendation run rank for items that never entered a draft",
+      "bucket_weights": { "rank_1_6": 1.0, "rank_7_15": 1.2, "rank_16_plus": 1.4 },
+      "formula": "normalized_adopt_rate = min(1.0, sum(bucket_weight * adopted_in_bucket) / max(1, recommended_count))",
+      "usage": "weekly evaluation metrics and source tier suggestions only; the daily source_prior formula keeps the un-normalized adopt_rate and source_score_snapshots are never written by this layer"
+    },
+    "cadence": {
+      "daily": "feedback_reaggregate_daily unchanged (see feedback_reestimation block; implemented in WP4-A)",
+      "weekly": {
+        "job": "feedback_weekly_rollup, Monday 03:00 Asia/Shanghai (after the 02:00 daily job so it reads fresh snapshots)",
+        "scheduler_integration": "reuses the instance-level fixed-time dispatch pattern of feedback_reaggregate_daily in backend/app/workers/scheduler.py (heartbeat dedup per trigger point, no catch-up after restart, skipped when capability_ingestion is false); the job itself iterates enabled workspaces and one workspace failure never aborts the rest",
+        "period_key": "ISO week, e.g. 2026-W28; window = previous complete ISO week (Mon..Sun, Asia/Shanghai)",
+        "idempotency": "same (workspace, period_type, period_key) rerun overwrites the same feedback_rollups row (unique constraint); heartbeat dedup guards cross-instance double dispatch",
+        "outputs": [
+          "source tier re-estimation suggestions (suggest_promote: recommended>=8 and normalized_adopt_rate>=0.25 and reject_rate<=0.1; suggest_demote: recommended>=8 and adopted=0 and reject_rate>=0.5; insufficient_data: recommended<5 -> low-data list feeding exploration; advisory only, never mutates data_sources tier/enabled or workspace_source_links.source_weight)",
+          "topic rebalance observation: per-topic pos/neg and daily effective-weight series; topics pinned at the daily clamp boundary (>=1.45w or <=0.55w for 7 consecutive days) are listed as authored-weight revision suggestions feeding the proposal prompt; rubric_topic_priors stays written exclusively by the daily job",
+          "evaluation report stored in feedback_rollups.metrics_json (see evaluation_metrics)",
+          "rubric revision proposal generation (see rubric_revision_proposals)"
+        ]
+      },
+      "monthly": {
+        "job": "feedback_monthly_review, 1st of month 03:30 Asia/Shanghai, same dispatch/idempotency/capability rules; zero LLM calls in v1",
+        "period_key": "calendar month, e.g. 2026-06; window = previous calendar month",
+        "outputs": [
+          "long-term drift detection: monthly precision_at_6 relative drop >20% and absolute drop >=0.05 vs previous month -> metrics_json.drift_flag=true; plus counts of run-level drift_alert/low_variance; flag only, no reshaping",
+          "stale source cleanup suggestions: enabled sources with 4 consecutive weekly rollups at recommended_count=0, or monthly recommended>=8 and adopted=0 and reject_rate>=0.5 -> stale_source_suggestions (suggest_disable|suggest_review); never auto-disables any source",
+          "monthly aggregate of weekly metrics and proposal generation/review counts"
+        ]
+      }
+    },
+    "evaluation_metrics": {
+      "precision_at_k": "K in {6, 12}; per published daily report in window: |top-K by sort_order with adoption_status=2| / min(K, item count), averaged over reports; null (never 0) when the window has no published reports",
+      "rerank_uplift": "on candidates with llm_rerank_status in (scored, cached): precision@6 under final_score ordering minus precision@6 under coarse_score ordering against the same adoption facts; null when no scored candidates",
+      "source_coverage": "unique sources among adopted items / adopted count; null when nothing adopted",
+      "topic_entropy": "Shannon entropy over rubric_hits_json of adopted items normalized by log(topic count), 0..1; only when rubric active, else null",
+      "normalized_adopt_rate": "position-bias-normalized adoption rate (see position_bias_normalization); null when nothing recommended",
+      "edit_rate": "share of adopted items with editor overrides (observation-only)",
+      "low_data_sources": "enabled sources with recommended_count < 5 in window (id/name list)",
+      "empty_sample_rule": "metrics with no samples are stored as null and must be hidden by the frontend, never rendered as 0.0 (same empty-metric rule as ordering_consistency)"
+    },
+    "rubric_revision_proposals": {
+      "trigger": "rubric_status=active AND feedback_workflow.proposal_generation_enabled AND (daily adopts + daily rejects in window) >= 10 AND no pending_review proposal exists for the workspace AND generation provider usable (resolve_generation_config chain) AND purpose=feedback_rollup budget available; any miss -> feedback_rollups.proposal_status records skipped_no_rubric|skipped_disabled|skipped_low_data|skipped_pending_exists|skipped_provider|skipped_budget and the rollup still succeeds",
+      "exemplars": "deterministic: adopted items top 8 by final_score desc, rejected items top 8 by final_score desc (high-scored rejects carry the most information); each truncated to {title, summary<=200 chars, source_name, rubric_hits}",
+      "prompt_version": "revision_prompt_v1 (persisted on the proposal row)",
+      "output": "strict JSON {proposed_rubric: full rubric matching rubric_schema, change_summary: [{op, target_code, from, to, rationale<=60 chars}]}; op enum add_topic|remove_topic|adjust_topic_weight|add_exclusion|remove_exclusion|adjust_boost|edit_keywords_hint; schema validation failure or diff mismatch -> retry once (counts against budget), then proposal_status=failed with the rollup still succeeded",
+      "statuses": "pending_review | accepted | rejected | superseded | expired; a newly stored proposal supersedes any leftover pending one; pending older than 30 days is expired by the weekly job",
+      "review": "POST review accept atomically registers a recommendation_rubric_compiles row (model_called=false, prompt_version=revision_proposal_v1) and runs the existing activate chain (rubric_version += 1, audit workspace.recommendation_rubric.activate) then marks the proposal accepted with compile_fingerprint backfilled; reject only flips status and audits; both audit workspace.rubric_revision_proposal.review",
+      "stale_guard": "accept answers 422 when base_rubric_version != current rubric_version (rubric changed since generation) or when the proposal is not pending_review",
+      "hard_rule": "a pending/rejected/expired proposal has zero effect on the active rubric, effective weights or any recommendation run"
+    },
+    "exploration": {
+      "config": "recommendation_policy.feedback_workflow.exploration_epsilon, float 0..0.1, default 0.0 (off)",
+      "behavior": "selection layer only, after the current algorithm: when epsilon>0 and the latest weekly rollup has a non-empty low-data source list, a deterministic draw (sha256(run_key + ':exploration') scaled to 0..1) < epsilon reserves at most 1 slot per run for the highest-coarse_score unselected candidate from a low-data source with admission in (P1, P2)",
+      "constraints": "never exceeds run limit / source cap / pool cap (conflict abandons the slot); never changes admission; R/P3 never enter via exploration; recommendation_reason appends exploration_slot for explainability",
+      "regression": "epsilon=0 keeps selection bit-for-bit identical to current behavior; the draw is reproducible for a fixed run_key"
+    },
+    "budget": {
+      "purpose_bucket": "feedback_rollup (new enum value on generation_daily_usage.purpose; the String column needs no migration)",
+      "cap": "fixed 4 calls per workspace per day, not configurable; covers proposal generation plus its single retry; monthly review makes zero LLM calls",
+      "isolation": "decision locked: do NOT reuse the rubric_compile bucket (that is the interactive compile quota of 20/day; an automated weekly job must not crowd out user actions); the now-four purpose buckets never consume each other's quota; exhaustion -> proposal_status=skipped_budget with the rollup still succeeding"
+    },
+    "data_model_deltas": {
+      "migration": "one Alembic revision assigned at implementation time, chained after the then-current e/f head (f2b3c4d5e6a7 as of design sign-off)",
+      "new_tables": [
+        "feedback_rollups(id, workspace_code idx, period_type weekly|monthly, period_key, window_start, window_end, status succeeded|empty|failed, proposal_status, metrics_json, source_breakdown_json, topic_breakdown_json, sample_refs_json, computed_at, created_at, updated_at; unique(workspace_code, period_type, period_key); no SyncMixin — never enters sync feeds)",
+        "rubric_revision_proposals(id, workspace_code idx, rollup_id fk, base_rubric_version, prompt_version, proposed_rubric_json, change_summary_json, sample_refs_json, status idx(workspace_code,status), review_comment, reviewed_by fk users nullable, reviewed_at, compile_fingerprint, created_at, updated_at; no SyncMixin)"
+      ],
+      "report_storage_decision": "evaluation reports live in feedback_rollups.metrics_json (the rollup row IS the report); no separate report table"
+    },
+    "api": {
+      "list_rollups": "GET /api/workspaces/{code}/feedback-rollups?period_type=weekly|monthly&limit=8 (workspace admin+; period_key desc; items carry id/period_type/period_key/window/status/proposal_status/metrics/computed_at)",
+      "rollup_detail": "GET /api/workspaces/{code}/feedback-rollups/{id} (workspace admin+; full source_breakdown/topic_breakdown/sample_refs)",
+      "manual_run": "POST /api/workspaces/{code}/feedback-rollups/run body {period_type, period_key?=previous complete period} (workspace admin+; synchronous, idempotent overwrite, audited workspace.feedback_rollup.manual_run)",
+      "list_proposals": "GET /api/workspaces/{code}/rubric-revision-proposals?status=pending_review (workspace admin+)",
+      "review_proposal": "POST /api/workspaces/{code}/rubric-revision-proposals/{id}/review body {action: accept|reject, comment} (workspace admin+; accept runs the existing activate chain atomically; 422 on stale/non-pending)"
+    },
+    "invariants": [
+      "authored rubric/guidance change only through human-reviewed accept via the existing compile+activate chain",
+      "weekly/monthly layers never write source_score_snapshots, rubric_topic_priors or recommendation_items; daily formulas and hard bounds stay untouched",
+      "company_sql output and adoption_status semantics are byte-for-byte unaffected; rollups and proposals never enter company SQL or sync feeds",
+      "LLM calls run in the dedicated purpose=feedback_rollup bucket (fixed 4/day); the four purpose buckets never crowd each other",
+      "rollup jobs are read-only over fact tables: no source enable/tier mutation, no comment/notification/strategy-loop writes, no historical snapshot rewrites",
+      "instances without ingestion capability never dispatch rollup jobs; every degradation path (no data / no provider / no budget) completes the rollup instead of failing it"
+    ],
+    "acceptance_assertions": [
+      "rollup_empty_ok: with zero feedback data the weekly rollup completes, writes a status=empty row with all sample-less metrics null (never 0.0), makes zero LLM calls and creates no proposal",
+      "rollup_idempotent: rerunning the same (workspace, period_type, period_key) overwrites the same row without duplicates and never regenerates a proposal for a window that already has one",
+      "pending_proposal_no_effect: while a proposal is pending_review, active_rubric/rubric_version/effective weights are unchanged and recommendation runs behave bit-for-bit as without the proposal",
+      "accept_uses_activate_chain: accept bumps rubric_version by 1, leaves a model_called=false compile record, and writes both workspace.recommendation_rubric.activate and workspace.rubric_revision_proposal.review audits; no code path ever writes authored rubric fields directly",
+      "stale_proposal_guard: accept on base_rubric_version != current rubric_version answers 422; reject leaves policy untouched; a new proposal supersedes leftover pending ones; pending older than 30 days becomes expired",
+      "budget_bucket_isolated: proposal generation (including retry) increments only generation_daily_usage purpose=feedback_rollup; the fixed 4/day cap exhaustion yields proposal_status=skipped_budget with the rollup still succeeded",
+      "exploration_bounded: exploration_epsilon outside 0..0.1 answers 422 on PATCH; at most 1 exploration slot per run, restricted to admission P1/P2 with recommendation_reason containing exploration_slot; epsilon=0 (default) keeps selection identical to current behavior; the draw is reproducible per run_key",
+      "metrics_correct: on a fixed fixture precision_at_6/12, rerank_uplift, source_coverage, topic_entropy and normalized_adopt_rate match hand-computed values; precision is null (not 0) when no published reports exist",
+      "position_bias_applied: identical adoption facts at different display ranks produce different normalized_adopt_rate per the fixed bucket weights 1.0/1.2/1.4",
+      "monthly_review_advisory: a constructed declining series yields drift_flag=true; constructed stale sources appear in stale_source_suggestions; data_sources.enabled and tier are field-for-field unchanged after the job",
+      "no_boundary_leak: sync feed payloads and company SQL exports contain no feedback_rollups/rubric_revision_proposals data; company_sql output is byte-for-byte unchanged; historical recommendation_items/source_score_snapshots/rubric_topic_priors rows are untouched by rollup runs",
+      "manual_run_gated: POST feedback-rollups/run is idempotent, audited as workspace.feedback_rollup.manual_run, and answers 403 for viewer/member",
+      "dispatch_idempotent_and_gated: one dispatch per trigger point across scheduler instances (heartbeat dedup); capability_ingestion=false instances dispatch nothing; a single workspace failure aborts neither other workspaces nor the scheduler tick",
+      "ui_empty_state: with no rollup the settings area and evaluation card render an explicit empty state; null metrics are hidden entirely and the pages never show a 0.0 placeholder (frontend spec guarded)"
     ]
   },
   "api": {

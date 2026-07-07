@@ -933,6 +933,48 @@ git diff --check
   只在 legacy 视图/页头文案/空样本无 `0.0` 占位）；报告页时间轴不出现
   legacy 节点（archive-knowledge-design §11 只读断言）。
 
+### WP4-G 反馈回哺工作流：周/月 rollup + rubric 修订提案（前后端，2026-07-08 追加定稿）
+
+- 范围：单迁移新表 `feedback_rollups` + `rubric_revision_proposals`
+  （revision 实现期分配，down_revision 指向当时 e/f 链 head——定稿日为
+  `f2b3c4d5e6a7`；两表均无 SyncMixin，不进同步 feed）；
+  `recommendation_policy` 增 `feedback_workflow` 键
+  （weekly/monthly/proposal 开关 + `exploration_epsilon` 0..0.1 默认 0.0，
+  校验/审计沿既有 PATCH 链）；周 job `feedback_weekly_rollup`（周一 03:00）
+  与月 job `feedback_monthly_review`（每月 1 日 03:30）——scheduler 接入复用
+  `_dispatch_feedback_reaggregate` 的实例级固定时刻 + 心跳幂等模式，
+  `capability_ingestion=false` 不投递；评估指标计算（precision@6/@12、
+  rerank uplift、覆盖多样性、位次 bucket 去偏 1.0/1.2/1.4、edit_rate 观测、
+  低数据源清单）；源分层/失效源 advisory 建议（不改 tier/enabled）；
+  rubric 修订提案生成（`revision_prompt_v1`、确定性代表样本、rubric schema
+  校验重试 1 次、supersede/expired 治理、新 `purpose=feedback_rollup` 预算桶
+  固定 4 次/工作台/日）；提案审阅 API（accept 原子登记 compile 记录并走既有
+  activate 链）；rollups 读 API + 手动触发 API（admin+，审计）；选择层 ε
+  探索位（确定性抽签、每 run ≤1 条、P1/P2 限定、默认 0 关闭）；前端
+  `/workspace-settings` 推荐设置卡「反馈回哺」区 + `/recommendations`
+  「反馈评估」卡（空态与 null 指标隐藏）。
+- 事实源/契约：`docs/backend/feedback-heat-scoring.md` §11-§18（工作流事实源）、
+  `docs/backend/recommendation-scoring-design.md` §8.4（边界节）；
+  `config/contracts/recommendation_ranking.json` `feedback_workflow`（全部键）；
+  页面规格 `docs/product/page-specs/frontend-page-specs.md` §9/§19.5 增量。
+- 文件域：`backend/app/recommendations/`（新增 rollup 模块 + policy/rubric
+  扩展 + service 选择层探索位）、`backend/app/workers/scheduler.py`、
+  `backend/app/api/routes/recommendations.py`、`backend/app/llm/budget.py`
+  （新 purpose 常量与固定上限）、`backend/app/models/`、
+  `backend/alembic/versions/`、`backend/tests/`、
+  `frontend/src/pages/{WorkspaceSettingsPage,RecommendationsPage}.vue` 及
+  spec、`frontend/src/api/`。
+- 验收：feedback-heat-scoring §18 断言 1-14 全部有对应 pytest/前端 spec；
+  断言 7（`epsilon=0` 时选择与现状逐位一致）必须用固定 fixture 先写、先绿，
+  再动选择层；断言 11（sync/公司 SQL grep 不到新表、company_sql 逐字节不变）
+  跑 `scripts/validate_company_sql.py` 负向用例；公共门禁全跑（本节开头）。
+- 依赖与冲突：硬依赖 WP4-A（读取 `source_score_snapshots` /
+  `rubric_topic_priors` / `recommendation_items` 新列，复用
+  `recommendation_rubric_compiles` + activate 链与 purpose 分桶机制，均已
+  落地）；与 WP4-E 前端改动同页不同卡（`RecommendationsPage`），合并按卡
+  逐块对；`recommendation_ranking.json` 仅追加 `feedback_workflow` 块，
+  状态位迁移仍归 WP4-A 规则。
+
 ### 并行与依赖关系
 
 ```text

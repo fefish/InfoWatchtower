@@ -139,9 +139,11 @@
     "AUTH_MODE=oidc and neither OIDC_ISSUER nor explicit OIDC_AUTHORIZATION_ENDPOINT/OIDC_TOKEN_ENDPOINT is configured",
     "sync_consumer enabled with SYNC_PULL_ENABLED=true but SYNC_REMOTE_BASE_URL or SYNC_REMOTE_TOKEN missing",
     "INGESTION_SOURCE_TYPES contains values outside the 12 known source types (source_fields.json source_types incl. wechat); a typo in the allowlist would silently drop coverage, so it must fail startup",
-    "GENERATION_PROVIDER not in [openai_compatible, minimax]",
-    "GENERATION_ENABLED=true and resolved api key empty (GENERATION_API_KEY empty and GENERATION_API_KEY_REF missing/unresolvable, after legacy MINIMAX_API_KEY per-field fallback)",
-    "GENERATION_PROVIDER=openai_compatible and GENERATION_BASE_URL empty (only the minimax preset carries a builtin default base URL)"
+    "GENERATION_PROVIDER not in [openai, anthropic, deepseek, moonshot, zhipu_glm, minimax, openrouter, ollama, custom, openai_compatible] (the llm_providers.json catalog codes plus the deprecated openai_compatible alias of custom)",
+    "GENERATION_PROVIDER in [custom, openai_compatible] and GENERATION_BASE_URL empty (every other catalog preset carries a default base URL from llm_providers.json)"
+  ],
+  "startup_warning_rules": [
+    "GENERATION_ENABLED=true and resolved env api key empty (GENERATION_API_KEY empty and GENERATION_API_KEY_REF missing/unresolvable, after legacy MINIMAX_API_KEY per-field fallback): downgraded from fail-fast to a startup WARNING per D-2026-07-08-KEY -- the key may be registered at runtime via the UI credential store (llm_provider_credentials); until then generation degrades to rule-fallback drafts (expected behavior, not a fault)"
   ],
   "install_presets": {
     "description": "deploy/install.sh --preset generated env combinations (default full). Presets are env combinations on top of DEPLOY_MODE, not new modes; mirror is the standalone/cloud + consumer-override combination and must stay legal under startup_failfast_rules (checked by scripts/check_prod_deploy.py).",

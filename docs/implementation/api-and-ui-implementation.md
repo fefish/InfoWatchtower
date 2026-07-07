@@ -49,6 +49,11 @@ PATCH /api/workspaces/{workspace_code}/schedule-policy
 GET  /api/workspaces/{workspace_code}/generation-policy
 PATCH /api/workspaces/{workspace_code}/generation-policy
 POST /api/generation/ping
+GET  /api/generation/providers
+GET  /api/generation/credentials
+POST /api/generation/credentials
+PATCH /api/generation/credentials/{credential_id}
+DELETE /api/generation/credentials/{credential_id}
 
 GET  /api/sources?workspace_code={workspace_code}
 POST /api/sources
@@ -138,6 +143,8 @@ PATCH /api/strategic-implications/{id}
 GET  /api/historical-reports/summary
 GET  /api/historical-reports
 GET  /api/historical-reports/{id}
+GET  /api/report-archive/summary
+GET  /api/report-archive
 GET  /api/legacy-import/summary
 GET  /api/legacy-import/gaps
 GET  /api/entity-timeline/summary
@@ -215,36 +222,79 @@ GET  /api/audit-logs?workspace_code=...&action=...&object_type=...
 - `generation-policy` 读写：策略 + resolved provider/model/key_configured
   （永不回显 key；secret-like 字段 422，审计 `workspace.generation_policy.update`）；
   `POST /api/generation/ping`：super_admin/editor_admin 连通性自检，审计
-  `generation.ping`。
-- `POST /api/report-formats/validate-template`：模板干跑校验 + 投影/增量字段划分 +
+  `generation.ping`。WP4-B（2026-07-08）：policy 增 `credential_id` 指针
+  （指向存在且启用的凭据否则 422）、resolved 增 credential_id/credential_label、
+  workspace admin+ 附 `credential_options`；ping 增可选 `credential_id`
+  （与 workspace_code 同给时凭据优先）。
+- provider 目录 + 凭据落库（WP4-B，契约 `llm_providers.json`）：
+  `GET /api/generation/providers` 登录即可读（目录原样投影，无密钥字段）；
+  credentials CRUD 收敛 super_admin（列表放宽 editor_admin），key write-only、
+  Fernet at rest（`app/core/crypto.py` HKDF 派生 + MultiFernet 轮换）、回显仅
+  `key_masked`（****+后 4 位）、DELETE 软删（被引用按 `credential_missing`
+  降级、不回落 env），审计 `generation.credential.create/update/disable`
+  无明文；表 `llm_provider_credentials` 排除在 sync feed/手工包/导出之外。
+  看护：`backend/tests/test_credentials_api.py`。
+- `POST /api/report-formats/validate-template`：模板干跑校验 + 字段划分 +
   preview_item（不落库）；`POST/PATCH /api/report-formats` body 增加
   `generation_template`（locked/builtin 400，契约 `report_renditions.json`
-  `generation_template`）。注：2026-07-08 决策变更 D-2026-07-08-TPL 后，响应
-  字段划分语义重定义为「降级可兜底 / 纯生成」并需附成本提示（wire key 不变），
-  随 WP4-C 重对齐。
+  `generation_template`）。2026-07-08 决策变更 D-2026-07-08-TPL 已随 WP4-C
+  重对齐：响应字段划分语义重定义为「降级可兜底（projection_fields）/ 纯生成
+  （generated_fields）」（wire key 不变），preview_item 附「全字段 AI 按模板
+  格式化」提示与每条 1 次调用的成本提示（`note`/`cost_hint` 键）。
 
-待实现端点（2026-07-08 第四轮设计定稿，`docs/implementation/01-implementation-plan.md`
-§18；实现后移入上表）：
+- `recommendation-policy` 四端点（WP4-A，2026-07-08 实现，契约
+  `recommendation_ranking.json`）：`GET/PATCH /api/workspaces/{code}/
+  recommendation-policy`——viewer+ 读（附只读 resolved：llm_rerank_available/
+  provider_usable/rerank_calls_used_today/rerank_budget/active_rubric_version/
+  semantic_layer_available，永不含 key）、admin+ 写（取值域/fusion 权重和/
+  secret-like 422，审计 `workspace.recommendation_policy.update`）；
+  `POST .../compile-rubric`（admin+，fingerprint 幂等预览——缓存命中零模型
+  调用，`purpose=rubric_compile` 固定 20 次/工作台/日 429，schema 两次不合法
+  502，`persistence=not_persisted`）；`POST .../activate-rubric`（admin+，
+  fingerprint 必须命中本工作台 7 天内编译记录否则 422，`rubric_version+1`，
+  审计 `workspace.recommendation_rubric.activate`）。既有端点行为增量：推荐
+  run 响应每条 item 增加 `coarse_score/llm_relevance_score/llm_rerank_status/
+  llm_rerank_reason/rubric_hits/rubric_version`，run `summary_json.llm_rerank`
+  记录精排状态块；精排/编译调用分别记账 `generation_daily_usage`
+  `purpose=rerank/rubric_compile`，与 `generation` 桶互不挤占。看护：
+  `backend/tests/test_recommendation_policy.py`、`test_recommendation_rerank.py`。
 
-```text
-# WP4-A 推荐精排 + 内容导向（契约 recommendation_ranking.json）
-GET   /api/workspaces/{code}/recommendation-policy            workspace viewer+
-PATCH /api/workspaces/{code}/recommendation-policy            workspace admin+ 或 super_admin
-POST  /api/workspaces/{code}/recommendation-policy/compile-rubric    workspace admin+
-POST  /api/workspaces/{code}/recommendation-policy/activate-rubric   workspace admin+
-# 既有端点行为增量：GET /api/recommendation/runs/{id}/items 响应增加
-# coarse_score/llm_relevance_score/llm_rerank_status/llm_rerank_reason/
-# rubric_hits/rubric_version；GET /api/news-items/dedupe-groups 默认 sort 切 score_desc
+- 排序一致性与统一归档（WP4-E/WP4-D/WP4-F，2026-07-08 实现）：
+  `GET /api/dedupe-groups` 默认 `sort` 由 `updated_desc` 切为 `score_desc`
+  （`final_score` 降序、并列按 `news_item_id` 升序，契约
+  `recommendation_ranking.json` `ordering_consistency`，看护
+  `backend/tests/test_news_api.py` + `NewsPage.spec.ts`）；
+  `GET /api/report-archive`（viewer+，`workspace_code` 必填，支持
+  `month/report_type=daily|weekly/origin=published|legacy/q/offset/limit`）与
+  `GET /api/report-archive/summary`（支持 `report_type`/`origin` 过滤月桶）
+  统一归档已发布日报/周报 + legacy 导入报告的轻量索引（条目数/采信率/头条/
+  来源分布；报告总量超阈值走 SQL 聚合降级路径，API 形状不变），供日报/周报页
+  ReportTimeline 时间轴与 `/historical-reports` 跨来源定位消费（事实源
+  `docs/backend/archive-knowledge-design.md` §5.1，契约
+  `config/contracts/archive_knowledge.json`；看护
+  `backend/tests/test_report_archive_api.py`）。
 
-# WP4-B provider 目录 + 凭据落库（契约 llm_providers.json）
-GET    /api/generation/providers                              登录即可读（静态目录）
-GET    /api/generation/credentials                            super_admin 或 editor_admin（masked）
-POST   /api/generation/credentials                            super_admin
-PATCH  /api/generation/credentials/{id}                       super_admin
-DELETE /api/generation/credentials/{id}                       super_admin（软删）
-# 既有端点行为增量：POST /api/generation/ping 增加可选 credential_id；
-# GET generation-policy resolved 增加 key_source/credential_id/credential_options
-```
+- 反馈回哺五端点（WP4-G，2026-07-08 实现，契约
+  `recommendation_ranking.json` `feedback_workflow`）：
+  `GET /api/workspaces/{code}/feedback-rollups?period_type=weekly|monthly&limit=8`
+  （admin+，period_key 降序，空样本指标一律 null 不写 0）、
+  `GET .../feedback-rollups/{id}`（admin+，全量 source/topic breakdown 与
+  sample_refs）、`POST .../feedback-rollups/run`（admin+，同步执行、幂等覆盖同
+  period_key 行、审计 `workspace.feedback_rollup.manual_run`、viewer/member
+  403、非法 period 422）、`GET .../rubric-revision-proposals?status=...`
+  （admin+）、`POST .../rubric-revision-proposals/{id}/review`（admin+；accept
+  服务端原子登记 `model_called=false` 编译记录并走既有 activate 链
+  `rubric_version+1`，非 pending / `base_rubric_version` 不匹配 422 stale 防护；
+  reject 只改状态；双审计 `workspace.rubric_revision_proposal.review` +
+  `workspace.recommendation_rubric.activate`）。既有端点行为增量：
+  `recommendation-policy` PATCH 增 `feedback_workflow` 键（三开关 +
+  `exploration_epsilon` 0..0.1 默认 0.0，越界 422）；推荐 run 选择层 ε 探索位
+  （epsilon=0 默认与现状逐位一致，探索条目 `recommendation_reason` 追加
+  `exploration_slot`）；周/月 job `feedback_weekly_rollup`（周一 03:00）/
+  `feedback_monthly_review`（每月 1 日 03:30）按每日 job 的心跳幂等模式接入
+  scheduler（intranet 不投递）；提案生成记账 `generation_daily_usage`
+  `purpose=feedback_rollup`（固定 4 次/工作台/日，四桶互不挤占）。看护：
+  `backend/tests/test_feedback_rollup.py`、`test_rubric_proposals.py`。
 
 `POST /api/ingestion/runs` 支持 `concurrency`、`source_timeout_seconds` 和 `max_items_per_source`（单源条数上限，对齐 Tech Insight Loop 的单源上限行为，截断按 feed 新在前顺序）；默认值来自 `INGESTION_CONCURRENCY=8`、`INGESTION_SOURCE_TIMEOUT_SECONDS=25`。RSS/页面/论文 API 适配器统一使用浏览器 User-Agent（`app/adapters/base.py` 的 `BROWSER_FETCH_HEADERS`，与旧系统一致），降低站点反爬 403。`POST /api/ingestion/runs/{id}/retry-failed-sources` 只抽取原 run 中失败源，按低并发长超时重跑，并在新 run 的 `params_json.retry_of_run_id/source_ids` 中记录追溯；无失败源或失败源已停用返回 409，不生成 0 源成功记录。已注册但尚未实现的 stub adapter 会返回每源 `status=skipped_unimplemented` 和 run 汇总 `source_skipped_unimplemented`，不计入成功或失败，前端显示“尚未实现”。`POST /api/ingestion/backfill-runs` 支持 `rss_window/paper_api/archive_page/sitemap/manual_import` 模式；其中 `paper_api` 已支持 arXiv v1、OpenAlex Works v1 和 Semantic Scholar v1，历史补采会把目标日期窗口传给 adapter，并分别生成 arXiv submittedDate 查询、OpenAlex `from_publication_date/to_publication_date` filter 或 Semantic Scholar `publicationDateOrYear` filter；`manual_import` 已支持前端上传/粘贴 CSV/SQL、`POST /api/ingestion/manual-import-preview` 后端预览、逐行错误报告和 API `manual_items` 提交，后端拒绝空条目、缺归属源、非本次启用源和空内容行。第一版仍只承诺把补采结果先写入 `raw_items`，后续复用标准化、去重、推荐和日报链路。
 
@@ -479,6 +529,12 @@ workspace_sections     当前工作台启用的页面
 - 历史报告详情页的“转需求”只写当前 `requirements` 与
   `requirement_source_links.historical_report_id`；`POST /api/requirements` 支持
   `source_historical_report_id`，需求/任务来源可跳回 `/historical-reports?id=...`。
+- 跨来源归档重定位已实施（2026-07-08，WP4-F，page-specs §13）：页面统一消费
+  `GET /api/report-archive(/summary)` 定位当前已发布报告 + legacy 导入报告；
+  已发布条目点击深链 `/daily-reports?report_id=...` / `/weekly-reports?report_id=...`
+  到报告页阅读成稿，本页不渲染当前报告正文；页内正文阅读只保留 legacy 条目；
+  月份导航收敛为 legacy 视图内筛选；summary 卡为 current vs legacy 对比形态，
+  空样本隐藏均值（不渲染 `0.0` 占位）。看护：`HistoricalReportsPage.spec.ts`。
 
 `/entity-milestones`：
 
