@@ -113,9 +113,8 @@ def validate_deploy_settings(settings: Settings) -> None:
             f"{', '.join(unknown_source_types)}; "
             f"allowed values: {', '.join(KNOWN_INGESTION_SOURCE_TYPES)}.",
         )
-    # 生成 provider 启动自检（generation-provider-design §3.1；契约
-    # deployment_modes.json planned_startup_failfast_rules，实现后应移入
-    # startup_failfast_rules）：错配不能拖到夜里 pipeline 静默降级，必须拒启。
+    # 生成 provider 启动自检（generation-provider-design §3.1/§9.6，契约
+    # deployment_modes.json startup_failfast_rules 与本清单 1:1）。
     generation_provider = settings.generation_provider_effective
     if generation_provider not in GENERATION_PROVIDERS:
         raise RuntimeError(
@@ -123,16 +122,24 @@ def validate_deploy_settings(settings: Settings) -> None:
             f"got {generation_provider!r}.",
         )
     if settings.generation_enabled_effective and not settings.generation_api_key_effective:
-        raise RuntimeError(
-            "GENERATION_ENABLED=true requires a resolvable API key. Set GENERATION_API_KEY "
-            "in the environment file, or GENERATION_API_KEY_REF=env:VAR / file:/abs/path "
-            "pointing at a non-empty secret (legacy MINIMAX_API_KEY still works as a "
-            "per-field fallback during the deprecation window). The key lives only in "
-            "env/credential files; it never enters the DB, Git, sync feeds or audit logs.",
+        # R2 修订（D-2026-07-08-KEY）：key 可在运行期通过 UI 落库
+        # （llm_provider_credentials），启动时无法断言最终配置——从拒启降级为
+        # WARNING + 「生成模型」卡引导；未配置期间生成走规则降级稿（预期行为）。
+        logger.warning(
+            "GENERATION_ENABLED=true but no API key is configured in the environment "
+            "(GENERATION_API_KEY / GENERATION_API_KEY_REF / legacy MINIMAX_API_KEY all "
+            "empty). If no credential is registered in the UI either "
+            "(workspace settings > generation model card), generation will degrade to "
+            "rule-based fallback drafts until a key is provided. Keys never enter Git, "
+            "sync feeds or audit logs; DB storage is Fernet-encrypted only.",
         )
-    if generation_provider == "openai_compatible" and not settings.generation_base_url_effective:
+    if (
+        generation_provider in ("custom", "openai_compatible")
+        and not settings.generation_base_url_effective
+    ):
         raise RuntimeError(
-            "GENERATION_PROVIDER=openai_compatible requires GENERATION_BASE_URL "
-            "(only the minimax preset carries a builtin default base URL). "
-            "Set GENERATION_BASE_URL to the provider's OpenAI-compatible endpoint.",
+            f"GENERATION_PROVIDER={generation_provider} requires GENERATION_BASE_URL "
+            "(every other catalog preset carries a default base URL from "
+            "config/contracts/llm_providers.json). Set GENERATION_BASE_URL to the "
+            "provider's OpenAI-compatible endpoint.",
         )

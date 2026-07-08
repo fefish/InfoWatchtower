@@ -14,6 +14,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.routes.auth import assert_workspace_member, get_current_user, require_super_admin
+from app.archive import report_archive
 from app.auth.service import write_audit
 from app.collaboration.notifications import (
     record_requirement_status_changed_activity,
@@ -1144,28 +1145,72 @@ def get_historical_report(
 @router.get("/report-archive/summary", response_model=ReportArchiveSummaryRead)
 def get_report_archive_summary(
     workspace_code: str = Query(...),
+    report_type: str | None = Query(default=None, pattern="^(daily|weekly)$"),
+    origin: str | None = Query(default=None, pattern="^(published|legacy)$"),
     current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> ReportArchiveSummaryRead:
-    """统一归档统计：已发布日报/周报 + legacy 导入报告的总量、月份分布与平均采信率。"""
+    """统一归档统计：已发布日报/周报 + legacy 导入报告的总量、月份分布与平均采信率。
+
+    `report_type`/`origin` 过滤让跳月桶按报告类型/来源精确计数
+    （archive-knowledge-design §5.1 后续增量 1）；报告总量超过阈值时
+    月桶改走 SQL 聚合降级路径（§5.1 后续增量 2），API 形状不变。
+    """
 
     assert_workspace_member(session, current_user, workspace_code, min_role="viewer")
-    entries = _report_archive_entries(session, workspace_code=workspace_code)
-    published = [entry for entry in entries if entry.origin == "published"]
-    month_counts: dict[str, int] = {}
-    for entry in entries:
-        if entry.month:
-            month_counts[entry.month] = month_counts.get(entry.month, 0) + 1
-    total_items = sum(entry.item_count for entry in published)
-    total_adopted = sum(entry.adopted_count for entry in published)
-    rated = [entry.adoption_rate for entry in published if entry.item_count > 0]
-    published_ats = [entry.published_at for entry in published if entry.published_at]
+    if report_archive.should_use_sql_aggregation(session, workspace_code=workspace_code):
+        index = report_archive.fetch_archive_index(
+            session, workspace_code=workspace_code, report_type=report_type, origin=origin,
+        )
+        total = len(index)
+        published_daily = sum(1 for row in index if row.origin == "published" and row.report_type == "daily")
+        published_weekly = sum(1 for row in index if row.origin == "published" and row.report_type == "weekly")
+        legacy_total = sum(1 for row in index if row.origin == "legacy")
+        month_counts: dict[str, int] = {}
+        for row in index:
+            if row.month:
+                month_counts[row.month] = month_counts.get(row.month, 0) + 1
+        published_ats = [row.published_at for row in index if row.origin == "published" and row.published_at]
+        if origin == "legacy":
+            total_items, total_adopted, rated = 0, 0, []
+        else:
+            total_items, total_adopted, rated = report_archive.published_item_stats(
+                session, workspace_code=workspace_code, report_type=report_type,
+            )
+    else:
+        entries = _report_archive_entries(session, workspace_code=workspace_code)
+        if report_type:
+            entries = [entry for entry in entries if entry.report_type == report_type]
+        if origin:
+            entries = [entry for entry in entries if entry.origin == origin]
+        published = [entry for entry in entries if entry.origin == "published"]
+        total = len(entries)
+        published_daily = sum(1 for entry in published if entry.report_type == "daily")
+        published_weekly = sum(1 for entry in published if entry.report_type == "weekly")
+        legacy_total = sum(1 for entry in entries if entry.origin == "legacy")
+        month_counts = {}
+        for entry in entries:
+            if entry.month:
+                month_counts[entry.month] = month_counts.get(entry.month, 0) + 1
+        published_ats = [entry.published_at for entry in published if entry.published_at]
+        if origin == "legacy":
+            total_items, total_adopted, rated = 0, 0, []
+        else:
+            total_items = sum(entry.item_count for entry in published)
+            total_adopted = sum(entry.adopted_count for entry in published)
+            rated = [entry.adoption_rate for entry in published if entry.item_count > 0]
+    if origin == "legacy":
+        top_sources: list[tuple[str, int]] = []
+    else:
+        top_sources = report_archive.published_top_sources(
+            session, workspace_code=workspace_code, report_type=report_type,
+        )
     return ReportArchiveSummaryRead(
         workspace_code=workspace_code,
-        total=len(entries),
-        published_daily=sum(1 for entry in published if entry.report_type == "daily"),
-        published_weekly=sum(1 for entry in published if entry.report_type == "weekly"),
-        legacy_reports=sum(1 for entry in entries if entry.origin == "legacy"),
+        total=total,
+        published_daily=published_daily,
+        published_weekly=published_weekly,
+        legacy_reports=legacy_total,
         total_items=total_items,
         total_adopted=total_adopted,
         average_adoption_rate=round(sum(rated) / len(rated), 4) if rated else 0.0,
@@ -1174,6 +1219,9 @@ def get_report_archive_summary(
             for month, count in sorted(month_counts.items(), reverse=True)
         ],
         latest_published_at=max(published_ats) if published_ats else None,
+        top_sources=[
+            ReportArchiveSourceStat(name=name, count=count) for name, count in top_sources
+        ],
     )
 
 
@@ -1189,9 +1237,20 @@ def list_report_archive(
     current_user: User = CURRENT_USER,
     session: Session = DB_SESSION,
 ) -> list[ReportArchiveListItem]:
-    """统一归档列表：回溯任意一天/一周发过什么、质量如何（条目数/采信率/头条/来源分布）。"""
+    """统一归档列表：回溯任意一天/一周发过什么、质量如何（条目数/采信率/头条/来源分布）。
+
+    报告总量超过阈值时走 SQL 聚合降级路径（archive-knowledge-design §5.1
+    后续增量 2）：先按轻量索引过滤分页，只对当前页命中的报告做完整聚合。
+    """
 
     assert_workspace_member(session, current_user, workspace_code, min_role="viewer")
+    if report_archive.should_use_sql_aggregation(session, workspace_code=workspace_code):
+        index = report_archive.fetch_archive_index(
+            session, workspace_code=workspace_code, report_type=report_type, origin=origin, q=q,
+        )
+        if month:
+            index = [row for row in index if row.month == month]
+        return _hydrate_archive_page(session, index[offset: offset + limit])
     entries = _report_archive_entries(session, workspace_code=workspace_code)
     if month:
         entries = [entry for entry in entries if entry.month == month]
@@ -3460,6 +3519,49 @@ def _archive_sort_value(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value
+
+
+def _hydrate_archive_page(
+    session: Session,
+    page: list[report_archive.ArchiveIndexRow],
+) -> list[ReportArchiveListItem]:
+    """SQL 聚合降级路径的页内补水：只对当前页命中的报告加载条目链并构建完整条目。"""
+
+    entries: dict[str, ReportArchiveListItem] = {}
+    daily_ids = [row.id for row in page if row.kind == "daily_report"]
+    if daily_ids:
+        reports = session.scalars(
+            select(DailyReport)
+            .options(
+                selectinload(DailyReport.items)
+                .selectinload(DailyReportItem.generated_news)
+                .selectinload(GeneratedNews.news_item),
+            )
+            .where(DailyReport.id.in_(daily_ids)),
+        ).unique().all()
+        for report in reports:
+            entries[report.id] = _daily_report_archive_entry(report)[1]
+    weekly_ids = [row.id for row in page if row.kind == "weekly_report"]
+    if weekly_ids:
+        reports = session.scalars(
+            select(WeeklyReport)
+            .options(
+                selectinload(WeeklyReport.items)
+                .selectinload(WeeklyReportItem.generated_news)
+                .selectinload(GeneratedNews.news_item),
+            )
+            .where(WeeklyReport.id.in_(weekly_ids)),
+        ).unique().all()
+        for report in reports:
+            entries[report.id] = _weekly_report_archive_entry(report)[1]
+    legacy_ids = [row.id for row in page if row.kind == "historical_report"]
+    if legacy_ids:
+        reports = session.scalars(
+            select(HistoricalReport).where(HistoricalReport.id.in_(legacy_ids)),
+        ).all()
+        for report in reports:
+            entries[report.id] = _legacy_report_archive_entry(report)[1]
+    return [entries[row.id] for row in page if row.id in entries]
 
 
 def _top_sources(source_names: list[str], limit: int = 3) -> list[ReportArchiveSourceStat]:

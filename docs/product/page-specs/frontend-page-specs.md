@@ -91,20 +91,21 @@
 
 ## 3. 逐页总表
 
-模板列含义见 §1.1；`list*` 表示 list 模板的双列变体（仅 `/sources` 标签策略侧栏被允许）。
+模板列含义见 §1.1；`list*` 表示 list 模板的双列变体（允许两类固定侧栏：`/sources`
+标签策略面板、日报/周报页 ReportTimeline 时间轴侧栏，见产品设计 §13）。
 
 | 页面 | 模板 | 当前标记 | 关键未做 |
 |---|---|---|---|
-| `/dashboard` | dashboard | 部分 | 点击跳转 E2E 和源健康长期趋势（§4.1 主列+固定侧栏重排与侧栏第 6 位调度心跳卡已实施，WP3-D/H） |
+| `/dashboard` | dashboard | 部分 | 点击跳转 E2E 和源健康长期趋势（§4.1 主列+固定侧栏重排与侧栏第 6 位调度心跳卡已实施，WP3-D/H；头条候选契约口径排序与空指标隐藏已实施，WP4-E，§4.4） |
 | `/sources` | list* | 部分 | 标签策略错误态和更多 E2E（新增源/导入预览已迁居中 Modal，2026-07） |
 | `/sources/:id` | detail | 部分 | 采信贡献趋势和更细评分贡献 |
 | `/ingestion-runs` | list | 部分 | 更多补采 provider、邮件/外部告警通道和更长周期趋势 |
 | `/news` | list | 部分 | 跨页联动深化和 E2E |
-| `/recommendations` | list | 部分 | 评分器策略编辑/批量重算、观察池运营深化 |
-| `/daily-reports` | list | 部分 | 富文本/差异、更多对象通知、完整 E2E |
+| `/recommendations` | list | 部分 | 评分器策略编辑/批量重算、观察池运营深化（「反馈评估」卡已实施，WP4-G，§9.2） |
+| `/daily-reports` | list* | 部分 | 富文本/差异、更多对象通知、完整 E2E（报告页 IA 重设计——ReportTimeline 时间轴/顶部筛选条/spacing 修正/文案违例清理已实施，WP4-D/E，§10.2） |
 | `/daily-reports/:id` / `:id/edit` | detail | 部分 | 编辑体验、版本/差异、权限态测试 |
-| `/weekly-reports` | list | 部分 | LLM 周报摘要模型、热度排序、分页 |
-| `/historical-reports` | list | 部分 | 生产主库导入验收证据和更多 E2E |
+| `/weekly-reports` | list* | 部分 | LLM 周报摘要模型、热度排序、分页（报告页 IA 重设计已实施，WP4-D，§12.2） |
+| `/historical-reports` | list | 部分 | 生产主库导入验收证据、跨工作台聚合检索（目标态 v2，先补后端设计）和更多 E2E（归档职责重定位已实施，§13.2，2026-07） |
 | `/entity-milestones` | list | 部分 | 更多 E2E |
 | `/quality-archive` | list | 部分 | 更多当前反馈/推荐反馈分解释关系和 E2E |
 | `/insights` | list | 部分 | insight 到 requirement 联动抽屉、批量转需求和当前反馈/归档聚合解释 |
@@ -112,7 +113,7 @@
 | `/tasks` | list | 部分 | 跨对象联动体验、评论和更多归档对象解释关系 |
 | `/sync` | list | 部分 | 端到端实机证据、生产告警投递/runbook、更多对象 manual_merge |
 | `/exports` | list | 部分 | 真实内网平台生产联调证据 |
-| `/workspace-settings` | settings | 部分 | E2E（自动化/生成模型/可见性与加入码三卡已实施，WP3-G/H） |
+| `/workspace-settings` | settings | 部分 | E2E（自动化/生成模型/可见性与加入码三卡已实施，WP3-G/H；生成模型卡已随 WP4-B 改造为 provider 目录+凭据完整配置流；「反馈回哺」区已实施，WP4-G，§19.5.3）；「推荐设置（内容导向）」卡未实施（§19.5.3） |
 | `/users` | settings | 部分 | 真实 provider/内网门户验收 |
 | `/audit-logs` | list | 部分 | action taxonomy、告警/运行证据联动 |
 | `/login` | auth | 部分 | 真实 provider 验收 |
@@ -195,6 +196,19 @@
   DashboardPage.spec 断言）。
 - scheduler 心跳过期或 status API 失败渲染为离线/不可用态，不得显示在线绿色
   （假成功回归；已实施，DashboardPage.spec 断言）。
+- 头条候选集合与排序一致性（R3 设计并经交叉评审对齐，排序事实源是
+  `config/contracts/recommendation_ranking.json` `ordering_consistency`
+  `dashboard_headline_candidates`，键名一字不差）：`DashboardPage.spec.ts` 用乱序
+  fixture 断言——集合只含 `day_key=今日` 且 `admission_level ∈ {P0,P1,P2}` 的候选
+  top 6，按 `final_score` 严格降序（并列按 `news_item_id` 升序）；含非今日候选的
+  fixture 断言其**不被渲染**；无今日候选 fixture 断言渲染空态而非历史候选。
+  （已实施，2026-07-08，WP4-E：`DashboardPage.vue` topCandidates 改契约口径，
+  原「今日优先、历史混排」两层排序已废除，三条断言均落 `DashboardPage.spec.ts`；
+  契约排序键变更时本断言必须同步。）
+- 空指标隐藏（R3 设计）：均值/比率类指标无样本时不渲染占位 `0.0`——本页涉及
+  近七日采信趋势等比率展示；同一规则约束日报页 `平均评分`（rated 为空时隐藏该
+  span，§10.4）和归档页平均采信率。断言：无评分样本 fixture 下页面不出现文本
+  `0.0`（已实施，2026-07-08，WP4-E，`DashboardPage.spec.ts` 空态断言）。
 
 ## 5. 数据源管理 `/sources`
 
@@ -334,6 +348,11 @@
 ### 8.3 未做
 
 - 批量采信、批量剔除、筛选排序和候选 watch v1 已完成。
+- 候选池默认排序切分数序已实施（2026-07-08，WP4-E，契约
+  `config/contracts/recommendation_ranking.json` `ordering_consistency`
+  `candidate_pool`）：`GET /api/dedupe-groups` 默认 `sort` 由 `updated_desc`
+  改为 `score_desc`（`final_score` 降序，并列按 `news_item_id` 升序），前端
+  排序下拉默认同步 `score_desc`，其他排序仅显式选择时生效。
 - 质量治理字段和候选复核流还需增强。
 - 完整 trace 复核和 trace 节点业务解释 v1 已完成；后续继续增强跨页联动体验。
 - E2E 不足。
@@ -343,6 +362,10 @@
 - 候选池只展示去重 winner，不直接拿 raw 流当候选。
 - `frontend/src/pages/NewsPage.spec.ts` 覆盖搜索锚点、raw trace 锚点、dedupe group 锚点、lineage trace 展示、
   候选池筛选排序、批量采信、批量剔除、候选关注和 viewer 写操作隐藏。
+- 默认排序一致性（R1 设计；已实施，2026-07-08，WP4-E，`NewsPage.spec.ts` +
+  `backend/tests/test_news_api.py`）：不带显式排序参数时列表按 `final_score`
+  降序渲染；`final_score` 缺失的历史候选显示「未评分」而非 `0.0`（契约
+  `ordering_consistency` `empty_metrics`）。
 - 工程字段不占第一屏。
 - 采信状态与日报条目一致。
 - viewer 不显示采信/剔除写操作。
@@ -364,11 +387,23 @@
 - 已接 P2/P3 观察池复核 v1：从当前推荐 run 筛出未入选观察池候选，调用日报批量采信/剔除 API
   写入日报草稿，并根据 run 详情回显“未处理/已采信/已剔除”。
 - 默认不误触发日报草稿。
+- 「反馈评估」卡已实施（WP4-G，2026-07-08；事实源
+  `docs/backend/feedback-heat-scoring.md` §16.3，契约
+  `config/contracts/recommendation_ranking.json` `feedback_workflow`）：
+  period_type 切换（weekly/monthly），`GET /api/workspaces/{code}/feedback-rollups
+  ?period_type=...&limit=8` 列表 + 行展开详情（precision@6/@12、rerank uplift、
+  覆盖多样性、位次去偏采信率、edit_rate、源 tier 建议、失效源清单）；无 rollup
+  渲染「尚未生成反馈评估」空态，null 指标整项隐藏；只读展示，admin+ 可见
+  （member/viewer 整卡不渲染、零调用）。
 
 ### 9.3 未做
 
 - 评分器策略编辑、配置变更影响预览和批量重算未完成；当前只支持只读策略摘要和单条候选预览。
 - P2/P3 观察池排序策略、复核备注、抽检队列和批量重算联动未完成。
+- 推荐 run 条目的精排解释字段前端未展示：`coarse_score/llm_relevance_score/
+  llm_rerank_status/llm_rerank_reason/rubric_hits/rubric_version` 已随 WP4-A 进入
+  run 详情 API 响应（契约 `recommendation_ranking.json` `api`
+  `run_items_response_additions`），本页分数拆解区尚未渲染这些解释列。
 - 更多筛选和跳转测试不足。
 
 ### 9.4 测试看护
@@ -379,12 +414,35 @@
 - `frontend/src/pages/RecommendationsPage.spec.ts` 覆盖观察池复核调用日报采信 API 并回显日报状态。
 - 分数拆解字段缺失时有降级显示。
 - 无权限用户不可触发重算。
+- 反馈评估卡（WP4-G，`RecommendationsPage.spec.ts` 已看护）：无 rollup fixture
+  断言渲染空态且页面不出现 `0.0` 占位；null 指标 fixture 断言对应指标项不渲染
+  （空指标规则与 §4.4 同源）；评估卡为只读展示，不得出现未设计的源禁用/权重
+  编辑动作；member/viewer 整卡不渲染且零 API 调用。
 
 ## 10. 日报 `/daily-reports`
 
 ### 10.1 目标态
 
 采编生成、阅读、编辑、采信、发布日报，并能评论、评分、追溯来源。
+本页自身承担本工作台日报的**时间线、按标签筛选和历史全量查询**能力
+（2026-07-08 R3 定稿，IA/组件/分工见产品设计 §13；历史全量回溯不再依赖
+`/historical-reports`）：
+
+- **左侧 ReportTimeline 时间轴**（组件规范见产品设计 §13.1）：按月分组竖向
+  时间轴，月份组头吸顶，节点显示日期/发布状态点/条数徽章，无限滚动加载全量
+  历史，顶部快速跳月；已发布层走 `GET /api/report-archive?report_type=daily&origin=published`
+  轻量索引（viewer+），草稿层走现有 `GET /api/daily-reports`（member+ 才渲染
+  草稿节点）。替代现左侧仅 20 份的 `report-tab` 平铺列表。
+- **顶部筛选条**：一级标签胶囊（十分类，多选，取自条目 `generated_news.category`）、
+  板块下拉（当前成稿格式分组标题）、关键词输入（标题/摘要包含匹配）；纯前端
+  过滤当前报告条目与成稿分组显示，显示「N/M 条」，0 命中给清除入口，不发新请求、
+  不改采信状态。
+- **详情区 spacing 修正**（逐元素 token 表见产品设计 §13.3）：详情卡补
+  `--space-card-pad` 四边内边距（根因：`.daily-report-card` 现无 padding 且
+  `.editorial` 强制 `padding-right: 0`，文字贴卡边）；标题区/统计行/格式 tab 行
+  逐项对齐 spacing tokens。
+- **文案违例清理**（清单见产品设计 §14.2）：本页页头「SQL 预览回填」描述与
+  空态「内网版视图」为违例 #1/#2，按清单替换。
 
 ### 10.2 已做
 
@@ -398,6 +456,21 @@
 - 管理员可在条目详情中点击“沉淀需求”，从日报条目创建 insight、implication 和 requirement。
 - 日报条目详情可显示当前用户关注状态和关注人数，点击关注/取消关注调用 `GET/PATCH /api/object-watchers`。
 - `frontend/src/pages/DailyReportsPage.spec.ts` 已覆盖 viewer 策略关闭时反馈入口不可用、日报 report 锚点、report rendition 成稿锚点、日报条目沉淀需求入口和日报条目关注切换。
+- 左侧已接入 `ReportTimeline` 时间轴（2026-07-08 R3 定稿，WP4-D 实施）：按月分组、
+  组头吸顶、状态点/条数徽章、无限滚动（`GET /api/report-archive?report_type=daily&origin=published`
+  offset 分页）、summary months 跳月、失败可重试行、空态；草稿节点仅 member+ 渲染，
+  归档节点点击经 `detail_id` 直达 `GET /api/daily-reports/{id}`。组件断言在
+  `frontend/src/components/ReportTimeline.spec.ts`，页面接线断言在 `DailyReportsPage.spec.ts`。
+- 顶部筛选条已接入（WP4-D）：一级标签胶囊多选 + 板块下拉（当前成稿格式分组）+
+  关键词包含匹配，纯前端过滤当前报告条目与成稿分组，显示「N/M 条」，0 命中渲染
+  清除入口，不发写请求（`DailyReportsPage.spec.ts` 断言）。
+- 详情区 spacing 已按产品设计 §13.3 token 表修正（`.daily-report-card` 补
+  `--space-card-pad` 四边内边距、删 `.editorial padding-right: 0`、标题区/统计行/
+  格式 tab 行/正文区逐项对齐 token）。
+- 文案违例 #1/#2 已按产品设计 §14.2 清单替换（页头描述与成稿空态，spec 断言
+  不再出现「SQL 预览回填」「内网版视图」）。
+- 「0.0 平均评分」空指标隐藏已实施（2026-07-08，WP4-E）：`averageRating` 在
+  `rating_count=0` 无样本时返回 null 并隐藏整个「平均评分」span（§10.4 正反断言）。
 
 ### 10.3 未做
 
@@ -427,6 +500,26 @@
 - 日报条目详情以 AppModal lg 档渲染（Wave1 迁移样例）；成稿格式管理按 §10.2
   三条判定保留为 `config-panel context-panel` 上下文面板，保留理由断言在
   `DailyReportsPage.spec.ts`（`scripts/validate_frontend_controls.py` modal_rule 扫描）。
+- ReportTimeline（R3 设计，实施时落 `DailyReportsPage.spec.ts` +
+  `ReportTimeline.spec.ts`）：按月分组渲染、无限滚动触底加载下一页
+  （offset 递增）、跳月定位、加载失败显示可重试行不静默；viewer fixture 不渲染
+  草稿节点，member fixture 渲染草稿节点。
+- 顶部筛选条（R3 设计）：标签/板块/关键词过滤只影响显示且不发写请求；0 命中
+  渲染清除入口；筛选态下批量操作只作用于可见条目或明确提示范围。
+- 空指标隐藏（R3 设计；已实施，2026-07-08，WP4-E）：`rating_count=0` 无评分样本
+  时统计行不渲染「0.0 平均评分」span，有评分样本时正常展示均值
+  （`DailyReportsPage.spec.ts` 正反断言）。
+- 界面文案审计（R3 设计；已实施，2026-07-08，WP4-E，
+  `backend/tests/test_blueprint_page_audit.py` 断言
+  `test_blueprint_user_copy_bans_implementation_terms` + 扫描器自检
+  `test_blueprint_copy_audit_scanner_detects_seeded_violations`）：扫描
+  `frontend/src/{pages,layouts,components}` 的 `.vue` `<template>` 段可见文本与
+  静态 `title/placeholder/aria-label` 属性，以及后端透传到界面的中文提示串
+  （`backend/app/exports/company_sql.py` preflight/detail），断言不出现
+  `config/contracts/frontend_control_governance.json` `copy_audit_rule` 的
+  `banned_terms`/`banned_patterns`（豁免按契约 `exemptions` 的 file+marker 白名单
+  放行）；断言以契约 `known_violations` 为只减不增基线——违例 #1-#8 全部替换后
+  基线已清零，当前即全量禁止。
 
 ## 11. 日报详情和编辑 `/daily-reports/:id`、`/daily-reports/:id/edit`
 
@@ -456,6 +549,18 @@
 ### 12.1 目标态
 
 从已发布日报采信项生成周报候选，按板块采信、排序、编辑、发布和成稿。
+与日报页同构承担本工作台周报的时间线、筛选和历史全量查询（2026-07-08 R3 定稿，
+产品设计 §13）：
+
+- 左侧替换为 ReportTimeline（weekly 变体，节点主标 `2026-W27`）：已发布层走
+  `GET /api/report-archive?report_type=weekly&origin=published`，草稿层走现有
+  `GET /api/weekly-reports`；替代现 `module-split.weekly-layout` 的 `run-list` 左栏。
+- 顶部筛选条：板块（周报条目 section）、一级标签、关键词，纯前端过滤当前周报
+  条目显示。
+- 详情卡标题区/统计行按产品设计 §13.3 token 对齐（`module-card.weekly-detail`
+  已有卡内边距，只需内部行距对齐）。
+- 文案违例清理：本页违例 #3/#4/#5（「采信状态为 2」「本阶段」「SQL 预览回填」
+  「adoption_status = 2」），按产品设计 §14.2 清单替换。
 
 ### 12.2 已做
 
@@ -468,6 +573,16 @@
 - 可消费 `/weekly-reports?report_id=...&rendition_id=...&format_code=...`，从搜索结果定位到目标周报并高亮对应成稿导出入口。
 - 管理员可在周报条目上点击“沉淀需求”，从周报条目创建 insight、implication 和 requirement。
 - 周报条目动作区可显示当前用户关注状态和关注人数，点击关注/取消关注调用 `GET/PATCH /api/object-watchers`。
+- 左栏已替换为 `ReportTimeline` weekly 变体（2026-07-08 R3 定稿，WP4-D 实施）：
+  节点主标 ISO 周（`2026-W27`），已发布层走
+  `GET /api/report-archive?report_type=weekly&origin=published` offset 分页，草稿节点
+  仅 member+ 渲染，归档节点点击经 `detail_id` 直达 `GET /api/weekly-reports/{id}`；
+  组件断言与日报页共用 `ReportTimeline.spec.ts`，页面接线断言在
+  `WeeklyReportsPage.spec.ts`。
+- 顶部筛选条已接入（WP4-D）：板块下拉 + 一级标签胶囊 + 关键词，纯前端过滤当前
+  周报条目显示，「N/M 条」计数、0 命中清除入口、不发写请求（spec 断言）。
+- 文案违例 #3/#4/#5 已按产品设计 §14.2 清单替换（说明行/空态不再出现
+  「采信状态为 2」「本阶段」「SQL 预览回填」「adoption_status」，spec 断言看护）。
 
 ### 12.3 未做
 
@@ -482,12 +597,38 @@
 - 周报采信状态不反向污染日报采信状态。
 - 五段正文只在编辑态展开。
 - `frontend/src/pages/WeeklyReportsPage.spec.ts` 覆盖报告锚点、周报条目锚点、report rendition 成稿导出锚点、周报条目沉淀需求入口、周报条目关注切换和后端周报摘要段展示。
+- ReportTimeline weekly 变体（R3 设计，实施时与日报页共用 `ReportTimeline.spec.ts`
+  组件断言）：按月分组、无限滚动、跳月、viewer 不渲染草稿节点；周报页断言时间轴
+  节点点击加载对应周报详情。
+- 顶部筛选条（R3 设计）：板块/标签/关键词过滤只影响显示，0 命中渲染清除入口。
+- 文案审计（R3 设计）：本页空态/说明行不出现 `采信状态为 2`、`adoption_status`、
+  `本阶段`、`SQL 预览回填`（由 `test_blueprint_page_audit.py` 扩展断言统一看护，
+  §10.4）。
 
 ## 13. 历史报告库 `/historical-reports`
 
 ### 13.1 目标态
 
-只读查看旧报告、导入覆盖率、引用解析缺口和历史正文。
+**跨来源归档**（2026-07-08 R3 重定位，分工表见产品设计 §13.4，后端边界见
+`docs/backend/archive-knowledge-design.md` §5.1）：本工作台日报/周报的时间线、
+按标签筛选和历史全量查询能力归 `/daily-reports`、`/weekly-reports` 页自身；
+本页只保留报告页给不了的三件事——
+
+1. **旧系统导入资产**：legacy 历史报告列表/正文/引用缺口的唯一阅读入口，
+   以及导入验收面板（覆盖率、accepted gaps）。
+2. **跨来源统计对比**：summary 卡强化为 current（已发布日报/周报）与 legacy
+   的产量、采信率、来源 Top 对比视图；平均采信率无样本时隐藏，不渲染占位 0。
+3. **跨来源检索**：合并检索仍可返回已发布报告条目（统计与检索需要），但打开
+   动作改为深链跳转 `/daily-reports?report_id=...` / `/weekly-reports?report_id=...`，
+   本页不再内嵌当前报告正文阅读；legacy 条目仍在页内读正文。
+   跨工作台聚合检索为目标态 v2（按 membership 过滤，未做，先补后端设计）。
+
+页头一句话重写为：「跨来源报告资产库：旧系统导入资产的归档、验收与跨来源统计
+对比；日常按天/周回溯请直接用日报/周报页的时间轴。」
+
+月份导航处置决策：`archive-month-nav` 降级为「旧系统资产」视图内的 legacy 筛选
+（legacy 报告不进报告页时间轴，按月回溯仍需要）；对已发布报告不再提供按月浏览
+（该职责已移交报告页 ReportTimeline），避免与报告页重复。
 
 ### 13.2 已做
 
@@ -496,10 +637,22 @@
 - 页面不触发导入、推荐、采信或 SQL。
 - 历史报告转需求 v1 已接入：管理员可在详情页用默认标题/来源说明创建 requirement，
   payload 带 `source_historical_report_id`，需求页和任务页可回跳历史报告。
+- 统一报告归档视图（合并已发布 + legacy、月份导航、关键词检索）已实现——
+  R3 重定位后其中「已发布报告的按月浏览 + 页内读当前报告正文」部分降级/移交。
+- 归档职责重定位已实施（2026-07，按 §13.1）：页头一句话重写为跨来源定位句；
+  已发布条目点击即深链 `/daily-reports?report_id=...` / `/weekly-reports?report_id=...`，
+  本页不再渲染当前报告正文；月份导航收敛为 legacy 视图（来源筛选=旧系统资产）
+  内的按月筛选，月桶取 `GET /api/report-archive/summary?origin=legacy`；summary 卡
+  改 current vs legacy 对比形态（产量/平均采信率/来源 Top vs 导入量/报告引用解析），
+  无发布样本时隐藏均值、不渲染 `0.0`/`0%` 占位。后端增量（archive-knowledge-design
+  §5.1 增量 1/2）同步落地：summary 支持 `report_type`/`origin` 过滤并新增
+  `top_sources` 字段；报告总量超约 1000 份自动切 SQL 聚合降级路径，API 形状不变。
 
 ### 13.3 未做
 
 - 生产主库全量导入验收证据未完成。
+- 跨工作台聚合检索（目标态 v2）未做：需先在 `docs/backend/archive-knowledge-design.md`
+  补 API 设计（多 workspace_code + membership 过滤），不得先做前端入口。
 - 顶部搜索可返回历史报告路由；页面已按 `id` 精确选中/高亮。
 - 历史反馈已可通过 `/quality-archive` 转成 requirement 来源；更多当前反馈/推荐反馈分解释关系仍需深化。
 
@@ -509,6 +662,13 @@
 - 未解析引用可见且不被静默吞掉。
 - 历史资产不进入当前推荐和公司 SQL。
 - 转需求必须通过 `source_historical_report_id` 保留来源，不允许复制标题后丢失引用。
+- 重定位断言（R3 设计，已落 `HistoricalReportsPage.spec.ts`，2026-07）：已发布条目
+  点击产生报告页深链跳转而非页内正文渲染；legacy 条目仍页内渲染正文；月份导航
+  只在 legacy 视图出现；页头文案为跨来源定位句；无发布样本时不渲染 `0.0`/`0%`
+  占位均值。
+- 后端归档增量看护（`backend/tests/test_report_archive_api.py`）：summary
+  `report_type`/`origin` 过滤与 `top_sources` 断言；SQL 聚合降级路径与内存路径
+  输出逐字节一致（阈值压 -1 强制切换后对比列表/摘要/过滤/分页全组合）。
 
 ## 14. 实体大事记 `/entity-milestones`
 
@@ -783,13 +943,19 @@
   run 级重试（max_attempts/backoff）、周报节拍与下次运行时间预览；每个字段标注
   生效值来源（"跟随实例默认" vs "本工作台"）；实例总闸关闭或 intranet 禁采集时
   整卡只读并解释原因；保存写审计 `workspace.schedule_policy.update`。
-- 「生成模型」设置卡（2026-07-08 实施，WP3-H；后端供给
-  `docs/backend/generation-provider-design.md` §4/§5，契约
-  `config/contracts/workspace_model.json` `generation_policy`）：状态行展示
-  provider、模型、key 只显示"已配置/未配置"永不回显、最近连通状态；可编辑模型名、
-  温度、超时、每日预算、fallback 行为（`GET/PATCH generation-policy`）；「测试连通」
-  按钮（仅 super_admin/editor_admin 可见）调 `POST /api/generation/ping`，展示延迟
-  或分类错误，失败不渲染成成功。
+- 「生成模型」设置卡（2026-07-08 实施，WP3-H 基线 + 同日 WP4-B R2 改造为完整
+  配置流；后端供给 `docs/backend/generation-provider-design.md` §4/§5/§8-§10，
+  契约 `config/contracts/workspace_model.json` `generation_policy` +
+  `config/contracts/llm_providers.json`）：状态行展示 provider、模型、key 只显示
+  "已配置/未配置"永不回显、最近连通状态；可编辑模型名、温度、超时、每日预算、
+  fallback 行为（`GET/PATCH generation-policy`）；WP4-B 七步流——provider 下拉
+  （`GET /api/generation/providers` 目录）、切换即预填目录默认 base_url
+  （custom 无预填、必填）、key write-only 写入（保存成功即清空输入框，回显仅
+  `****last4`）、按 provider 口径的常用模型下拉（仍可自由填写）、凭据选择下拉
+  （首位"跟随实例 env"= `credential_id=null`）、无任何配置时卡顶三步引导；
+  「测试连通」按钮（仅 super_admin/editor_admin 可见）调
+  `POST /api/generation/ping`（可带 `credential_id` 做保存即测），展示延迟
+  或分类错误，失败不渲染成成功；新建凭据表单仅 super_admin 可见。
 - 「可见性与加入码」设置卡（2026-07-08 实施，WP3-G/H；契约
   `config/contracts/workspace_model.json` `join_code`）：可见性
   `private | internal_public` 切换（`PATCH /api/workspaces/{code}/visibility`）前
@@ -797,10 +963,27 @@
   （一键复制，8 位大写字母+数字）、默认角色（viewer|member）、有效期、已用次数/
   上限；生成/轮换（轮换先确认旧码立即失效）与停用调用 join-code 三端点；无有效码
   时显示生成引导与用途说明。
+- 推荐设置「反馈回哺」区（2026-07-08 实施，WP4-G；事实源
+  `docs/backend/feedback-heat-scoring.md` §16.3，契约
+  `config/contracts/recommendation_ranking.json` `feedback_workflow`）：
+  载入 `GET /api/workspaces/{code}/feedback-rollups?period_type=weekly&limit=1`、
+  `GET /api/workspaces/{code}/rubric-revision-proposals?status=pending_review` 与
+  recommendation-policy（rubric 版本号）；摘要行展示最近周期 period_key、
+  precision@6、rerank uplift、位次去偏采信率、低数据源数与 pending 提案数徽章，
+  null 指标整项隐藏（不渲染 0.0）；提案审阅居中 Modal（md 档）逐条渲染
+  change_summary diff（op/target/from→to/rationale），「采纳并生效」二次确认
+  （提示 rubric_version 将 +1）后调 review accept，「驳回」必填 comment；
+  手动重估 `POST .../feedback-rollups/run {period_type: "weekly"}` 带 loading 态，
+  失败显示真实错误不渲染成功；member/viewer 随整页门禁不渲染该区。
 
 ### 19.5.3 未做
 
 - viewer 反馈策略编辑仍在 `/users` 策略视图，不在本页。
+- 「推荐设置（内容导向）」卡前端未实施（后端四端点已随 WP4-A 落地）：三段
+  guidance 文本框 → 编译预览 → 确认生效，常显当前 rubric 版本号与最近生效
+  时间（`docs/backend/recommendation-scoring-design.md` §5.4）；
+  `feedback_workflow` 三开关与 `exploration_epsilon`（0..0.1，后端 PATCH 已随
+  WP4-G 落地并有 422 看护）的编辑 UI 随该卡一并实现。
 
 ### 19.5.4 测试看护
 
@@ -815,6 +998,11 @@
 - 加入码卡（已实施）：生成/轮换/停用调用真实 API 并刷新展示；轮换必须先确认；
   member/viewer 不渲染该卡；码值以只读文本 + 复制按钮呈现，复制失败显示真实错误；
   `WorkspaceSettingsPage.spec.ts` 看护。
+- 反馈回哺区（WP4-G，`WorkspaceSettingsPage.spec.ts` 已看护）：提案「采纳并
+  生效」必须二次确认且调用 review API，不能只在前端改状态；驳回必填 comment；
+  手动重估失败不渲染成功（假成功回归）；无 rollup/null 指标 fixture 断言空态
+  与指标项隐藏、页面不出现 `0.0` 占位；member/viewer fixture 断言整区不渲染
+  且零 API 调用。
 
 ## 20. 用户权限 `/users`
 
@@ -1155,4 +1343,5 @@ gating，属游离死代码。
 | P1 | `/sync` | role capability、同步健康/水位/failed inbox 告警、failed inbox 重试、自动 backoff 状态、open conflict 查询/处置 UI、use_incoming/manual_merge 已覆盖；继续补实机证据、告警投递和更多对象 manual_merge |
 | P1 | `/insights`、`/requirements`、`/tasks` | 洞察/战略影响独立管理、外部信号追溯、历史反馈来源追溯、需求结论反哺、任务负责人视图、blocked reason、批量处理和任务详情抽屉已覆盖；继续补跨对象联动体验、评论和更多归档对象解释关系 |
 | P1 | 体验系统轨道（§1.1/§3.1/§4.1/§19.5/§25） | 布局模板与 spacing token 收敛、Dashboard 重排分区归属与源健康折叠、向导/发现/新增源/导入预览迁居中 Modal（含 Esc/遮罩/焦点/脏表单确认）、账号资料编辑边界、发现搜索与凭码加入 |
+| P1 | 报告页 IA 轨道（R3 设计，§4.4/§10/§12/§13） | ReportTimeline 分组/无限滚动/跳月/草稿权限、顶部筛选条只读过滤、详情卡 spacing token、Dashboard 头条 final_score 降序断言、空指标隐藏、归档页重定位断言、`test_blueprint_page_audit.py` 文案审计扩展断言 |
 | P2 | `/news`、`/recommendations` | 筛选跳转、观察池运营深化、策略编辑和批量重算解释 |

@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "topics": [
+    {
+      "code": "ai_engineering_infra",
+      "label": "AI 工程能力与基础设施",
+      "weight": 4.5,
+      "keywords_hint": ["ai infra", "gpu 集群", "训练平台", "checkpoint", "kubernetes"]
+    },
+    {
+      "code": "inference_serving",
+      "label": "模型训练/推理与服务加速",
+      "weight": 4.5,
+      "keywords_hint": ["inference", "serving", "kv cache", "吞吐", "延迟", "量化"]
+    },
+    {
+      "code": "agent_platform",
+      "label": "智能体平台与执行系统",
+      "weight": 4.0,
+      "keywords_hint": ["agent", "mcp", "a2a", "工具调用", "多智能体", "沙箱"]
+    },
+    {
+      "code": "ai_compute_hardware",
+      "label": "AI/通算硬件与芯片",
+      "weight": 4.0,
+      "keywords_hint": ["gpu", "hbm", "nvlink", "cxl", "chiplet", "液冷"]
+    },
+    {
+      "code": "core_network_arch",
+      "label": "核心网与通信系统架构",
+      "weight": 4.0,
+      "keywords_hint": ["5gc", "upf", "网络切片", "o-ran", "自治网络", "network api"]
+    },
+    {
+      "code": "standards_alliances",
+      "label": "标准与产业联盟进展",
+      "weight": 3.0,
+      "keywords_hint": ["3gpp", "gsma", "ietf", "release", "rfc", "认证"]
+    },
+    {
+      "code": "vendor_roadmap",
+      "label": "厂商技术路线",
+      "weight": 3.0,
+      "keywords_hint": ["技术白皮书", "roadmap", "商用部署", "华为", "ericsson", "nvidia"]
+    }
+  ],
+  "exclusions": [
+    {
+      "code": "no_pure_finance",
+      "rule": "融资/财报/股价等纯商业新闻",
+      "severity": "hard"
+    },
+    {
+      "code": "no_consumer_digital",
+      "rule": "消费电子与个人数码",
+      "severity": "hard"
+    },
+    {
+      "code": "no_event_marketing",
+      "rule": "活动报名与营销宣传",
+      "severity": "hard"
+    },
+    {
+      "code": "no_offtopic_aerospace",
+      "rule": "航天火箭等离题工程",
+      "severity": "hard"
+    },
+    {
+      "code": "no_biomedical_academic",
+      "rule": "生物医学与纯学术离题论文",
+      "severity": "hard"
+    },
+    {
+      "code": "no_legal_meta",
+      "rule": "法律/版权元讨论",
+      "severity": "soft"
+    },
+    {
+      "code": "no_clickbait_rumor",
+      "rule": "标题党与未经证实爆料",
+      "severity": "soft"
+    }
+  ],
+  "boost_signals": [
+    {
+      "code": "first_party_evidence",
+      "description": "一手技术证据（论文/官方工程博客/benchmark）",
+      "bonus": 8
+    },
+    {
+      "code": "quantified_arch_cost",
+      "description": "架构与成本/能耗/性能量化数据",
+      "bonus": 7
+    },
+    {
+      "code": "open_source_reproducible",
+      "description": "开源可复现产物",
+      "bonus": 6
+    },
+    {
+      "code": "official_whitepaper",
+      "description": "厂商官方技术白皮书",
+      "bonus": 5
+    }
+  ],
+  "scoring_dimensions": [
+    { "code": "relevance", "weight": 0.5 },
+    { "code": "evidence", "weight": 0.2 },
+    { "code": "impact", "weight": 0.2 },
+    { "code": "timeliness", "weight": 0.1 }
+  ],
+  "language": "zh",
+  "source_guidance_fingerprint": "sha256:6e2e864b0bc0d3b1dceda8c3d9ffe9521770ce20b1382b8c2bbe3d0cf959365a"
+}

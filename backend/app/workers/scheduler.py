@@ -32,6 +32,11 @@ from app.core.deploy_checks import validate_deploy_settings
 from app.ingestion.jobs import INGESTION_QUEUE_NAME, run_workspace_ingestion_job
 from app.ingestion.retry import run_failed_source_auto_retry_job
 from app.pipeline.daily import DailyPipelineRequest, run_daily_pipeline_job
+from app.recommendations.reaggregate import run_feedback_reaggregate_daily_job
+from app.recommendations.rollup import (
+    run_feedback_monthly_review_job,
+    run_feedback_weekly_rollup_job,
+)
 from app.sync.pull import run_sync_pull_job
 from app.sync.retry import run_failed_sync_inbox_auto_retry_job
 
@@ -42,6 +47,12 @@ DAILY_JOB_TIMEOUT = 60 * 60 * 3
 DEFAULT_JOB_TIMEOUT = 60 * 60 * 2
 JOB_RESULT_TTL = 60 * 60 * 24
 JOB_FAILURE_TTL = 60 * 60 * 24 * 7
+# 反馈再估计每日 job（recommendation-scoring-design §8）：02:00 Asia/Shanghai。
+FEEDBACK_REAGGREGATE_TIME = datetime_time(2, 0)
+# 反馈回哺周/月 job（feedback-heat-scoring §13.1/§14）：周一 03:00 / 每月 1 日
+# 03:30 Asia/Shanghai，晚于每日 02:00 job 以读取其最新快照。
+FEEDBACK_WEEKLY_ROLLUP_TIME = datetime_time(3, 0)
+FEEDBACK_MONTHLY_REVIEW_TIME = datetime_time(3, 30)
 
 _UNSET = object()
 
@@ -58,6 +69,13 @@ class SchedulerState:
     last_ingestion_auto_retry_at: float | None = None
     last_sync_pull_at: float | None = None
     last_sync_auto_retry_at: float | None = None
+    # None = 本进程首个 tick 初始化为下一个 02:00 触发点（已过今天触发点则等
+    # 明天，不补跑——与兼容模式 daily 的重启语义一致）。
+    next_feedback_reaggregate_at: datetime | None = None
+    # 反馈回哺周/月节拍（feedback-heat-scoring §13.1/§14）：同上重启语义，
+    # 错过触发点不补跑（手动触发 API 可补）。
+    next_feedback_weekly_rollup_at: datetime | None = None
+    next_feedback_monthly_review_at: datetime | None = None
     dispatched: list[str] = field(default_factory=list)
 
 
@@ -153,6 +171,14 @@ def scheduler_tick(
             sync_pull_enabled=sync_pull_enabled,
             sync_auto_retry_enabled=sync_auto_retry_enabled,
         )
+
+        # 反馈再估计每日 job（只追加，不影响既有投递路径）：推荐链路只在
+        # 具备 ingestion 能力的实例上产生数据，intranet pull-only 不投递。
+        if settings.capability_ingestion and session is not None:
+            dispatched += _dispatch_feedback_reaggregate(session, queue, settings, state, wall_now)
+            # 反馈回哺周/月 rollup（WP4-G，只追加）：同能力门与幂等模式。
+            dispatched += _dispatch_feedback_weekly_rollup(session, queue, settings, state, wall_now)
+            dispatched += _dispatch_feedback_monthly_review(session, queue, settings, state, wall_now)
 
         if session is not None:
             _finalize_tick_heartbeats(
@@ -555,6 +581,186 @@ def _dispatch_interval_jobs(
     return dispatched
 
 
+def _dispatch_feedback_reaggregate(
+    session,
+    queue: Queue,
+    settings,
+    state: SchedulerState,
+    wall_now: datetime,
+) -> list[str]:
+    """反馈再估计每日 job（feedback_reaggregate_daily，02:00 Asia/Shanghai）。
+
+    节拍与兼容模式 daily 一致：进程首个 tick 只初始化下一触发点（已过今天
+    02:00 则等明天，重启不补跑）；跨实例幂等由心跳表按触发点判重兜底，
+    job 本身同 day_key 重跑覆盖当日快照。
+    """
+    from app.pipeline.runs import upsert_scheduler_heartbeat
+
+    if state.next_feedback_reaggregate_at is None:
+        state.next_feedback_reaggregate_at = datetime.combine(
+            wall_now.date(),
+            FEEDBACK_REAGGREGATE_TIME,
+            tzinfo=wall_now.tzinfo,
+        )
+        if state.next_feedback_reaggregate_at <= wall_now:
+            state.next_feedback_reaggregate_at += timedelta(days=1)
+    if wall_now < state.next_feedback_reaggregate_at:
+        return []
+    trigger_at = state.next_feedback_reaggregate_at
+    state.next_feedback_reaggregate_at = trigger_at + timedelta(days=1)
+    if _heartbeat_enqueued_since(
+        session,
+        job_kind="feedback_reaggregate",
+        workspace_code="",
+        since=trigger_at,
+    ):
+        return []
+    job = queue.enqueue(
+        run_feedback_reaggregate_daily_job,
+        job_timeout=DEFAULT_JOB_TIMEOUT,
+        result_ttl=JOB_RESULT_TTL,
+        failure_ttl=JOB_FAILURE_TTL,
+    )
+    upsert_scheduler_heartbeat(
+        session,
+        scheduler_instance=scheduler_instance_id(settings),
+        job_kind="feedback_reaggregate",
+        workspace_code="",
+        last_tick_at=wall_now,
+        last_enqueued_at=wall_now,
+        last_enqueued_job_id=str(getattr(job, "id", "")),
+        next_run_at=trigger_at + timedelta(days=1),
+    )
+    session.commit()
+    logger.info("Queued feedback_reaggregate job %s", getattr(job, "id", ""))
+    return ["feedback_reaggregate"]
+
+
+def _next_weekly_rollup_trigger(wall_now: datetime) -> datetime:
+    """下一个周一 03:00 触发点（已过本周触发点则等下周，不补跑）。"""
+    days_until_monday = (8 - wall_now.isoweekday()) % 7
+    candidate = datetime.combine(
+        wall_now.date() + timedelta(days=days_until_monday),
+        FEEDBACK_WEEKLY_ROLLUP_TIME,
+        tzinfo=wall_now.tzinfo,
+    )
+    if candidate <= wall_now:
+        candidate += timedelta(days=7)
+    return candidate
+
+
+def _next_monthly_review_trigger(wall_now: datetime) -> datetime:
+    """下一个每月 1 日 03:30 触发点（已过本月触发点则等下月，不补跑）。"""
+    candidate = datetime.combine(
+        wall_now.date().replace(day=1),
+        FEEDBACK_MONTHLY_REVIEW_TIME,
+        tzinfo=wall_now.tzinfo,
+    )
+    if candidate <= wall_now:
+        next_month_first = (wall_now.date().replace(day=1) + timedelta(days=32)).replace(day=1)
+        candidate = datetime.combine(
+            next_month_first,
+            FEEDBACK_MONTHLY_REVIEW_TIME,
+            tzinfo=wall_now.tzinfo,
+        )
+    return candidate
+
+
+def _dispatch_feedback_weekly_rollup(
+    session,
+    queue: Queue,
+    settings,
+    state: SchedulerState,
+    wall_now: datetime,
+) -> list[str]:
+    """反馈回哺周 rollup（feedback_weekly_rollup，周一 03:00 Asia/Shanghai）。
+
+    复用 `_dispatch_feedback_reaggregate` 的实例级固定时刻 + 心跳幂等模式：
+    首个 tick 只初始化下一触发点（重启不补跑，手动触发 API 可补）；跨实例由
+    心跳表按触发点判重；job 内同 (workspace, period_key) 重跑覆盖同一 rollup 行。
+    """
+    from app.pipeline.runs import upsert_scheduler_heartbeat
+
+    if state.next_feedback_weekly_rollup_at is None:
+        state.next_feedback_weekly_rollup_at = _next_weekly_rollup_trigger(wall_now)
+    if wall_now < state.next_feedback_weekly_rollup_at:
+        return []
+    trigger_at = state.next_feedback_weekly_rollup_at
+    state.next_feedback_weekly_rollup_at = trigger_at + timedelta(days=7)
+    if _heartbeat_enqueued_since(
+        session,
+        job_kind="feedback_weekly_rollup",
+        workspace_code="",
+        since=trigger_at,
+    ):
+        return []
+    job = queue.enqueue(
+        run_feedback_weekly_rollup_job,
+        job_timeout=DEFAULT_JOB_TIMEOUT,
+        result_ttl=JOB_RESULT_TTL,
+        failure_ttl=JOB_FAILURE_TTL,
+    )
+    upsert_scheduler_heartbeat(
+        session,
+        scheduler_instance=scheduler_instance_id(settings),
+        job_kind="feedback_weekly_rollup",
+        workspace_code="",
+        last_tick_at=wall_now,
+        last_enqueued_at=wall_now,
+        last_enqueued_job_id=str(getattr(job, "id", "")),
+        next_run_at=trigger_at + timedelta(days=7),
+    )
+    session.commit()
+    logger.info("Queued feedback_weekly_rollup job %s", getattr(job, "id", ""))
+    return ["feedback_weekly_rollup"]
+
+
+def _dispatch_feedback_monthly_review(
+    session,
+    queue: Queue,
+    settings,
+    state: SchedulerState,
+    wall_now: datetime,
+) -> list[str]:
+    """反馈回哺月 review（feedback_monthly_review，每月 1 日 03:30 Asia/Shanghai）。"""
+    from app.pipeline.runs import upsert_scheduler_heartbeat
+
+    if state.next_feedback_monthly_review_at is None:
+        state.next_feedback_monthly_review_at = _next_monthly_review_trigger(wall_now)
+    if wall_now < state.next_feedback_monthly_review_at:
+        return []
+    trigger_at = state.next_feedback_monthly_review_at
+    state.next_feedback_monthly_review_at = _next_monthly_review_trigger(
+        trigger_at + timedelta(minutes=1),
+    )
+    if _heartbeat_enqueued_since(
+        session,
+        job_kind="feedback_monthly_review",
+        workspace_code="",
+        since=trigger_at,
+    ):
+        return []
+    job = queue.enqueue(
+        run_feedback_monthly_review_job,
+        job_timeout=DEFAULT_JOB_TIMEOUT,
+        result_ttl=JOB_RESULT_TTL,
+        failure_ttl=JOB_FAILURE_TTL,
+    )
+    upsert_scheduler_heartbeat(
+        session,
+        scheduler_instance=scheduler_instance_id(settings),
+        job_kind="feedback_monthly_review",
+        workspace_code="",
+        last_tick_at=wall_now,
+        last_enqueued_at=wall_now,
+        last_enqueued_job_id=str(getattr(job, "id", "")),
+        next_run_at=state.next_feedback_monthly_review_at,
+    )
+    session.commit()
+    logger.info("Queued feedback_monthly_review job %s", getattr(job, "id", ""))
+    return ["feedback_monthly_review"]
+
+
 def _record_interval_heartbeat(session, settings, job_kind: str, wall_now: datetime, job) -> None:
     if session is None:
         return
@@ -607,6 +813,10 @@ def _finalize_tick_heartbeats(
     active_kinds: list[str] = []
     if ingestion_enabled:
         active_kinds += ["daily_pipeline", "pipeline_retry"]
+    if settings.capability_ingestion:
+        active_kinds.append("feedback_reaggregate")
+        active_kinds.append("feedback_weekly_rollup")
+        active_kinds.append("feedback_monthly_review")
     if ingestion_auto_retry_enabled:
         active_kinds.append("ingestion_auto_retry")
     if sync_pull_enabled:

@@ -1,6 +1,6 @@
 # InfoWatchtower · 用户 Journal
 
-> 更新时间：2026-07-07。
+> 更新时间：2026-07-08。
 > 本文件用于跨 session 快速恢复上下文，记录用户当前口径、已完成实现、
 > 验证结果和下一步。权威事实仍以 `docs/00-system-design.md`、
 > `docs/implementation/implementation-handoff.md`、`docs/implementation/01-implementation-plan.md`
@@ -401,6 +401,181 @@ W3 收口（2026-07-08 本波）：
   快照，未切 `GET /api/pipeline/scheduler/status`（page-specs §7.3）。
 - 延续项：`install.sh` env 默认时刻 09:00 vs 代码默认 12:00；
   `GET /api/entity-timeline/summary` 缺 workspace membership 断言。
+
+### 3.9 2026-07-08 第四轮设计定稿轮（只改设计文档与机器契约，零实现代码）
+
+背景：用户对推荐系统的严厉批评（"我看你现在的推荐系统做的很烂""不应该是 AI
+做推荐吗""挑选导向应该让用户描述，然后格式化成指标""每个新闻格式化的时候，
+带着不同格式的 json 去格式化"）。四轨设计 + 交叉评审完成，全部达到实现级规格，
+**代码一行未写**；实施拆包见 `docs/implementation/01-implementation-plan.md` §18
+（WP4-A…WP4-F，含依赖图与公共门禁）。
+
+- **R1 AI 推荐核心**（`docs/backend/recommendation-scoring-design.md` 全面重写
+  19 节 + 新契约 `config/contracts/recommendation_ranking.json`）：§2 基于真实
+  代码审计的现状诚实评估（推荐决策 0 次 LLM 参与、`content_scorer_v2.json`
+  `prompt_template` 是死配置、文档/代码公式漂移、三处排序违例）；三层管线——
+  L1 规则粗排原样保留为 `coarse_score`（回归红线：无导向时排序与现状逐位一致）、
+  L2 embedding 语义层默认关闭、L3 LLM listwise 分窗精排（确定性洗牌、锚点校准、
+  缓存、漂移监控）；`recommendation_policy` 自然语言导向 → rubric 编译（幂等
+  预览 + fingerprint 生效 + 版本化审计）；`final_score` 融合与排序一致性契约；
+  预算分桶（`generation_daily_usage` 加 `purpose` 列：generation/rerank/
+  rubric_compile 互不挤占）与八条降级路径；反馈按日再估计源先验/主题权重
+  （`feedback-heat-scoring.md` §10，旧建议公式作废）。
+- **R2 provider 目录 + 密钥落库**（`generation-provider-design.md` §8-§10 +
+  新契约 `config/contracts/llm_providers.json`）：9 个 provider 预设目录
+  （openai/anthropic/deepseek/moonshot/zhipu_glm/minimax/openrouter/ollama/
+  custom 兜底，同一 OpenAI-compatible 客户端）；**决策变更 D-2026-07-08-KEY**
+  显式推翻"key 只在 env"：`llm_provider_credentials` Fernet 加密落库（HKDF 自
+  `AUTH_SESSION_SECRET` 派生、MultiFernet 轮换、masked 后 4 位回显、整表排除
+  同步/导出）；解析优先级凭据 → env；"enabled 且 env 无 key" 拒启降级 WARNING。
+- **R4 逐条模板格式化**（reports-editorial §8.1 + report-renditions §10）：
+  **决策变更 D-2026-07-08-TPL** 推翻首版"投影优先"——每条新闻 × 每个启用模板
+  格式带模板 JSON 调一次 LLM，模板字段全 AI 填充、`map_from` 降级为提示上下文 +
+  降级兜底、投影只排版；预算公式 `N×(1+F_daily)+W×F_weekly` 入生成预算闸门；
+  §10.7 验收断言修订版为实现重对齐基准。
+- **R3 报告页 IA + 文案审计**（frontend-product-design §13/§14 + page-specs +
+  archive-knowledge-design §5.1 + `frontend_control_governance.json`
+  `copy_audit_rule`）：ReportTimeline 组件规范（按月分组时间轴/无限滚动/跳月/
+  草稿权限，v1 零新增后端，复用 `GET /api/report-archive`）；日报/周报页
+  「list* + 时间轴侧栏」IA 与顶部纯前端筛选条；详情区 spacing 逐元素 token 修正
+  （根因 `.daily-report-card` 无 padding）；`/historical-reports` 重定位为跨来源
+  归档（已发布条目深链跳报告页）；文案审计规则 + 8 条现存违例清单（7 前端 +
+  1 后端 preflight）。
+- **交叉评审修正**（本轮收口）：R1 精排/编译改为显式走 R2 统一解析链
+  `resolve_generation_config`（凭据 → env），删除与 D-2026-07-08-KEY 矛盾的
+  "key 永不进 DB"表述；R3 Dashboard 头条断言对齐 R1 契约
+  `ordering_consistency.dashboard_headline_candidates`（今日集合 top 6 按
+  `final_score` 降序，废除今日/历史两层混排——含非今日候选不渲染断言）；
+  /news 候选池默认 `score_desc` 补进 page-specs §8；R4 预算与 R1 purpose 分桶
+  互引补齐（renditions/generation-provider/workspace_model 四处）；
+  00-system-design §5 模板段落与 §6 生成模型卡描述从旧语义更新为两条决策变更；
+  SDD §5.3/§5.4 同口径增量。
+
+实施状态：WP4-A…WP4-F 已于 2026-07-08 第四轮实施全部落地（见 §3.10）；
+追加定稿的 WP4-G 反馈回哺工作流已于同日收尾实现（见 §3.11）。
+
+### 3.10 2026-07-08 第四轮实施（WP4-A…F 全量实现 + 契约/文档收口）
+
+分三波完成：W1/W2 实现波（后端 WP4-A/B/C + 前端 WP4-D/E/F，含各自契约状态
+同步），收口波（本节，只动 docs/契约/env 样例，零代码）。分支
+`feat/round4-recommendation`。
+
+实施完成清单（均有 pytest/vitest 看护，逐项经 grep 核实）：
+
+- **WP4-A 推荐精排 + 内容导向编译**：迁移 `f1a2b3c4d5e6`（`generation_daily_usage.purpose`
+  分桶 + `recommendation_items` 六个解释列 + `recommendation_rubric_compiles`/
+  `source_score_snapshots`/`rubric_topic_priors`/`news_item_embeddings` 留位表）；
+  `recommendation_policy` 读写 + `compile-rubric`（fingerprint 幂等预览、20 次/日
+  固定桶）+ `activate-rubric`（7 天 fingerprint 门禁、版本化审计），落
+  `backend/app/recommendations/{policy,rubric,rerank,reaggregate}.py`；L3 listwise
+  分窗精排（确定性洗牌/锚点校准/重试/7 天缓存/漂移监控）+ `final_score` 融合 +
+  全部降级路径不阻塞；每日 job `feedback_reaggregate_daily`（scheduler 实例级
+  固定时刻 + 心跳幂等）；默认 rubric 固化
+  `config/scoring/rubrics/planning_intel_default.json`；`content_scorer_v2.json`
+  `prompt_template` 标 deprecated。回归红线：`llm_rerank_enabled=false` 默认
+  排序与现状逐位一致（固定 fixture 先绿）。
+  `backend/tests/test_recommendation_rerank.py`、`test_recommendation_policy.py`。
+- **WP4-B Provider 目录 + 密钥落库 + 生成模型卡**：`llm_provider_credentials`
+  表（迁移 `f2b3c4d5e6a7`，排除 sync/导出）、`app/core/crypto.py`（HKDF-SHA256
+  派生 + MultiFernet 轮换重加密）、`GET /api/generation/providers` + credentials
+  CRUD（`backend/app/api/routes/credentials.py`，masked `****last4`，审计无明文）、
+  `resolve_generation_config` 凭据层（credential → env，`credential_missing`
+  不回落）、`generation_policy.credential_id` + ping `credential_id`、
+  「enabled 且 env 无 key」拒启降级 WARNING（`deploy_checks.py` 与
+  `deployment_modes.json` 1:1）；前端生成模型卡七步流（provider 下拉/base_url
+  预填/key write-only/模型下拉/凭据选择/测试连通/三步引导）。
+  `backend/tests/test_credentials_api.py`、`test_generation_provider.py`、
+  `WorkspaceSettingsPage.spec.ts`。
+- **WP4-C 逐条模板格式化重对齐**（D-2026-07-08-TPL）：`generation_template.py`
+  改为逐条 × 逐格式全字段 AI 格式化（outputSchema 全字段 + `map_from` 值作
+  `reference` 提示与降级兜底、`render_template_item` 只排版）、周报逐条格式化
+  接入草稿构建/regenerate 位点、`validate-template` 响应语义 + 成本提示；
+  公司 SQL 逐字节不变负向用例（`scripts/validate_company_sql.py`）。
+  `backend/tests/test_generation_template.py`（§10.7 修订断言 1-10 重写）。
+- **WP4-D 报告页时间轴 + 筛选 + 余量修正**：`ReportTimeline.vue`（按月分组/
+  组头吸顶/状态点+条数徽章/无限滚动/跳月/失败重试行/空态）；日报/周报页迁
+  `list*` + 时间轴侧栏 IA（已发布层 `GET /api/report-archive`，viewer 不渲染
+  草稿节点）；顶部标签/板块/关键词纯前端筛选条；详情区 spacing 按 §13.3 token
+  表修正（删 `.editorial padding-right: 0`）；文案违例 #1-#6 替换（#7 随 WP4-B
+  设置卡重建）。`ReportTimeline.spec.ts`、`DailyReportsPage.spec.ts`、
+  `WeeklyReportsPage.spec.ts`、`ExportsPage.spec.ts`、
+  `backend/tests/test_report_archive_api.py`。
+- **WP4-E 排序一致性 + 空指标 + 文案审计**：Dashboard 头条候选改契约口径
+  （今日 P0/P1/P2 top6 按 `final_score` 降序、非今日不入集合、空态）；
+  `GET /api/dedupe-groups` 默认 `sort=score_desc`；空指标隐藏（`rating_count=0`
+  不渲染「0.0 平均评分」、缺失 `final_score` 显示「未评分」、归档/推荐页空样本
+  隐藏均值）；`test_blueprint_user_copy_bans_implementation_terms` 文案审计
+  （`known_violations` 基线清零收紧）+ 后端 preflight 违例 #8 替换。
+  `DashboardPage/NewsPage/DailyReportsPage/RecommendationsPage.spec.ts`、
+  `backend/tests/test_news_api.py`、`test_blueprint_page_audit.py`。
+- **WP4-F 历史报告库重定位**：页头跨来源定位文案；已发布条目深链
+  `/daily-reports|/weekly-reports?report_id=...`（页内只读 legacy 正文）；月份
+  导航收敛 legacy 视图；summary 卡 current vs legacy 对比（空样本隐藏均值）；
+  后端增量 `GET /api/report-archive/summary` 支持 `report_type`/`origin` 过滤 +
+  超阈值 SQL 聚合降级路径（`backend/app/archive/report_archive.py`）。
+  `HistoricalReportsPage.spec.ts`、`backend/tests/test_report_archive_api.py`。
+
+收口波（2026-07-08 本波）：
+
+- 契约状态位核实（以 grep 代码为准）：`recommendation_ranking.json` 主体 +
+  `ordering_consistency`（WP4-A/E 实现事实）、`llm_providers.json`（implemented）、
+  `workspace_model.json` `generation_policy.credential_id`、
+  `report_renditions.json` `generation_template`（D-2026-07-08-TPL 重对齐）、
+  `frontend_control_governance.json` `copy_audit_rule`（enforced、violations
+  清零）、`deployment_modes.json` `startup_failfast_rules`/`startup_warning_rules`
+  与 `deploy_checks.py` 1:1——均已是实现事实；`feedback_workflow`（WP4-G）
+  当时未实现（已随 §3.11 落地并翻为实现事实）。
+- 文档闭环：api-and-ui-implementation §2 端点表补
+  `GET /api/report-archive(/summary)`，WP4-E dedupe 默认排序从待实现块移入
+  已实现叙述，新待实现块只剩 WP4-G 五端点；§4 `/historical-reports` 补重定位
+  段落；capability-map §4.4 改为第四轮实施收口（WP4-A/B/D/E/F 五行移入 §4.1，
+  WP4-C 并入既有 generation_template 行，WP4-G/L2 语义层/两项 §4.3 遗留如实
+  保留）；page-specs §3 总表（dashboard/daily/weekly/recommendations/
+  workspace-settings 行）、§9.3（补精排解释字段前端未展示）、§10.2/§10.3
+  （空指标隐藏改已做）、§19.5.2（生成模型卡 WP4-B 七步流）状态更新。
+- env 样例：WP4 未引入新 env（EMBEDDING_* 族仍未进 `config.py`，L2 接口预留；
+  凭据加密复用 `AUTH_SESSION_SECRET` 派生，无新变量）；
+  `deploy/env.production.example` 生成段注释从三条拒启旧口径改为目录值域 +
+  key 缺失 WARNING 新口径；quickstart §2.2 已在 W1/W2 同步。
+
+遗留（未实现，如实保留，下一轮可领）：
+
+- 推荐 run 条目精排解释字段（coarse_score/llm_* 等）已进 API 响应，
+  `/recommendations` 前端未渲染（page-specs §9.3）。
+- 「推荐设置（内容导向）」卡前端未实施（后端四端点已就绪，page-specs §19.5.3）。
+- 延续项：格式管理面板模板上传 UI、`/ingestion-runs` 调度卡心跳升级、
+  `install.sh` 默认时刻 09:00 vs 代码 12:00、entity-timeline membership 断言。
+
+### 3.11 2026-07-08 WP4-G 反馈回哺工作流实现（第四轮收尾）
+
+验收基准：`01-implementation-plan.md` §18 WP4-G +
+`docs/backend/feedback-heat-scoring.md` §11-§18 + 契约
+`recommendation_ranking.json` `feedback_workflow`（14 条 acceptance_assertions
+逐条落测试）。落地内容：
+
+- 单迁移 `f3c4d5e6f7a8`（down 指向 `f2b3c4d5e6a7`，scratch sqlite 双向验证）：
+  `feedback_rollups` + `rubric_revision_proposals` 两表，均无 SyncMixin、
+  不进 sync feed / 公司 SQL；`recommendation_policy` 增 `feedback_workflow` 键
+  （三开关 + `exploration_epsilon` 0..0.1 默认 0.0，越界 PATCH 422）。
+- `app/recommendations/rollup.py`：周 job `feedback_weekly_rollup`（周一 03:00，
+  9 信号聚合、位次去偏 1.0/1.2/1.4 只进评估、precision@6/@12 等 8 指标、
+  源分层/低数据清单、topic 贴边、`revision_prompt_v1` 提案生成走
+  `purpose=feedback_rollup` 新预算桶固定 4 次/台/日、30 天 expired 治理）与
+  月 job `feedback_monthly_review`（每月 1 日 03:30，纯聚合零 LLM、漂移标记、
+  失效源建议）；scheduler 只追加接入（心跳幂等、intranet 不投递、错过不补跑）。
+- 五端点（rollups 列表/详情/手动触发 + 提案列表/审阅，全部 admin+）：accept
+  服务端原子登记 `model_called=false` 编译记录 → 既有 activate 链版本 +1，
+  stale 提案 422；审计 `workspace.feedback_rollup.manual_run` /
+  `workspace.rubric_revision_proposal.review`。
+- 选择层 ε 探索位：默认 0.0 时选择逐位一致（回归红线测试先行），确定性抽签
+  （seed 派生自 run_key）、每 run ≤1 条、P1/P2 限定、reason 追加
+  `exploration_slot`。
+- 前端：`/workspace-settings` 推荐设置「反馈回哺」区（摘要 + 提案审阅 Modal
+  二次确认 + 手动重估）与 `/recommendations` 「反馈评估」卡（周/月切换、
+  行展开、空态、null 指标整项隐藏），spec 覆盖调用形状与权限门。
+- 看护：`backend/tests/test_feedback_rollup.py`（18 例）、
+  `test_rubric_proposals.py`（11 例）+ 两页 spec；不变式（周/月层零直接改分、
+  authored 导向不被自动改写、公司 SQL 逐字节不变、预算桶隔离）均有负向断言。
 
 ## 4. 用户发现的问题与闭环状态
 

@@ -28,6 +28,7 @@ docs/
   product/
     README.md                         前端产品目录索引
     frontend-product-design.md      前端信息架构、页面地图、顶部栏、用户旅程
+    frontend-check-2026-07-08.md    前端运行态检查结果附录
     page-specs/
       frontend-page-specs.md        前端逐页规格、已做/未做、测试看护
 
@@ -139,7 +140,7 @@ docs/
 | 目录 | 主事实源 | 附录或状态 |
 |---|---|---|
 | `docs/architecture/` | `design-governance.md`、`software-design-description.md` | `capability-map.md` 只记状态；`target-state-spec.md` 和 `strategic-intelligence-platform.md` 是附录 |
-| `docs/product/` | `frontend-product-design.md`、`page-specs/frontend-page-specs.md` | 目录 README 只索引页面设计 |
+| `docs/product/` | `frontend-product-design.md`、`page-specs/frontend-page-specs.md` | `frontend-check-2026-07-08.md` 是一次性检查附录；目录 README 只索引页面设计 |
 | `docs/backend/` | `backend-module-design.md` 和各模块 `*-design.md` | `data-format-mapping.md`、`report-renditions-design.md`、`workspace-module-model.md` 等是模块附录 |
 | `docs/deployment/` | `deployment-topology.md`、`multi-environment-sync.md`、`auth-unified-login.md` | `deployment-ops.md` 和 `development-quickstart.md` 是运行手册 |
 | `docs/implementation/` | `implementation-handoff.md`、`01-implementation-plan.md` | `api-and-ui-implementation.md` 是实现对照；技术债单独记录 |
@@ -276,6 +277,8 @@ docs/
 
 - 更新 `docs/backend/generation-provider-design.md`
 - 更新 `config/contracts/workspace_model.json` 的 `generation_policy`
+- 改 provider 预设目录或密钥落库（`llm_provider_credentials`）时同步
+  `config/contracts/llm_providers.json`
 - 新增实例级 env 时同步 `config/contracts/deployment_modes.json` 的 `related_env`
   与启动自检规则位
 - 密钥治理边界同步 `docs/backend/security-secrets-privacy-design.md`

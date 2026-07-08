@@ -42,12 +42,12 @@
   "column_additions": {
     "generated_news.insight_json": "Model-generated auxiliary fields for tech-insight renditions: board (from config/taxonomy/business_boards.json), bullet_points[], takeaway, tag_line[]. Strictly separate from content_json; company SQL export never reads it.",
     "daily_report_items.is_headline": "Editor-adjustable headline flag. Auto-initialized to recommendation-score top-N on first headline-enabled rendition build; never auto-overwritten afterwards.",
-    "generated_news.template_extras_json": "implemented (2026-07-08, backend/app/models/content.py; covered by backend/tests/test_generation_template.py): per-format_code bucket of template-generated extra fields ({values, generated_by, generated_at, template_version}). Never merged into content_json/insight_json/category, never exported to SQL, never fed into dedupe or recommendation. Spec: docs/backend/report-renditions-design.md section 10.",
+    "generated_news.template_extras_json": "column implemented (2026-07-08, backend/app/models/content.py); semantics revised by D-2026-07-08-TPL (column reused, no migration): per-format_code bucket now holds ALL template field values for that format ({values, generated_by, generated_at, template_version}) — the complete AI-formatted rendition data for one news item under one format, not just 'extra' fields. Never merged into content_json/insight_json/category, never exported to SQL, never fed into dedupe or recommendation. Spec: docs/backend/report-renditions-design.md section 10.",
     "report_formats.generation_template + generation_template_source": "implemented (2026-07-08, backend/app/models/reports.py): canonical template (JSON) plus uploaded source text (JSON or XML carrier). Always null for builtin formats (company_sql_v1/tech_insight_v1)."
   },
   "generation_template": {
-    "status": "implemented (2026-07-08): parsing/projection/incremental generation in backend/app/reports/ + generation chain, validate-template API in backend/app/api/routes/reports.py; covered by backend/tests/test_generation_template.py (incl. the negative assertion that company SQL stays byte-identical under any template config)",
-    "spec": "docs/backend/reports-editorial-design.md section 8.1 (fact source: data-flow position and projection-vs-generation decision) + docs/backend/report-renditions-design.md section 10 (implementation-level detail)",
+    "status": "re-aligned to D-2026-07-08-TPL on 2026-07-08 (WP4-C): per-item x per-format full AI formatting implemented in backend/app/reports/generation_template.py (all-field outputSchema + map_from reference, projection-only rendering, degradation fallback), weekly per-item formatting hooked at weekly draft build and rendition regenerate; guarded by backend/tests/test_generation_template.py rewritten against report-renditions-design.md section 10.7 revised assertions 1-10 (incl. company SQL byte-identity + scripts/validate_company_sql.py negative case).",
+    "spec": "docs/backend/reports-editorial-design.md section 8.1 (fact source: data-flow position and per-item formatting decision) + docs/backend/report-renditions-design.md section 10 (implementation-level detail, incl. budget formula and section 10.8 decision change record)",
     "carriers": ["json", "xml"],
     "canonical_form": "XML uploads are parsed with a DTD/external-entity-free parser and stored as the same canonical JSON template; runtime reads canonical form only.",
     "item_schema_field": {
@@ -55,16 +55,24 @@
       "type": ["string", "text", "string_list", "url"],
       "required": "bool, default false",
       "max_length": "1..4000",
-      "map_from": "null or a base-draft superset path: title|summary|key_points|category|content_json.{background,effects,eventSummary,technologyAndInnovation,valueAndImpact}|insight_json.{board,bullet_points,takeaway,tag_line}|source_link|published_at|score",
+      "map_from": "null or a base-draft superset path: title|summary|key_points|category|content_json.{background,effects,eventSummary,technologyAndInnovation,valueAndImpact}|insight_json.{board,bullet_points,takeaway,tag_line}|source_link|published_at|score. Semantics per D-2026-07-08-TPL: prompt reference context + degradation fallback source, NOT a projection classifier.",
       "example_guidance_label": "must not contain script/style/HTML tags; canonical template <=32KB"
     },
-    "decision_rule": "map_from set or key matching a superset tail name => projection field (no model call); otherwise => extra field generated once per (generated_news, format_code) into generated_news.template_extras_json. Templates whose fields all project are pure-projection formats with zero extra model calls.",
-    "degradation": "Provider unavailable/timeout/budget exhausted => renditions still project; missing extras fall back to map_from or empty and the body_json item is flagged template_fallback with missing_fields; regenerate backfills. Template failures never block the company_sql_v1 chain or adoption.",
-    "weekly": "Same mechanism for report_type=weekly formats; extras are read through weekly_report_items.generated_news_id.",
+    "formatting_rule": "Per D-2026-07-08-TPL: for every news item x every enabled format carrying a generation_template, the generation stage makes ONE LLM call with the template JSON (all fields: key/label/type/max_length/required/example/guidance; map_from values passed as per-field reference material) and the resolved base draft; the model fills ALL template fields and the whole bucket is written to generated_news.template_extras_json[format_code]. Rendition projection only lays out stored values (zero model calls, no field fabrication). Builtin company_sql_v1/tech_insight_v1 stay locked outside this chain; custom formats without a template (item_fields only) stay pure projection with zero model calls (the zero-cost path).",
+    "budget": "Each (item, template format) call counts into generation_policy.daily_generation_budget via the generation_daily_usage mechanism (successes and failures both count). Once recommendation_ranking.json's purpose bucket extension lands, base drafts and template formatting share the purpose=generation bucket, isolated from the rerank and rubric_compile buckets. Budget formula: daily calls ~= N x (1 + F_daily) + W x F_weekly, where N = items entering the generation step, F_daily/F_weekly = enabled template-carrying daily/weekly formats, W = weekly adopted items needing missing/stale buckets. Exhaustion increments generation_budget_exhausted in the run summary.",
+    "degradation": "Provider unavailable/timeout/budget exhausted/per-field validation failure => renditions still project; affected fields fall back to map_from copy (or implicit superset-tail match) or empty, and the body_json item is flagged template_fallback with missing_fields; regenerate backfills missing/stale buckets only (stale = template_version behind OR values missing any template field key). fallback_behavior=fail applies to base drafts only; template formatting failures never produce a failed step and never block the company_sql_v1 chain or adoption.",
+    "weekly": "Same per-item formatting mechanism for report_type=weekly formats: weekly adopted items x weekly template formats, extras read/written through weekly_report_items.generated_news_id; daily and weekly formats occupy distinct format_code buckets on the same generated_news.",
     "api": [
       "POST /api/report-formats and PATCH /api/report-formats/{id} accept generation_template (locked/builtin formats answer 400)",
-      "POST /api/report-formats/validate-template (workspace admin+): dry-run validation + normalized_template + projection/generated field split + example preview_item; writes nothing"
-    ]
+      "POST /api/report-formats/validate-template (workspace admin+): dry-run validation + normalized_template + field split (projection_fields = degradation-fallback-capable, generated_fields = generated-only; wire keys kept, semantics redefined by D-2026-07-08-TPL) + example preview_item + per-item cost hint; writes nothing"
+    ],
+    "decision_change": {
+      "id": "D-2026-07-08-TPL",
+      "superseded": "Projection-first rule: map_from or superset-tail match => copy from base draft without a model call; only fields absent from the base draft were generated; all-projecting templates cost zero calls.",
+      "new_rule": "Per-item x per-format full AI formatting (see formatting_rule); map_from demoted to reference context + degradation fallback.",
+      "reason": "User directive: after the recommended source data is final, each news item must be formatted by the AI carrying the format's template JSON. Projection-first degraded template renditions into base-draft field copies and never restyled content per format.",
+      "cost_delta": "Old: zero calls for all-projecting templates; new: one call per item per template format, mitigated by the budget gate/formula, the template-less zero-cost path and missing/stale-only backfill."
+    }
   },
   "builtin_formats": {
     "company_sql_v1": "内网版 locked builtin. group_by=category, no headline, five_fields body. The ONLY source feeding the company SQL export chain, which stays on its original hardcoded path.",

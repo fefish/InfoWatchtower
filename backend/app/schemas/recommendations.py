@@ -93,6 +93,13 @@ class RecommendationItemRead(BaseModel):
     source_score: float
     heat_score: float
     final_score: float
+    # L3 精排可解释字段（recommendation-scoring-design §6）。
+    coarse_score: float = 0.0
+    llm_relevance_score: float | None = None
+    llm_rerank_status: str = "not_run"
+    llm_rerank_reason: str = ""
+    rubric_hits: list[str] = Field(default_factory=list)
+    rubric_version: int = 0
     selected: bool
     recommendation_reason: str
     admission_level: str
@@ -127,3 +134,120 @@ class RecommendationRunCreateRead(BaseModel):
     candidates_total: int
     selected_total: int
     generated_total: int
+
+
+class RecommendationPolicyGuidance(BaseModel):
+    want: str = ""
+    avoid: str = ""
+    boost: str = ""
+
+
+class FeedbackWorkflowPolicyRead(BaseModel):
+    """feedback_workflow 策略块（feedback-heat-scoring §15/§16.1）。"""
+
+    weekly_rollup_enabled: bool = True
+    monthly_review_enabled: bool = True
+    proposal_generation_enabled: bool = True
+    exploration_epsilon: float = 0.0
+
+
+class RecommendationPolicyRead(BaseModel):
+    guidance: RecommendationPolicyGuidance
+    active_rubric: dict[str, Any] | None = None
+    rubric_version: int = 0
+    rubric_status: str = "none"
+    llm_rerank_enabled: bool = False
+    rerank_top_m: int = 60
+    rerank_window_size: int = 12
+    daily_rerank_call_budget: int | None = 60
+    fusion_weights: dict[str, float] = Field(default_factory=lambda: {"llm": 0.6, "coarse": 0.4})
+    semantic_layer_enabled: bool = False
+    feedback_workflow: FeedbackWorkflowPolicyRead = Field(
+        default_factory=FeedbackWorkflowPolicyRead,
+    )
+
+
+class RecommendationPolicyResolvedRead(BaseModel):
+    """只读 resolved 状态（仿 generation-policy）；永不含任何 key 材料。"""
+
+    llm_rerank_available: bool
+    provider_usable: bool
+    rerank_calls_used_today: int
+    rerank_budget: int | None
+    active_rubric_version: int
+    semantic_layer_available: bool
+
+
+class WorkspaceRecommendationPolicyRead(BaseModel):
+    workspace_code: str
+    policy: RecommendationPolicyRead
+    resolved: RecommendationPolicyResolvedRead
+
+
+class RubricCompileRead(BaseModel):
+    rubric: dict[str, Any]
+    fingerprint: str
+    persistence: str = "not_persisted"
+    cached: bool = False
+
+
+class RubricActivateCreate(BaseModel):
+    fingerprint: str = Field(min_length=8, max_length=128)
+
+
+class FeedbackRollupRead(BaseModel):
+    """rollup 列表条目（feedback-heat-scoring §16.2；空样本指标为 null 不为 0）。"""
+
+    id: str
+    workspace_code: str
+    period_type: str
+    period_key: str
+    window_start: datetime | None = None
+    window_end: datetime | None = None
+    status: str
+    proposal_status: str
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    computed_at: datetime | None = None
+
+
+class FeedbackRollupDetailRead(FeedbackRollupRead):
+    source_breakdown: dict[str, Any] = Field(default_factory=dict)
+    topic_breakdown: dict[str, Any] = Field(default_factory=dict)
+    sample_refs: dict[str, Any] = Field(default_factory=dict)
+
+
+class FeedbackRollupListRead(BaseModel):
+    items: list[FeedbackRollupRead] = Field(default_factory=list)
+    total: int = 0
+
+
+class FeedbackRollupRunCreate(BaseModel):
+    period_type: str = Field(default="weekly")
+    # 缺省 = 上一完整周期（ISO 周 / 自然月）。
+    period_key: str | None = None
+
+
+class RubricRevisionProposalRead(BaseModel):
+    id: str
+    workspace_code: str
+    rollup_id: str
+    rollup_period_key: str = ""
+    base_rubric_version: int
+    prompt_version: str
+    proposed_rubric: dict[str, Any] = Field(default_factory=dict)
+    change_summary: list[dict[str, Any]] = Field(default_factory=list)
+    sample_refs: dict[str, Any] = Field(default_factory=dict)
+    status: str
+    review_comment: str = ""
+    reviewed_at: datetime | None = None
+    compile_fingerprint: str = ""
+    created_at: datetime | None = None
+
+
+class RubricRevisionProposalListRead(BaseModel):
+    items: list[RubricRevisionProposalRead] = Field(default_factory=list)
+
+
+class RubricRevisionProposalReviewCreate(BaseModel):
+    action: str = Field(pattern="^(accept|reject)$")
+    comment: str = Field(default="", max_length=2000)

@@ -34,6 +34,10 @@ Archive / Knowledge 负责：
 - 公司 SQL 标准导出。
 - 当前用户评论和评分。
 - 旧系统运行入口。
+- 本工作台已发布日报/周报的**日常按天/周回溯体验**（2026-07-08 R3 职责重定位）：
+  时间线、按标签筛选、历史全量查询归 `/daily-reports`、`/weekly-reports` 页自身；
+  本模块只以 `report-archive` 只读索引为报告页时间轴**供数**（§5.1），页面职责
+  分工见 `docs/product/frontend-product-design.md` §13.4。
 
 ## 3. 核心对象
 
@@ -102,10 +106,46 @@ inventory
 
 | 页面 | API | 语义 |
 |---|---|---|
-| `/historical-reports` | `/api/report-archive*`、`/api/historical-reports*`、`/api/legacy-import/*` | 统一报告归档（已发布日报/周报 + legacy 导入合并，按月/关键词回溯，含条目数/采信率/头条/来源 top3 统计）和导入验收 |
+| `/historical-reports` | `/api/report-archive*`、`/api/historical-reports*`、`/api/legacy-import/*` | 跨来源归档（2026-07-08 R3 重定位）：legacy 导入资产唯一阅读入口 + 导入验收 + 跨来源统计对比；合并检索里的已发布条目经 `detail_kind/detail_id` 深链跳报告页，不在本页读当前正文；月份导航降级为 legacy 视图筛选（页面规格见 page-specs §13） |
+| `/daily-reports`、`/weekly-reports`（时间轴供数） | `GET /api/report-archive`（`report_type` + `origin=published` + `month/offset/limit`）、`GET /api/report-archive/summary`（months 桶） | 报告页 ReportTimeline 的已发布层轻量索引与跳月锚点（§5.1）；归档层只读供数，不因此获得编审语义 |
 | `/entity-milestones` | `/api/tracked-entities*`（含 POST/PATCH/DELETE 与 `GET /{id}/timeline`）、`/api/entity-milestones*`（含 POST 手工补录）、`PATCH /api/entity-milestones/{id}`、`GET /api/entity-timeline/summary` | 实体目录管理、按月分组时间线、候选确认/驳回与当前事件治理、工作台级大事记总览统计 |
 | `/daily-reports`、`/weekly-reports` | `POST /api/daily-report-items/{id}/entity-milestones`、`POST /api/weekly-report-items/{id}/entity-milestones` | 从当前采信条目登记实体事件 |
 | `/quality-archive` | `/api/quality-archive/*`、`/api/historical-feedback-items`、`/api/historical-job-runs` | 历史反馈和旧任务 |
+
+### 5.1 报告页时间轴的数据供给（2026-07-08 R3 定稿）
+
+`/daily-reports`、`/weekly-reports` 的 ReportTimeline（组件规范见
+`docs/product/frontend-product-design.md` §13.1）复用本模块的统一归档索引作为
+**已发布层**，v1 零新增后端：
+
+- 已发布层：`GET /api/report-archive?workspace_code=&report_type=daily|weekly&origin=published&month=&offset=&limit=`
+  （viewer+，`ReportArchiveListItem` 已含 `date_key/month/status/published_at/
+  item_count/detail_kind/detail_id`，足够渲染节点并深链回当前报告 API）。
+- 跳月锚点：`GET /api/report-archive/summary` 的 `months` 桶（当前为
+  daily+weekly+legacy 合并计数，v1 仅作为跳转锚点使用；每月精确分型计数由该月
+  分页结果长度得出）。
+- 草稿层不走本模块：草稿是编审层对象，时间轴草稿节点由
+  `GET /api/daily-reports` / `GET /api/weekly-reports`（member+）提供；
+  归档索引不暴露草稿，viewer 时间轴因此天然只含已发布节点。
+
+边界重申：时间轴消费只是只读投影复用，报告页不因此把采信/发布语义下放到归档层；
+归档层也不因供数而提前收录草稿。
+
+后续增量（2026-07 已随归档页重定位落地，契约
+`config/contracts/archive_knowledge.json` 的 `apis` 描述已同步）：
+
+1. `GET /api/report-archive/summary` 已支持 `report_type`/`origin` 过滤，
+   跳月桶按报告类型/来源精确计数（legacy 未知类型归一为 daily 参与
+   `report_type` 过滤；`origin=legacy` 时条目/采信统计与 `top_sources`
+   一律为 0/空，不给占位均值）；summary 同时新增 `top_sources` 字段
+   （已发布采信条目的来源 Top，SQL 聚合，legacy 无来源数据不参与），
+   供归档页跨来源对比卡使用。
+2. 性能降级路径已实现（`app/archive/report_archive.py`，阈值
+   `SQL_AGGREGATION_THRESHOLD = 1000`）：工作台报告总量超阈值时，列表接口
+   先用轻量列查询构建归档索引（SQL 侧完成来源/类型/关键词过滤），排序/月桶/
+   分页在索引上完成，仅对当前页命中的报告加载条目链补水；summary 的条目级
+   统计始终走 SQL GROUP BY。API 形状不变，前端无感；
+   `test_report_archive_api.py` 以阈值压 -1 断言两条路径输出一致。
 
 历史归档查询页面默认只读。任何导入动作只能由命令行或明确的运维流程触发，不能在普通查询页面隐藏执行。
 当前日报/周报页允许 workspace member 从条目登记新的实体事件，但该写入只进入
@@ -245,6 +285,13 @@ published daily/weekly item
 |---|---|
 | 生产主库全量导入验收未留证 | `validate_tech_import_acceptance.py` 对生产 check-only 报告通过 |
 | 历史知识跨对象体验仍需深化 | requirement/task 已可解释引用历史报告、实体事件和历史反馈；后续补更多对象联动体验和 E2E |
+| 跨工作台聚合检索（目标态 v2）未设计 | 本文档补多 workspace_code + membership 过滤的 API 设计后才允许前端入口 |
+
+已收口（2026-07）：归档页重定位（已发布条目深链跳报告页、月份导航收敛 legacy
+视图、页头跨来源定位文案，断言落 `HistoricalReportsPage.spec.ts`，见 page-specs
+§13.4）；summary 跳月桶分报告类型/来源（`GET /api/report-archive/summary` 的
+`report_type`/`origin` 过滤 + `top_sources`，契约与 §5.1 后续增量说明已同步，
+看护在 `test_report_archive_api.py`）。
 
 ## 11. 验收标准
 
@@ -254,3 +301,5 @@ published daily/weekly item
 - 任一历史报告引用缺口可在页面和 JSON 报告里看到。
 - 历史资产不会出现在当前推荐 run、日报采信或标准公司 SQL 中。
 - 历史反馈转需求必须保留 `historical_feedback_item_id`，并可从 `/requirements`、`/tasks` 回跳 `/quality-archive?feedback_id=...`。
+- 报告页时间轴对归档索引的消费保持只读（§5.1）：`report-archive` 不因供数收录
+  草稿、不新增写端点；legacy 报告不出现在报告页时间轴。

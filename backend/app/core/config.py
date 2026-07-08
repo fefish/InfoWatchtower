@@ -43,10 +43,27 @@ KNOWN_INGESTION_SOURCE_TYPES = (
     "internal",
     "wechat",
 )
-# 生成 provider 预设（generation-provider-design §3.1）：两者共用同一
-# OpenAI-compatible chat/completions 客户端；minimax 只是带默认 base_url 与
-# 默认模型名的预设，openai_compatible 必须显式给 GENERATION_BASE_URL。
-GENERATION_PROVIDERS = ("openai_compatible", "minimax")
+# 生成 provider 预设目录（generation-provider-design §8，R2 修订）：9 个 code 与
+# config/contracts/llm_providers.json catalog 逐个一致（由 test_credentials_api.py
+# 看护）；全部共用同一 OpenAI-compatible chat/completions 客户端，除 custom
+#（及 deprecated 别名 openai_compatible）外都自带目录默认 base_url。
+GENERATION_PROVIDER_CATALOG_CODES = (
+    "openai",
+    "anthropic",
+    "deepseek",
+    "moonshot",
+    "zhipu_glm",
+    "minimax",
+    "openrouter",
+    "ollama",
+    "custom",
+)
+# 旧值 openai_compatible 保留为 custom 的 deprecated 别名（仅 env 值域；
+# llm_provider_credentials.provider 不接受别名）。
+GENERATION_PROVIDER_DEPRECATED_ALIASES: dict[str, str] = {"openai_compatible": "custom"}
+GENERATION_PROVIDERS = GENERATION_PROVIDER_CATALOG_CODES + tuple(
+    GENERATION_PROVIDER_DEPRECATED_ALIASES,
+)
 # 与 config/contracts/deployment_modes.json 的 modes.*.capabilities 保持一致
 MODE_CAPABILITIES: dict[str, dict[str, bool]] = {
     "standalone": {

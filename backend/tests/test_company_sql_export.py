@@ -568,7 +568,10 @@ def test_company_sql_export_api_requires_published_report(monkeypatch, tmp_path)
     }
     exported = client.post(f"/api/exports/company-sql/daily-reports/{report_id}")
     assert exported.status_code == 409
-    assert "rule_v1/fallback" in exported.json()["detail"]
+    # 文案违例 #8 已替换（frontend-product-design §14.2）：透传到界面的 preflight
+    # 提示不再出现实现术语 rule_v1，错误码 rule_fallback_blocked 保持不变。
+    assert "规则降级草稿" in exported.json()["detail"]
+    assert "rule_v1" not in exported.json()["detail"]
 
     jobs = client.get("/api/exports")
     assert jobs.status_code == 200

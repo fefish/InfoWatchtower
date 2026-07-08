@@ -278,16 +278,34 @@ def build_weekly_rendition(
     return _upsert_rendition(session, context, fmt, adopted)
 
 
+def _item_source_overrides(item: ReportItem) -> dict[str, Any] | None:
+    """条目的编辑覆盖 → 格式化输入 overrides（editor override -> generated_news
+    -> news_items 展示优先级，§10.4.5）。无任何覆盖返回 None。"""
+    overrides: dict[str, Any] = {}
+    if getattr(item, "editor_title", None):
+        overrides["title"] = item.editor_title
+    if getattr(item, "editor_summary", None):
+        overrides["summary"] = item.editor_summary
+    if getattr(item, "editor_key_points", None):
+        overrides["key_points"] = item.editor_key_points
+    editor_content = getattr(item, "editor_content_json", None)
+    if editor_content:
+        overrides["content"] = dict(editor_content)
+    return overrides or None
+
+
 def _maybe_backfill_template_extras(
     session: Session,
     workspace_code: str,
     fmt: ReportFormat,
     items: list[ReportItem],
 ) -> int:
-    """rendition 投影前对缺失/过期的模板增量字段惰性补齐（§10.4.1）。
+    """rendition 投影前对缺失/过期的格式化桶惰性补齐（§10.4.1，逐条 × 逐格式）。
 
     provider 未启用/未配 key/预算尽时静默跳过——投影照常产出并标记
     template_fallback，`regenerate` 在 provider 恢复后走同一入口补齐。
+    格式化输入取展示优先级解析后的基稿（编辑覆盖后 regenerate 以覆盖后
+    文本重新格式化）。
     """
     if not has_generated_fields(fmt.generation_template):
         return 0
@@ -303,10 +321,45 @@ def _maybe_backfill_template_extras(
     config = resolve_generation_config(workspace=workspace)
     if not (config.enabled and config.key_configured):
         return 0
+    overrides_by_news_id = {
+        item.generated_news.id: overrides
+        for item in items
+        if item.generated_news is not None
+        and (overrides := _item_source_overrides(item)) is not None
+    }
     runtime = GenerationRuntime(session=session, workspace_code=workspace_code, config=config)
-    generated_total = backfill_template_extras(fmt, news_list, runtime)
+    generated_total = backfill_template_extras(
+        fmt,
+        news_list,
+        runtime,
+        source_overrides_by_news_id=overrides_by_news_id,
+    )
     if generated_total:
         session.flush()
+    return generated_total
+
+
+def backfill_template_extras_for_items(
+    session: Session,
+    workspace_code: str,
+    items: list[ReportItem],
+) -> int:
+    """对一组采信条目 × 工作台全部启用模板格式逐条补齐格式化桶（§10.4.1
+    周报草稿构建位点；幂等，只补缺失/过期桶）。"""
+    if not items:
+        return 0
+    formats = session.scalars(
+        select(ReportFormat)
+        .where(
+            ReportFormat.workspace_code == workspace_code,
+            ReportFormat.enabled.is_(True),
+            ReportFormat.generation_template.isnot(None),
+        )
+        .order_by(ReportFormat.sort_order, ReportFormat.format_code),
+    ).all()
+    generated_total = 0
+    for fmt in formats:
+        generated_total += _maybe_backfill_template_extras(session, workspace_code, fmt, items)
     return generated_total
 
 
@@ -447,8 +500,9 @@ def _item_snapshot(item: ReportItem, fmt: ReportFormat, boards: BoardTaxonomy | 
         "generation_status": news.generation_status,
     }
     if fmt.generation_template:
-        # 编辑覆盖优先级不变：editor override -> template_extras/generated_news
-        # -> news_items（report-renditions-design §10.4.5）。
+        # 投影只排版（D-2026-07-08-TPL）：context 仅供缺失字段的降级拷贝
+        # （§10.2），展示优先级 editor override -> generated_news -> news_items
+        # （report-renditions-design §10.4.5）。
         editor_content = dict(getattr(item, "editor_content_json", None) or {})
         effective_content = {
             **{key: str(value or "") for key, value in content.items()},

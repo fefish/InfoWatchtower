@@ -3,13 +3,19 @@ from app.models.content import (
     DataSource,
     DedupeGroup,
     DedupeGroupItem,
+    FeedbackRollup,
     GeneratedNews,
     GenerationUsage,
     IngestionRun,
     NewsItem,
+    NewsItemEmbedding,
     RawItem,
     RecommendationItem,
+    RecommendationRubricCompile,
     RecommendationRun,
+    RubricRevisionProposal,
+    RubricTopicPrior,
+    SourceScoreSnapshot,
 )
 from app.models.export import ExportImportReceipt, ExportJob, ExportJobItem
 from app.models.feedback import (
@@ -33,6 +39,7 @@ from app.models.identity import (
     user_roles,
 )
 from app.models.labels import ContentLabel, Label, LabelSet
+from app.models.llm import LlmProviderCredential
 from app.models.legacy import (
     EntityMilestone,
     HistoricalFeedbackItem,
@@ -79,11 +86,14 @@ __all__ = [
     "HistoricalJobRun",
     "HistoricalReport",
     "EntityMilestone",
+    "FeedbackRollup",
     "IngestionRun",
     "Insight",
     "Label",
     "LabelSet",
+    "LlmProviderCredential",
     "NewsItem",
+    "NewsItemEmbedding",
     "Notification",
     "NotificationPreference",
     "ObjectWatcher",
@@ -93,11 +103,15 @@ __all__ = [
     "RawItem",
     "Reaction",
     "RecommendationItem",
+    "RecommendationRubricCompile",
     "RecommendationRun",
     "Requirement",
     "RequirementSourceLink",
     "Role",
+    "RubricRevisionProposal",
+    "RubricTopicPrior",
     "SchedulerHeartbeat",
+    "SourceScoreSnapshot",
     "StrategicImplication",
     "SyncConflict",
     "SyncCursor",

@@ -4,7 +4,7 @@ import html
 import math
 import re
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time
 from types import SimpleNamespace
 from uuid import uuid4
@@ -32,6 +32,15 @@ from app.models.reports import DailyReport, DailyReportItem, ReportFormat, Weekl
 from app.models.strategy import RequirementSourceLink
 from app.models.workspace import Workspace, WorkspaceSourceLink
 from app.news_keywords import fallback_key_points
+from app.recommendations.policy import workspace_recommendation_policy
+from app.recommendations.reaggregate import latest_source_prior_deltas
+from app.recommendations.rollup import exploration_draw, latest_low_data_source_ids
+from app.recommendations.rerank import (
+    RerankOutcome,
+    disabled_outcome,
+    execute_llm_rerank,
+    skipped_outcome,
+)
 from app.reports.generation_template import backfill_template_extras, has_generated_fields
 from app.scoring.content_scorer import load_content_scorer
 from app.workspaces.policy import (
@@ -533,17 +542,62 @@ def run_daily_recommendation(
     # 自定义 label_set_code 随推荐链路运行落 LabelSet 记录（幂等）。
     ensure_workspace_label_set(session, workspace, policy)
     candidates = _candidate_rows(session, workspace.code, day_key)
+    # 源先验增量（feedback-heat-scoring §10.1）：读取最新快照，无快照时空 dict
+    # —— `_source_score` 叠加 0.0，行为与现状逐字节一致。
+    source_prior_deltas = latest_source_prior_deltas(session, workspace.code)
+    scored_raw = [
+        _score_candidate(
+            session,
+            workspace,
+            row,
+            scoring_now,
+            policy,
+            source_prior_deltas=source_prior_deltas,
+        )
+        for row in candidates
+    ]
+    run_key = _run_key(workspace.code, day_key, run_started_at)
+
+    # L3 LLM 精排（recommendation-scoring-design §4.4）：触发条件不满足或任何
+    # 失败/预算路径都降级为纯粗排（final=coarse），永不阻断 run。
+    rec_policy = workspace_recommendation_policy(workspace)
+    rerank_outcome = _run_llm_rerank(session, workspace, rec_policy, scored_raw, run_key)
+    ranked = _apply_rerank_fusion(scored_raw, rerank_outcome, rec_policy["fusion_weights"])
+
+    # 选择遍历顺序：(admission_order, -final_score)（§4.5，未启用精排时与现状
+    # 逐位一致——回归红线断言 1）。
     scored = sorted(
-        (_score_candidate(session, workspace, row, scoring_now, policy) for row in candidates),
+        ranked,
         key=lambda item: (
             ADMISSION_ORDER.get(item.admission_level, 9),
             -item.final_score,
         ),
     )
+    # 展示 rank：精排产生任何可用 LLM 分时切 final_score 降序（并列按
+    # news_item_id 升序，§7 排序一致性契约）；纯粗排路径保持现状序列。
+    if rerank_outcome.engaged:
+        display_order = sorted(
+            ranked,
+            key=lambda item: (-item.final_score, item.news_item.id),
+        )
+    else:
+        display_order = scored
     selected_ids = _selected_candidate_ids(scored, limit, source_daily_limit)
+    # ε 探索位（feedback-heat-scoring §15）：默认 epsilon=0 时本调用零查询零改动，
+    # 选择结果与现状逐位一致（回归红线）。
+    exploration_news_id = _apply_exploration_slot(
+        session,
+        workspace_code=workspace.code,
+        run_key=run_key,
+        rec_policy=rec_policy,
+        scored=scored,
+        selected_ids=selected_ids,
+        limit=limit,
+        source_daily_limit=source_daily_limit,
+    )
 
     run = RecommendationRun(
-        run_key=_run_key(workspace.code, day_key, run_started_at),
+        run_key=run_key,
         workspace_code=workspace.code,
         domain_code=workspace.default_domain_code,
         status="running",
@@ -563,7 +617,11 @@ def run_daily_recommendation(
     session.flush()
 
     recommendation_items: list[RecommendationItem] = []
-    for rank, score in enumerate(scored, start=1):
+    for rank, score in enumerate(display_order, start=1):
+        reason = f"{score.reason}; llm_rerank={score.llm_rerank_status}"
+        if exploration_news_id is not None and score.news_item.id == exploration_news_id:
+            # 可解释性（§15）：探索位条目 recommendation_reason 追加 exploration_slot。
+            reason = f"{reason}; exploration_slot"
         recommendation_item = RecommendationItem(
             run=run,
             workspace_code=workspace.code,
@@ -582,8 +640,14 @@ def run_daily_recommendation(
             source_score=score.source_score,
             heat_score=score.heat_score,
             final_score=score.final_score,
+            coarse_score=score.coarse_score,
+            llm_relevance_score=score.llm_relevance_score,
+            llm_rerank_status=score.llm_rerank_status,
+            llm_rerank_reason=score.llm_rerank_reason,
+            rubric_hits_json=list(score.rubric_hits),
+            rubric_version=score.rubric_version,
             selected=score.news_item.id in selected_ids,
-            recommendation_reason=score.reason,
+            recommendation_reason=reason,
             admission_level=score.admission_level,
             admission_score=score.admission_score,
             admission_pool=score.admission_pool,
@@ -643,6 +707,9 @@ def run_daily_recommendation(
         # fallback_behavior 处理，这里记录本次 run 内被预算拦下的调用次数。
         "generation_budget_exhausted": runtime.budget_exhausted_total,
         "template_extras_generated": template_extras_generated,
+        # L3 精排块（recommendation-scoring-design §10）：status/skip_reason/
+        # 窗口计数/调用数/rubric 版本/分数分布与漂移告警。
+        "llm_rerank": rerank_outcome.summary_block(),
     }
     session.flush()
     return RecommendationRunResult(
@@ -759,6 +826,14 @@ class ScoredCandidate:
     heat_score: float
     final_score: float
     reason: str
+    # L1 粗排快照与 L3 精排解释字段（recommendation-scoring-design §6）；
+    # 未精排时 final_score == coarse_score（回归红线）。
+    coarse_score: float = 0.0
+    llm_relevance_score: float | None = None
+    llm_rerank_status: str = "not_run"
+    llm_rerank_reason: str = ""
+    rubric_hits: tuple[str, ...] = ()
+    rubric_version: int = 0
 
 
 @dataclass(frozen=True)
@@ -873,12 +948,13 @@ def _score_candidate(
     row: CandidateRow,
     now: datetime,
     policy: WorkspaceContentPolicy,
+    source_prior_deltas: dict[str, float] | None = None,
 ) -> ScoredCandidate:
     news_item = row.news_item
     quality_score = _quality_score(news_item)
     topic_score = _topic_score(news_item, workspace, policy)
     freshness_score = _freshness_score(news_item, now)
-    source_score = _source_score(session, workspace, news_item)
+    source_score = _source_score(session, workspace, news_item, source_prior_deltas)
     heat_score = _heat_score(session, news_item)
     feedback_score = _feedback_score(session, news_item)
     diversity_score = _diversity_score(news_item)
@@ -916,6 +992,9 @@ def _score_candidate(
         source_score=round(source_score, 2),
         heat_score=round(heat_score, 2),
         final_score=round(final_score, 2),
+        # 粗排分快照：L1 输出改名持久化（§4.2）；此刻 final==coarse，
+        # 精排融合只改 final_score，coarse_score 永远保留规则层原值。
+        coarse_score=round(final_score, 2),
         reason=_recommendation_reason(
             admission=admission,
             quality_score=quality_score,
@@ -976,6 +1055,149 @@ def _selected_candidate_ids(
                 continue
             try_select(score, enforce_mix=enforce_mix)
     return selected
+
+
+def _apply_exploration_slot(
+    session: Session,
+    *,
+    workspace_code: str,
+    run_key: str,
+    rec_policy: dict[str, object],
+    scored: list[ScoredCandidate],
+    selected_ids: set[str],
+    limit: int,
+    source_daily_limit: int,
+) -> str | None:
+    """ε 探索位（feedback-heat-scoring §15，防马太效应，默认关）。
+
+    前提：epsilon > 0 且最新 weekly rollup 的 low_data_sources 非空；确定性抽签
+    draw < epsilon 时，从未入选候选中挑「低数据源 且 admission ∈ {P1, P2}」里
+    coarse_score 最高的 1 条追加进入选集。不得超过 run limit / source cap /
+    pool cap（冲突则放弃探索位）；不改 admission；R/P3 永不因探索入选。
+    """
+    workflow = rec_policy.get("feedback_workflow") if isinstance(rec_policy, dict) else None
+    epsilon = 0.0
+    if isinstance(workflow, dict):
+        raw = workflow.get("exploration_epsilon")
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            epsilon = float(raw)
+    if epsilon <= 0.0:
+        # 回归红线：epsilon=0（默认）时零查询零改动，选择与现状逐位一致。
+        return None
+    low_data_ids = latest_low_data_source_ids(session, workspace_code)
+    if not low_data_ids:
+        return None
+    if exploration_draw(run_key) >= epsilon:
+        return None
+    if limit <= 0 or len(selected_ids) >= limit:
+        return None
+
+    candidates = [
+        score
+        for score in scored
+        if score.news_item.id not in selected_ids
+        and score.admission_level in {"P1", "P2"}
+        and score.news_item.data_source_id in low_data_ids
+    ]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda score: (-score.coarse_score, score.news_item.id))
+    pick = candidates[0]
+
+    source_counts: dict[str, int] = {}
+    pool_counts: dict[str, int] = {}
+    for score in scored:
+        if score.news_item.id not in selected_ids:
+            continue
+        source_id = score.news_item.data_source_id
+        source_counts[source_id] = source_counts.get(source_id, 0) + 1
+        pool_counts[score.admission_pool] = pool_counts.get(score.admission_pool, 0) + 1
+    pool_limit = max(2, math.ceil(limit * 0.40)) if limit > 1 else 1
+    if source_counts.get(pick.news_item.data_source_id, 0) >= source_daily_limit:
+        return None
+    if pool_counts.get(pick.admission_pool, 0) >= pool_limit:
+        return None
+    selected_ids.add(pick.news_item.id)
+    return pick.news_item.id
+
+
+def _run_llm_rerank(
+    session: Session,
+    workspace: Workspace,
+    rec_policy: dict[str, object],
+    scored: list[ScoredCandidate],
+    run_key: str,
+) -> RerankOutcome:
+    """L3 触发判定（§4.4 四条件）+ 执行；不满足即降级标记，零外呼。"""
+    if not rec_policy.get("llm_rerank_enabled"):
+        return disabled_outcome()
+    active_rubric = rec_policy.get("active_rubric")
+    if rec_policy.get("rubric_status") != "active" or not isinstance(active_rubric, dict):
+        return disabled_outcome("no_active_rubric")
+    rubric_version = int(rec_policy.get("rubric_version") or 0)
+    # 统一解析链（§17 D1）：凭据 → 实例 env；凭据失效按 provider 不可用降级。
+    config = resolve_generation_config(workspace=workspace)
+    if not (config.enabled and config.key_configured):
+        return skipped_outcome("provider_unavailable", rubric_version)
+    budget = rec_policy.get("daily_rerank_call_budget")
+    return execute_llm_rerank(
+        session,
+        workspace_code=workspace.code,
+        run_key=run_key,
+        scored=scored,
+        rubric=active_rubric,
+        rubric_version=rubric_version,
+        config=config,
+        rerank_top_m=int(rec_policy.get("rerank_top_m") or 60),
+        rerank_window_size=int(rec_policy.get("rerank_window_size") or 12),
+        daily_budget=int(budget) if budget is not None else None,
+    )
+
+
+def _apply_rerank_fusion(
+    scored: list[ScoredCandidate],
+    outcome: RerankOutcome,
+    fusion_weights: dict[str, float],
+) -> list[ScoredCandidate]:
+    """final_score 融合（§6）：scored/cached 候选 round(w_llm*llm + w_coarse*coarse, 2)；
+    其余一律 final = coarse（降级是一等路径）。融合不重算准入。"""
+    w_llm = float(fusion_weights.get("llm", 0.6))
+    w_coarse = float(fusion_weights.get("coarse", 0.4))
+    run_level_item_status = {
+        "disabled": "disabled",
+        "skipped": "skipped",
+    }.get(outcome.status)
+
+    fused: list[ScoredCandidate] = []
+    for candidate in scored:
+        entry = outcome.per_item.get(candidate.news_item.id)
+        if entry is None:
+            fused.append(
+                replace(candidate, llm_rerank_status=run_level_item_status or "not_run"),
+            )
+            continue
+        if entry.status in {"scored", "cached"} and entry.score is not None:
+            final_score = round(w_llm * entry.score + w_coarse * candidate.coarse_score, 2)
+            fused.append(
+                replace(
+                    candidate,
+                    final_score=final_score,
+                    llm_relevance_score=entry.score,
+                    llm_rerank_status=entry.status,
+                    llm_rerank_reason=entry.reason,
+                    rubric_hits=tuple(entry.rubric_hits),
+                    rubric_version=outcome.rubric_version,
+                ),
+            )
+            continue
+        fused.append(
+            replace(
+                candidate,
+                llm_rerank_status=entry.status,
+                rubric_version=outcome.rubric_version,
+            ),
+        )
+    return fused
 
 
 def _eligible_level(level: str) -> bool:
@@ -1402,7 +1624,12 @@ def _freshness_score(news_item: NewsItem, now: datetime) -> float:
     return max(15.0, 100.0 * math.exp(-hours / 168.0))
 
 
-def _source_score(session: Session, workspace: Workspace, news_item: NewsItem) -> float:
+def _source_score(
+    session: Session,
+    workspace: Workspace,
+    news_item: NewsItem,
+    source_prior_deltas: dict[str, float] | None = None,
+) -> float:
     link = session.scalar(
         select(WorkspaceSourceLink).where(
             WorkspaceSourceLink.workspace_id == workspace.id,
@@ -1425,6 +1652,10 @@ def _source_score(session: Session, workspace: Workspace, news_item: NewsItem) -
         base += 10.0
     if _contains_any(source_identity, COMMERCIAL_SOURCE_HINTS):
         base -= 15.0
+    # 源先验增量（feedback-heat-scoring §10.1）：最新快照的 delta ∈ [-6, +6]，
+    # 无快照时 0.0，叠加后仍 clamp 0..100（现状行为不变）。
+    if source_prior_deltas:
+        base += float(source_prior_deltas.get(news_item.data_source_id, 0.0))
     return max(0.0, min(100.0, base))
 
 
@@ -1816,7 +2047,7 @@ def _create_or_replace_daily_draft(
             domain_code=workspace.default_domain_code,
             day_key=day_key,
             title=f"{day_key} {workspace.name} 日报",
-            summary="由阶段 5 推荐链路生成的日报草稿。",
+            summary="基于当日采集与推荐结果自动生成，可在此采信、编辑与发布。",
             status="draft",
         )
         session.add(report)
@@ -1827,7 +2058,7 @@ def _create_or_replace_daily_draft(
         # 重跑对既有 draft 走增量合并：报告层是唯一可编辑层，
         # adoption_status/is_headline/editor 覆盖不因 pipeline 重跑被整表重建。
         report.title = f"{day_key} {workspace.name} 日报"
-        report.summary = "由阶段 5 推荐链路生成的日报草稿。"
+        report.summary = "基于当日采集与推荐结果自动生成，可在此采信、编辑与发布。"
         existing_items = list(
             session.scalars(
                 select(DailyReportItem)

@@ -342,7 +342,9 @@ def _preflight_item(
         )
 
     if generated.generated_by.startswith("rule_v1"):
-        add_error("rule_fallback_blocked", "generated_news.generated_by", "rule_v1/fallback 草稿不能进入标准公司 SQL。")
+        # 文案违例 #8（frontend-product-design §14.2）：preflight 提示透传到 /exports
+        # 界面，改为业务话术；错误码 rule_fallback_blocked 与判定逻辑不变。
+        add_error("rule_fallback_blocked", "generated_news.generated_by", "规则降级草稿（非 AI 生成确认稿）不能进入标准公司 SQL。")
     if generated.generation_status != "ready":
         add_error("generation_not_ready", "generated_news.generation_status", "采信条目生成稿必须为 ready。")
     if not source_url:

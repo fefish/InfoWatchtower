@@ -145,7 +145,12 @@ def validate_report_format_template(
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> ReportFormatTemplateValidateRead:
-    """模板干跑校验 + 示例预览（workspace admin+；不落任何表——§10.5）。"""
+    """模板干跑校验 + 示例预览（workspace admin+；不落任何表——§10.5）。
+
+    字段语义按 D-2026-07-08-TPL 重定义（wire key 不改）：projection_fields=
+    降级可兜底字段（正常路径同样由 AI 填充）、generated_fields=纯生成字段；
+    preview_item 附"全字段 AI 格式化"提示与每条 1 次调用的成本提示。
+    """
     assert_workspace_member(session, current_user, payload.workspace_code, min_role="admin")
     canonical, errors = parse_generation_template(payload.generation_template, payload.carrier)
     if canonical is None:

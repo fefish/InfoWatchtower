@@ -3,6 +3,7 @@ import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import RecommendationsPage from "./RecommendationsPage.vue";
+import { useSessionStore } from "../stores/session";
 import { useWorkspaceStore } from "../stores/workspace";
 
 const api = vi.hoisted(() => ({
@@ -11,6 +12,8 @@ const api = vi.hoisted(() => ({
   createRecommendationRun: vi.fn(),
   fetchScorerPolicy: vi.fn(),
   previewScorer: vi.fn(),
+  fetchFeedbackRollups: vi.fn(),
+  fetchFeedbackRollupDetail: vi.fn(),
   bulkAdoptDailyReportCandidates: vi.fn(),
   bulkRejectDailyReportCandidates: vi.fn()
 }));
@@ -20,7 +23,9 @@ vi.mock("../api/recommendations", () => ({
   fetchRecommendationRun: api.fetchRecommendationRun,
   createRecommendationRun: api.createRecommendationRun,
   fetchScorerPolicy: api.fetchScorerPolicy,
-  previewScorer: api.previewScorer
+  previewScorer: api.previewScorer,
+  fetchFeedbackRollups: api.fetchFeedbackRollups,
+  fetchFeedbackRollupDetail: api.fetchFeedbackRollupDetail
 }));
 
 vi.mock("../api/reports", () => ({
@@ -72,9 +77,77 @@ function recommendationItem(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function mountPage() {
+// WP4-G 反馈评估卡 fixture（page-specs §9.3；契约 feedback_workflow）
+function feedbackRollupRecord(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "rollup-1",
+    workspace_code: "planning_intel",
+    period_type: "weekly",
+    period_key: "2026-W27",
+    window_start: "2026-06-29T00:00:00+08:00",
+    window_end: "2026-07-06T00:00:00+08:00",
+    status: "succeeded",
+    proposal_status: "generated",
+    metrics: {
+      precision_at_6: 0.3333,
+      precision_at_12: 0.2857,
+      rerank_uplift: 0.1667,
+      source_coverage: 0.5,
+      topic_entropy: 0.5,
+      normalized_adopt_rate: 0.2857,
+      edit_rate: 0.5,
+      low_data_sources: [{ id: "src-low", name: "Low Data Source" }]
+    },
+    computed_at: "2026-07-06T03:00:00+08:00",
+    ...overrides
+  };
+}
+
+function feedbackRollupDetailRecord(overrides: Record<string, unknown> = {}) {
+  return {
+    ...feedbackRollupRecord(),
+    source_breakdown: {
+      window: "28d",
+      sources: [
+        {
+          data_source_id: "src-low",
+          name: "Low Data Source",
+          recommended_count: 2,
+          adopted_count: 1,
+          rejected_count: 0,
+          normalized_adopt_rate: 0.5,
+          reject_rate: 0,
+          suggestion: "insufficient_data"
+        }
+      ],
+      stale_source_suggestions: [
+        { id: "src-stale", name: "Stale Source", suggestion: "suggest_disable", reason: "连续 4 周零推荐" }
+      ]
+    },
+    topic_breakdown: {},
+    sample_refs: {},
+    ...overrides
+  };
+}
+
+function mountPage(options: { workspaceRole?: string } = {}) {
   const pinia = createPinia();
   setActivePinia(pinia);
+  const session = useSessionStore();
+  session.user = {
+    id: "user-1",
+    external_provider: "local",
+    external_id: "admin",
+    employee_no: null,
+    username: "admin",
+    display_name: "运营管理员",
+    department: null,
+    email: null,
+    roles: ["viewer"] as never,
+    status: "active",
+    is_active: true
+  };
+  session.checked = true;
   const workspace = useWorkspaceStore();
   workspace.currentCode = "planning_intel";
   workspace.options = [
@@ -84,7 +157,8 @@ function mountPage() {
       description: "",
       workspace_type: "team",
       default_domain_code: "ai",
-      enabled: true
+      enabled: true,
+      current_user_workspace_role: options.workspaceRole ?? "admin"
     }
   ];
 
@@ -106,6 +180,8 @@ describe("RecommendationsPage", () => {
     vi.clearAllMocks();
     api.fetchRecommendationRuns.mockResolvedValue([]);
     api.fetchRecommendationRun.mockResolvedValue(null);
+    api.fetchFeedbackRollups.mockResolvedValue({ items: [], total: 0 });
+    api.fetchFeedbackRollupDetail.mockResolvedValue(feedbackRollupDetailRecord());
     api.fetchScorerPolicy.mockResolvedValue({
       workspace_code: "planning_intel",
       config_loaded: true,
@@ -211,6 +287,35 @@ describe("RecommendationsPage", () => {
     expect(wrapper.text()).toContain("未写入推荐 run");
   });
 
+  it("hides the average score metric for a run without candidates instead of rendering 0.00", async () => {
+    // 空指标隐藏（recommendation_ranking.json ordering_consistency empty_metrics）：
+    // 无样本的均值类指标整体隐藏，不渲染占位 0.00。
+    api.fetchRecommendationRuns.mockResolvedValue([{ ...baseRun, items: [] }]);
+    api.fetchRecommendationRun.mockResolvedValue({ ...baseRun, items: [] });
+
+    const wrapper = mountPage();
+    await flushPromises();
+
+    const stats = wrapper.find(".run-detail .module-mini-stats");
+    expect(stats.exists()).toBe(true);
+    expect(stats.text()).toContain("0 候选");
+    expect(stats.text()).not.toContain("均分");
+    expect(stats.text()).not.toContain("0.00");
+  });
+
+  it("shows the average score metric when the run has scored candidates", async () => {
+    api.fetchRecommendationRuns.mockResolvedValue([{ ...baseRun, items: [] }]);
+    api.fetchRecommendationRun.mockResolvedValue({
+      ...baseRun,
+      items: [recommendationItem({ final_score: 78 }), recommendationItem({ id: "item-2", final_score: 82 })]
+    });
+
+    const wrapper = mountPage();
+    await flushPromises();
+
+    expect(wrapper.find(".run-detail .module-mini-stats").text()).toContain("80.00 均分");
+  });
+
   it("reviews P2/P3 observation candidates through the daily report adoption API", async () => {
     const runBefore = {
       ...baseRun,
@@ -270,5 +375,103 @@ describe("RecommendationsPage", () => {
     expect(api.fetchRecommendationRun).toHaveBeenLastCalledWith("run-1");
     expect(wrapper.text()).toContain("观察池采信完成");
     expect(wrapper.text()).toContain("已采信 · 2026-05-05");
+  });
+
+  // -------------------------------------------------------------------------
+  // WP4-G 反馈评估卡（page-specs §9.3/§9.4；契约 feedback_workflow
+  // acceptance_assertions ui_empty_state：空态 + null 指标整项隐藏 + 只读）
+  // -------------------------------------------------------------------------
+
+  it("renders the feedback evaluation empty state without a 0.0 placeholder", async () => {
+    const wrapper = mountPage();
+    await flushPromises();
+
+    const card = wrapper.find('[aria-label="反馈评估"]');
+    expect(card.exists()).toBe(true);
+    expect(api.fetchFeedbackRollups).toHaveBeenCalledWith("planning_intel", "weekly", 8);
+    expect(card.text()).toContain("尚未生成反馈评估");
+    expect(card.text()).not.toContain("0.0");
+  });
+
+  it("hides the feedback evaluation card and skips the call for members and viewers", async () => {
+    for (const role of ["member", "viewer"]) {
+      vi.clearAllMocks();
+      api.fetchRecommendationRuns.mockResolvedValue([]);
+      api.fetchScorerPolicy.mockResolvedValue(null);
+      const wrapper = mountPage({ workspaceRole: role });
+      await flushPromises();
+
+      expect(wrapper.find('[aria-label="反馈评估"]').exists()).toBe(false);
+      expect(api.fetchFeedbackRollups).not.toHaveBeenCalled();
+    }
+  });
+
+  it("switches period_type and reloads the rollup list", async () => {
+    const wrapper = mountPage();
+    await flushPromises();
+
+    const monthlyButton = wrapper
+      .findAll('[aria-label="反馈评估"] button')
+      .find((button) => button.text() === "月");
+    expect(monthlyButton).toBeDefined();
+    await monthlyButton!.trigger("click");
+    await flushPromises();
+    expect(api.fetchFeedbackRollups).toHaveBeenLastCalledWith("planning_intel", "monthly", 8);
+  });
+
+  it("hides null metrics entirely in the expanded rollup detail", async () => {
+    api.fetchFeedbackRollups.mockResolvedValue({
+      items: [
+        feedbackRollupRecord({
+          status: "empty",
+          proposal_status: "none",
+          metrics: {
+            precision_at_6: null,
+            precision_at_12: null,
+            rerank_uplift: null,
+            source_coverage: null,
+            topic_entropy: null,
+            normalized_adopt_rate: null,
+            edit_rate: null,
+            low_data_sources: []
+          }
+        })
+      ],
+      total: 1
+    });
+    const wrapper = mountPage();
+    await flushPromises();
+
+    const card = wrapper.find('[aria-label="反馈评估"]');
+    expect(card.text()).toContain("2026-W27");
+    await card.find(".rollup-head").trigger("click");
+    await flushPromises();
+    expect(card.text()).toContain("本周期无可用指标");
+    expect(card.text()).not.toContain("precision@6");
+    expect(card.text()).not.toContain("0.0");
+  });
+
+  it("expands a rollup row into metrics, tier suggestions and stale source lists (read-only)", async () => {
+    api.fetchFeedbackRollups.mockResolvedValue({ items: [feedbackRollupRecord()], total: 1 });
+    const wrapper = mountPage();
+    await flushPromises();
+
+    const card = wrapper.find('[aria-label="反馈评估"]');
+    await card.find(".rollup-head").trigger("click");
+    await flushPromises();
+
+    expect(api.fetchFeedbackRollupDetail).toHaveBeenCalledWith("planning_intel", "rollup-1");
+    expect(card.text()).toContain("precision@6");
+    expect(card.text()).toContain("0.3333");
+    expect(card.text()).toContain("rerank uplift");
+    expect(card.text()).toContain("edit_rate");
+    expect(card.text()).toContain("源分层建议");
+    expect(card.text()).toContain("Low Data Source");
+    expect(card.text()).toContain("低数据");
+    expect(card.text()).toContain("失效源清理建议");
+    expect(card.text()).toContain("Stale Source");
+    // 只读展示：不得出现未设计的源禁用/权重编辑动作（page-specs §9.4）。
+    expect(card.text()).not.toContain("禁用该源");
+    expect(card.find('input[type="checkbox"]').exists()).toBe(false);
   });
 });

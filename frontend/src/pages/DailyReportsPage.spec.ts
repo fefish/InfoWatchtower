@@ -10,6 +10,7 @@ const reportsApi = vi.hoisted(() => ({
   createDailyReportItemEntityMilestone: vi.fn(),
   createDailyReportItemInsight: vi.fn(),
   createDailyPipelineRun: vi.fn(),
+  fetchDailyReport: vi.fn(),
   fetchDailyReportItemComments: vi.fn(),
   fetchDailyReports: vi.fn(),
   publishDailyReport: vi.fn(),
@@ -17,6 +18,11 @@ const reportsApi = vi.hoisted(() => ({
   regenerateDailyReportGeneratedNews: vi.fn(),
   reactToDailyReportItem: vi.fn(),
   updateDailyReportItem: vi.fn()
+}));
+
+const operationsApi = vi.hoisted(() => ({
+  fetchReportArchive: vi.fn(),
+  fetchReportArchiveSummary: vi.fn()
 }));
 
 const renditionsApi = vi.hoisted(() => ({
@@ -43,6 +49,8 @@ const routeState = vi.hoisted(() => ({
 }));
 
 vi.mock("../api/reports", () => reportsApi);
+
+vi.mock("../api/operations", () => operationsApi);
 
 vi.mock("../api/renditions", () => renditionsApi);
 
@@ -202,7 +210,21 @@ describe("DailyReportsPage feedback policy", () => {
     document.body.innerHTML = "";
     routeState.query = {};
     reportsApi.fetchDailyReports.mockResolvedValue([reportRecord()]);
+    reportsApi.fetchDailyReport.mockResolvedValue(reportRecord());
     reportsApi.fetchDailyReportItemComments.mockResolvedValue([]);
+    operationsApi.fetchReportArchive.mockResolvedValue([]);
+    operationsApi.fetchReportArchiveSummary.mockResolvedValue({
+      workspace_code: "planning_intel",
+      total: 0,
+      published_daily: 0,
+      published_weekly: 0,
+      legacy_reports: 0,
+      total_items: 0,
+      total_adopted: 0,
+      average_adoption_rate: 0,
+      months: [],
+      latest_published_at: null
+    });
     reportsApi.createDailyReportItemInsight.mockResolvedValue({
       insight: {
         id: "insight-1",
@@ -624,6 +646,159 @@ describe("DailyReportsPage feedback policy", () => {
     expect(renditionView.text()).toContain("测试新闻标题");
     // 头条编辑按钮对 viewer 隐藏。
     expect(renditionView.find(".headline-toggle").exists()).toBe(false);
+  });
+
+  it("renders the monthly timeline and opens an archive node via the daily report API", async () => {
+    operationsApi.fetchReportArchive.mockResolvedValue([
+      {
+        id: "archive-1",
+        origin: "published",
+        report_type: "daily",
+        workspace_code: "planning_intel",
+        title: "2026-06-15 日报",
+        date_key: "2026-06-15",
+        month: "2026-06",
+        status: "published",
+        published_at: "2026-06-15T12:00:00Z",
+        item_count: 7,
+        adopted_count: 6,
+        headline_count: 1,
+        adoption_rate: 0.85,
+        top_sources: [],
+        detail_kind: "daily_report",
+        detail_id: "report-old",
+        content_excerpt: ""
+      }
+    ]);
+    reportsApi.fetchDailyReport.mockResolvedValue({
+      ...reportRecord(),
+      id: "report-old",
+      day_key: "2026-06-15",
+      title: "六月中旬日报",
+      status: "published"
+    });
+
+    const wrapper = mountPage({ workspaceRole: "member" });
+    await flushPromises();
+
+    // 左栏是按月分组时间轴（ReportTimeline），替代原先仅 20 份的平铺 tab 列表。
+    const timeline = wrapper.find('aside[aria-label="报告时间轴"]');
+    expect(timeline.exists()).toBe(true);
+    expect(timeline.findAll(".timeline-month-head").map((head) => head.text())).toEqual([
+      "2026 年 7 月 · 1 份",
+      "2026 年 6 月 · 1 份"
+    ]);
+    // 已发布层调用形状：report_type=daily + origin=published + offset/limit 分页。
+    expect(operationsApi.fetchReportArchive).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceCode: "planning_intel",
+        reportType: "daily",
+        origin: "published",
+        offset: 0
+      })
+    );
+
+    // 归档节点点击经 detail_id 直达当前日报 API，不读归档正文投影。
+    const archiveNode = timeline.findAll(".timeline-node").find((node) => node.text().includes("06-15"));
+    expect(archiveNode).toBeTruthy();
+    await archiveNode!.trigger("click");
+    await flushPromises();
+
+    expect(reportsApi.fetchDailyReport).toHaveBeenCalledWith("report-old");
+    expect(wrapper.find(".daily-report-card h3").text()).toBe("六月中旬日报");
+  });
+
+  it("filters report items by category chips and keyword as display-only filtering", async () => {
+    const report = reportRecord();
+    report.items.push({
+      ...reportRecord().items[0],
+      id: "item-2",
+      generated_news: {
+        ...reportRecord().items[0].generated_news,
+        id: "generated-2",
+        category: "AI Infra",
+        title: "第二条：推理集群动态",
+        summary: "另一个摘要"
+      }
+    });
+    reportsApi.fetchDailyReports.mockResolvedValue([report]);
+
+    const wrapper = mountPage({ workspaceRole: "member" });
+    await flushPromises();
+
+    expect(wrapper.findAll(".daily-item.story")).toHaveLength(2);
+    expect(wrapper.find(".filter-count").text()).toBe("2/2 条");
+
+    // 一级标签胶囊：多选过滤，仅影响显示。
+    const chip = wrapper.findAll(".filter-chip").find((button) => button.text() === "模型");
+    expect(chip).toBeTruthy();
+    await chip!.trigger("click");
+    expect(wrapper.findAll(".daily-item.story")).toHaveLength(1);
+    expect(wrapper.find(".filter-count").text()).toBe("1/2 条");
+
+    // 关键词 0 命中：显示清除入口。
+    await wrapper.find(".filter-keyword").setValue("不存在的关键词");
+    expect(wrapper.findAll(".daily-item.story")).toHaveLength(0);
+    const filterEmpty = wrapper.find(".filter-empty");
+    expect(filterEmpty.exists()).toBe(true);
+    expect(filterEmpty.text()).toContain("没有条目命中当前筛选");
+
+    await filterEmpty.find("button").trigger("click");
+    expect(wrapper.findAll(".daily-item.story")).toHaveLength(2);
+
+    // 纯前端过滤：不发写请求，也不重新拉取报告。
+    expect(reportsApi.updateDailyReportItem).not.toHaveBeenCalled();
+    expect(reportsApi.fetchDailyReports).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses reader-facing copy without implementation terms on header and empty states", async () => {
+    renditionsApi.fetchReportFormats.mockResolvedValue([
+      reportFormat("company_sql_v1", "公司 SQL 版"),
+      reportFormat("tech_insight_v1", "技术洞察版")
+    ]);
+    const emptyRendition = renditionRecord();
+    emptyRendition.body_json.groups = [];
+    emptyRendition.body_json.headlines = [];
+    renditionsApi.regenerateDailyRendition.mockResolvedValue(emptyRendition);
+
+    const wrapper = mountPage({ workspaceRole: "member" });
+    await flushPromises();
+    await flushPromises();
+
+    // 文案违例 #1/#2（frontend-product-design §14.2）已替换为业务话术。
+    const pageText = wrapper.text();
+    expect(pageText).toContain("生成当天的日报草稿，编审、采信并发布正式日报；历史日报从左侧时间轴回溯");
+    expect(pageText).toContain("先在编审视图完成采信");
+    expect(pageText).not.toContain("SQL 预览回填");
+    expect(pageText).not.toContain("内网版视图");
+  });
+
+  it("hides the average rating metric when no item has ratings instead of rendering 0.0", async () => {
+    // 空指标隐藏（page-specs §10.4 / recommendation_ranking.json empty_metrics）：
+    // rating_count=0 时统计行不渲染「0.0 平均评分」span。
+    const wrapper = mountPage({ workspaceRole: "member" });
+    await flushPromises();
+    await flushPromises();
+
+    const metrics = wrapper.find(".report-metrics");
+    expect(metrics.exists()).toBe(true);
+    expect(metrics.text()).toContain("条入稿");
+    expect(metrics.text()).not.toContain("平均评分");
+    expect(metrics.text()).not.toContain("0.0");
+  });
+
+  it("shows the average rating metric when rated items exist", async () => {
+    const rated = reportRecord();
+    rated.items[0].rating_count = 3;
+    rated.items[0].rating_avg = 4.2;
+    reportsApi.fetchDailyReports.mockResolvedValue([rated]);
+    reportsApi.fetchDailyReport.mockResolvedValue(rated);
+
+    const wrapper = mountPage({ workspaceRole: "member" });
+    await flushPromises();
+    await flushPromises();
+
+    expect(wrapper.find(".report-metrics").text()).toContain("4.2 平均评分");
   });
 
   it("gives invited viewers the latest published daily report on landing", async () => {

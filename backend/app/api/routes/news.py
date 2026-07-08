@@ -91,8 +91,10 @@ def list_dedupe_groups(
     daily_status: str = Query(default="all", pattern="^(all|adopted|candidate|rejected|not_in_report)$"),
     admission_level: str | None = Query(default=None, max_length=16),
     source_type: str | None = Query(default=None, max_length=64),
+    # 候选池默认排序（recommendation_ranking.json ordering_consistency candidate_pool）：
+    # 默认 score_desc（final_score 降序），其他排序仅显式选择时生效。
     sort: str = Query(
-        default="updated_desc",
+        default="score_desc",
         pattern="^(updated_desc|score_desc|score_asc|published_desc|source_count_desc)$",
     ),
     limit: int = Query(default=50, ge=1, le=200),
@@ -249,7 +251,14 @@ def _dedupe_group_matches_keyword(record: DedupeGroupRead, keyword: str) -> bool
 
 def _sort_dedupe_group_reads(records: list[DedupeGroupRead], sort: str) -> list[DedupeGroupRead]:
     if sort == "score_desc":
-        return sorted(records, key=lambda record: _recommendation_score(record), reverse=True)
+        # ordering_consistency：final_score 降序，并列按 news_item_id 升序（稳定）。
+        return sorted(
+            records,
+            key=lambda record: (
+                -_recommendation_score(record),
+                record.winner_news_item_id or "",
+            ),
+        )
     if sort == "score_asc":
         return sorted(records, key=lambda record: _recommendation_score(record))
     if sort == "published_desc":

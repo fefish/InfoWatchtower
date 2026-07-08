@@ -595,6 +595,8 @@ class ReportArchiveSummaryRead(BaseModel):
     average_adoption_rate: float
     months: list[ReportArchiveMonthBucket]
     latest_published_at: datetime | None
+    # 已发布报告采信条目的来源 Top（legacy 无来源数据不参与；origin=legacy 时为空）。
+    top_sources: list[ReportArchiveSourceStat] = []
 
 
 class QualityArchiveSummaryRead(BaseModel):

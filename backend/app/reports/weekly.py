@@ -163,7 +163,28 @@ def create_weekly_report_draft(
     session.expire(report, ["items"])
     refresh_weekly_report_summary(report)
     session.flush()
+    _backfill_weekly_template_extras(session, report)
     return report
+
+
+def _backfill_weekly_template_extras(session: Session, report: WeeklyReport) -> None:
+    """周报草稿构建位点的逐条模板格式化（report-renditions-design §10.4.1）。
+
+    周报采信条目 × 带模板的启用格式，经 weekly_report_items.generated_news_id
+    读写 extras 桶；provider 未启用/预算尽时静默跳过（rendition 投影侧降级，
+    `regenerate` 走同一入口补齐），永不阻塞周报草稿链路。
+    """
+    adopted = [
+        item
+        for item in report.items
+        if item.adoption_status == 2 and item.generated_news is not None
+    ]
+    if not adopted:
+        return
+    # 延迟导入避免 weekly <-> renditions 潜在循环依赖
+    from app.reports.renditions import backfill_template_extras_for_items
+
+    backfill_template_extras_for_items(session, report.workspace_code, adopted)
 
 
 def _weekly_report_item_edited(item: WeeklyReportItem) -> bool:

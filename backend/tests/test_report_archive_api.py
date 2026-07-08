@@ -230,6 +230,113 @@ def test_report_archive_merges_published_and_legacy_with_stats(monkeypatch, tmp_
     months = {bucket["month"]: bucket["count"] for bucket in body["months"]}
     assert months == {"2026-07": 1, "2026-06": 1, "2025-06": 1}
     assert [bucket["month"] for bucket in body["months"]] == ["2026-07", "2026-06", "2025-06"]
+    # 来源 Top：已发布采信条目聚合（daily 机器之心×2/量子位×1 + weekly 机器之心×1）
+    assert body["top_sources"] == [
+        {"name": "机器之心", "count": 3},
+        {"name": "量子位", "count": 1},
+    ]
+
+
+def test_report_archive_summary_supports_report_type_and_origin_filters(monkeypatch, tmp_path):
+    """archive-knowledge-design §5.1 后续增量 1：summary 跳月桶按 report_type/origin 精确计数。"""
+
+    client, engine = make_client(monkeypatch, tmp_path, AUTH_MODE="public_password")
+    assert client.post("/api/auth/login", json={"username": "admin", "password": "password"}).status_code == 200
+    Session = sessionmaker(bind=engine)
+    with Session() as session:
+        _seed_archive(session)
+
+    daily_only = client.get(
+        "/api/report-archive/summary", params={"workspace_code": WS, "report_type": "daily"},
+    ).json()
+    # legacy 报告 report_type=daily，也计入 daily 桶
+    assert daily_only["total"] == 2
+    assert daily_only["published_daily"] == 1
+    assert daily_only["published_weekly"] == 0
+    assert daily_only["legacy_reports"] == 1
+    assert {bucket["month"]: bucket["count"] for bucket in daily_only["months"]} == {
+        "2026-07": 1,
+        "2025-06": 1,
+    }
+    assert daily_only["total_items"] == 4
+    assert daily_only["total_adopted"] == 3
+    assert daily_only["top_sources"] == [
+        {"name": "机器之心", "count": 2},
+        {"name": "量子位", "count": 1},
+    ]
+
+    weekly_only = client.get(
+        "/api/report-archive/summary", params={"workspace_code": WS, "report_type": "weekly"},
+    ).json()
+    assert weekly_only["total"] == 1
+    assert weekly_only["published_weekly"] == 1
+    assert weekly_only["legacy_reports"] == 0
+    assert {bucket["month"] for bucket in weekly_only["months"]} == {"2026-06"}
+    assert weekly_only["total_items"] == 1
+    assert weekly_only["top_sources"] == [{"name": "机器之心", "count": 1}]
+
+    legacy_only = client.get(
+        "/api/report-archive/summary", params={"workspace_code": WS, "origin": "legacy"},
+    ).json()
+    assert legacy_only["total"] == 1
+    assert legacy_only["published_daily"] == 0
+    assert legacy_only["published_weekly"] == 0
+    assert legacy_only["legacy_reports"] == 1
+    assert {bucket["month"] for bucket in legacy_only["months"]} == {"2025-06"}
+    # legacy 无采信/来源数据：不给占位统计
+    assert legacy_only["total_items"] == 0
+    assert legacy_only["total_adopted"] == 0
+    assert legacy_only["average_adoption_rate"] == 0.0
+    assert legacy_only["top_sources"] == []
+    assert legacy_only["latest_published_at"] is None
+
+    published_only = client.get(
+        "/api/report-archive/summary", params={"workspace_code": WS, "origin": "published"},
+    ).json()
+    assert published_only["total"] == 2
+    assert published_only["legacy_reports"] == 0
+    assert {bucket["month"] for bucket in published_only["months"]} == {"2026-07", "2026-06"}
+
+    bad_type = client.get(
+        "/api/report-archive/summary", params={"workspace_code": WS, "report_type": "monthly"},
+    )
+    assert bad_type.status_code == 422
+
+
+def test_report_archive_sql_aggregation_path_matches_in_memory(monkeypatch, tmp_path):
+    """archive-knowledge-design §5.1 后续增量 2：超阈值走 SQL 聚合降级路径，API 输出与内存路径一致。"""
+
+    from app.archive import report_archive
+
+    client, engine = make_client(monkeypatch, tmp_path, AUTH_MODE="public_password")
+    assert client.post("/api/auth/login", json={"username": "admin", "password": "password"}).status_code == 200
+    Session = sessionmaker(bind=engine)
+    with Session() as session:
+        _seed_archive(session)
+
+    baseline_cases = [
+        ("/api/report-archive", {"workspace_code": WS}),
+        ("/api/report-archive", {"workspace_code": WS, "month": "2026-07"}),
+        ("/api/report-archive", {"workspace_code": WS, "q": "GPT-5"}),
+        ("/api/report-archive", {"workspace_code": WS, "origin": "published"}),
+        ("/api/report-archive", {"workspace_code": WS, "report_type": "daily"}),
+        ("/api/report-archive", {"workspace_code": WS, "offset": 1, "limit": 1}),
+        ("/api/report-archive/summary", {"workspace_code": WS}),
+        ("/api/report-archive/summary", {"workspace_code": WS, "report_type": "daily"}),
+        ("/api/report-archive/summary", {"workspace_code": WS, "origin": "legacy"}),
+    ]
+    baselines = []
+    for path, params in baseline_cases:
+        response = client.get(path, params=params)
+        assert response.status_code == 200
+        baselines.append(response.json())
+
+    # 阈值压到 -1 强制走 SQL 聚合路径
+    monkeypatch.setattr(report_archive, "SQL_AGGREGATION_THRESHOLD", -1)
+    for (path, params), baseline in zip(baseline_cases, baselines):
+        response = client.get(path, params=params)
+        assert response.status_code == 200
+        assert response.json() == baseline, f"SQL 聚合路径输出与内存路径不一致: {path} {params}"
 
 
 def test_report_archive_requires_workspace_membership(monkeypatch, tmp_path):

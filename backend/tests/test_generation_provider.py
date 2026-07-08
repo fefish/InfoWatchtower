@@ -178,7 +178,8 @@ def test_generation_env_wins_over_minimax_when_both_configured():
     assert config.temperature == 0.1
 
 
-# --- 断言 2：启动 fail-fast（key 空 / REF 解析 / openai_compatible 无 base_url） ---
+# --- 断言 2（§9.6 R2 修订）：enabled 无 key 降级 WARNING；custom/openai_compatible
+# 无 base_url 与非法 provider 值仍拒启 ---
 
 
 def _deploy_settings(**overrides) -> Settings:
@@ -192,28 +193,40 @@ def _deploy_settings(**overrides) -> Settings:
     return Settings(**values)
 
 
-def test_generation_enabled_with_empty_key_fails_startup():
+def test_generation_enabled_with_empty_key_warns_but_starts(caplog):
+    """R2 修订（D-2026-07-08-KEY）：key 可运行期在 UI 落库，启动降级 WARNING。"""
     settings = _deploy_settings(GENERATION_ENABLED=True, GENERATION_API_KEY="")
-    with pytest.raises(RuntimeError, match="GENERATION_API_KEY"):
-        validate_deploy_settings(settings)
+    with caplog.at_level("WARNING", logger="app.core.deploy_checks"):
+        validate_deploy_settings(settings)  # 不再拒启
+    assert any(
+        "GENERATION_ENABLED=true but no API key" in record.message for record in caplog.records
+    )
 
 
-def test_generation_key_ref_unresolvable_fails_and_resolvable_passes(monkeypatch):
+def test_generation_key_ref_unresolvable_warns_and_resolvable_passes(monkeypatch, caplog):
     monkeypatch.delenv("GEN_TEST_KEY_VAR", raising=False)
     broken = _deploy_settings(
         GENERATION_ENABLED=True,
         GENERATION_API_KEY="also-set-but-ref-wins",
         GENERATION_API_KEY_REF="env:GEN_TEST_KEY_VAR",
     )
-    with pytest.raises(RuntimeError, match="GENERATION_API_KEY"):
-        validate_deploy_settings(broken)
+    with caplog.at_level("WARNING", logger="app.core.deploy_checks"):
+        validate_deploy_settings(broken)  # REF 解析失败=未配置：WARNING 而非拒启
+    assert any(
+        "GENERATION_ENABLED=true but no API key" in record.message for record in caplog.records
+    )
 
     monkeypatch.setenv("GEN_TEST_KEY_VAR", "resolved-key")
     ok = _deploy_settings(
         GENERATION_ENABLED=True,
         GENERATION_API_KEY_REF="env:GEN_TEST_KEY_VAR",
     )
-    validate_deploy_settings(ok)
+    caplog.clear()
+    with caplog.at_level("WARNING", logger="app.core.deploy_checks"):
+        validate_deploy_settings(ok)
+    assert not any(
+        "GENERATION_ENABLED=true but no API key" in record.message for record in caplog.records
+    )
     assert ok.generation_api_key_effective == "resolved-key"
     assert ok.generation_api_key_source == "credential_ref"
 
@@ -230,14 +243,32 @@ def test_openai_compatible_without_base_url_fails_startup():
     )
 
 
+def test_custom_without_base_url_fails_startup():
+    """§9.6：custom（openai_compatible 的正名）缺 base_url 仍拒启。"""
+    settings = _deploy_settings(GENERATION_PROVIDER="custom", GENERATION_BASE_URL="")
+    with pytest.raises(RuntimeError, match="GENERATION_BASE_URL"):
+        validate_deploy_settings(settings)
+    validate_deploy_settings(
+        _deploy_settings(
+            GENERATION_PROVIDER="custom",
+            GENERATION_BASE_URL="https://gateway.example/v1",
+        ),
+    )
+
+
 def test_unknown_generation_provider_fails_startup():
-    settings = _deploy_settings(GENERATION_PROVIDER="anthropic")
+    """值域=目录 9 code + deprecated 别名；目录外值仍拒启，目录内新值放行。"""
+    settings = _deploy_settings(GENERATION_PROVIDER="no_such_provider")
     with pytest.raises(RuntimeError, match="GENERATION_PROVIDER"):
         validate_deploy_settings(settings)
+    # R2 值域扩展：市面常用 provider 目录 code 均可启动（自带目录默认 base_url）
+    validate_deploy_settings(_deploy_settings(GENERATION_PROVIDER="anthropic"))
+    validate_deploy_settings(_deploy_settings(GENERATION_PROVIDER="deepseek"))
 
 
-def test_api_entrypoint_fails_fast_on_generation_misconfig(monkeypatch, tmp_path):
-    """create_app（API 入口）与 worker/scheduler 共用 validate_deploy_settings。"""
+def test_api_entrypoint_starts_with_warning_on_missing_env_key(monkeypatch, tmp_path, caplog):
+    """create_app（API 入口）与 worker/scheduler 共用 validate_deploy_settings；
+    R2 后 enabled+env 无 key 是 WARNING（可先启动、再进 UI 配 key）。"""
     database_path = tmp_path / "failfast.sqlite"
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{database_path}")
     monkeypatch.setenv("AUTH_SESSION_SECRET", "test-secret")
@@ -247,10 +278,20 @@ def test_api_entrypoint_fails_fast_on_generation_misconfig(monkeypatch, tmp_path
     monkeypatch.setenv("MINIMAX_API_KEY", "")
     get_settings.cache_clear()
     app = create_app()
-    with pytest.raises(RuntimeError, match="GENERATION_API_KEY"):
-        # 启动自检在 lifespan（进程启动）执行，TestClient 进入上下文即触发
+    with caplog.at_level("WARNING", logger="app.core.deploy_checks"):
         with TestClient(app):
             pass
+    assert any(
+        "GENERATION_ENABLED=true but no API key" in record.message for record in caplog.records
+    )
+    # 非法 provider 值仍在入口 fail-fast（拒启语义未整体放松）
+    monkeypatch.setenv("GENERATION_PROVIDER", "no_such_provider")
+    get_settings.cache_clear()
+    with pytest.raises(RuntimeError, match="GENERATION_PROVIDER"):
+        with TestClient(create_app()):
+            pass
+    monkeypatch.delenv("GENERATION_PROVIDER", raising=False)
+    get_settings.cache_clear()
     # worker 与 scheduler 入口同样调用 validate_deploy_settings（入口级同构）
     import app.workers.scheduler as scheduler_module
     import app.workers.worker as worker_module

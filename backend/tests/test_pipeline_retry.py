@@ -17,6 +17,7 @@ from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
@@ -38,6 +39,18 @@ from app.workers.scheduler import SchedulerState, scheduler_tick
 from tests.test_scheduler_policy import RQ_CONTROL_KWARGS, FakeQueue, make_settings
 
 DAY_KEY = "2026-07-06"
+
+
+@pytest.fixture(autouse=True)
+def _isolate_feedback_reaggregate_beat(monkeypatch):
+    """本文件只验证 run 级重试链的投递；tick 时刻取自真实时钟 + backoff 偏移，
+    真实时间接近 02:00 Asia/Shanghai 时会合法跨过 WP4-A feedback_reaggregate
+    的每日触发点，混入 queue.calls 的精确断言——在此隔离该无关节拍。
+    该 job 自身的投递行为由 test_scheduler_policy.py 专门看护。"""
+    monkeypatch.setattr(
+        "app.workers.scheduler._dispatch_feedback_reaggregate",
+        lambda *args, **kwargs: [],
+    )
 
 
 def make_env(monkeypatch, tmp_path, name):

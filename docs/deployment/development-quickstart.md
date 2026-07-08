@@ -90,16 +90,30 @@ python -m app.workers.scheduler
 周报节拍在工作台配置中心「自动化」卡配置（已实现，契约
 `config/contracts/workspace_model.json` `schedule_policy`）。
 
-## 2.2 生成模型（LLM provider）实例级 env 怎么配
+## 2.2 生成模型（LLM provider）怎么配
 
-base_url 和 key **只在实例级 env 配置**，不进数据库、不进 Git（设计事实源
-`docs/backend/generation-provider-design.md`）：
+配置有两条路径（设计事实源 `docs/backend/generation-provider-design.md`；
+provider 预设目录契约 `config/contracts/llm_providers.json`）：
+
+**路径 A：UI 配置（推荐；R2 设计定稿 2026-07-08，待实现）**——super_admin 在
+工作台配置中心「生成模型」卡：provider 预设下拉（openai / anthropic /
+deepseek / moonshot / zhipu_glm / minimax / openrouter / ollama / custom 兜底）
+→ base_url 预填可改 → key 输入（加密落库 `llm_provider_credentials`，写后只
+回显 masked 后 4 位，永不回显明文）→ 模型下拉 + 自定义 → 测试连通。工作台
+admin 再在 `generation_policy.credential_id` 选用该凭据。解析优先级：
+工作台选中的落库凭据 → 实例 env（下方路径 B）。
+
+**路径 B：实例级 env（兜底路径 + 自动化部署；当前已实现的唯一路径）**——
+key 不进 Git：
 
 ```bash
 # GENERATION_* env 族（2026-07-08 已实现，backend/app/core/config.py）
 export GENERATION_ENABLED=true
-export GENERATION_PROVIDER=minimax            # minimax | openai_compatible
-export GENERATION_BASE_URL=https://api.minimaxi.com/v1   # openai_compatible 必填；minimax 有内置默认
+export GENERATION_PROVIDER=minimax            # 目录 9 code（openai/anthropic/deepseek/moonshot/
+                                              # zhipu_glm/minimax/openrouter/ollama/custom）+
+                                              # 别名 openai_compatible（=custom，deprecated）
+export GENERATION_BASE_URL=https://api.minimaxi.com/v1   # custom/openai_compatible 必填；
+                                              # 其余 provider 有目录默认（llm_providers.json）
 export GENERATION_API_KEY_REF=env:MY_LLM_KEY  # 或 GENERATION_API_KEY=... / file:/path
 export GENERATION_MODEL=MiniMax-M2.7-highspeed
 # 可选：GENERATION_MAX_TOKENS / GENERATION_TEMPERATURE / GENERATION_TIMEOUT_SECONDS /
@@ -110,15 +124,23 @@ export MINIMAX_GENERATION_ENABLED=true
 export MINIMAX_API_KEY=...
 ```
 
-启动自检（fail-fast，见 `config/contracts/deployment_modes.json`
-`startup_failfast_rules`）：`GENERATION_ENABLED=true` 且 key（含 REF 解析后）为空、
-`GENERATION_PROVIDER=openai_compatible` 且 `GENERATION_BASE_URL` 为空、
-provider 不在 `minimax|openai_compatible`，三种错配都会拒绝启动。
+启动自检（见 `config/contracts/deployment_modes.json` `startup_failfast_rules` /
+`startup_warning_rules`，2026-07-08 R2 已落地）：provider 值不在预设目录
+（含别名 `openai_compatible`）、`custom`/`openai_compatible` 缺
+`GENERATION_BASE_URL` 会拒绝启动；`GENERATION_ENABLED=true` 且 env key 为空
+只记启动 WARNING——key 可在运行期由 super_admin 在「生成模型」卡录入（加密
+落库 `llm_provider_credentials`，回显仅 masked 后 4 位），未配置期间生成走
+规则降级稿（预期行为）。见 `docs/backend/generation-provider-design.md` §9.6。
 
 模型名、温度、超时、每日预算、降级行为属于工作台级 `generation_policy`，
-在工作台配置中心「生成模型」卡配置（key 只显示"已配置/未配置"，永不回显）；
-连通性用 `POST /api/generation/ping`（admin）自检。未配 key 时生成链路走规则
-降级稿（`fallback_needs_review`，不进公司 SQL），这是预期行为不是故障。
+在工作台配置中心「生成模型」卡配置（key 只显示"已配置/未配置"与 masked
+后 4 位，永不回显明文）；连通性用 `POST /api/generation/ping`（admin）自检。
+未配 key 时生成链路走规则降级稿（`fallback_needs_review`，不进公司 SQL），
+这是预期行为不是故障。
+
+注意成本：带 `generation_template` 的自定义格式按"每条新闻 × 每个启用格式
+1 次调用"计费（`docs/backend/report-renditions-design.md` §10.4 预算公式），
+`generation_policy.daily_generation_budget` 要按该公式上浮配置。
 
 ## 3. 前端本地运行
 

@@ -1,0 +1,145 @@
+{
+  "schema_version": 1,
+  "description": "LLM generation provider preset catalog + instance-level credential storage contract. Design doc: docs/backend/generation-provider-design.md sections 8-10; decision change D-2026-07-08-KEY (keys may now be stored encrypted in DB, superseding the env-only rule).",
+  "status": "implemented 2026-07-08 (WP4-B): catalog projection GET /api/generation/providers + credential CRUD in backend/app/api/routes/credentials.py, encrypted storage in backend/app/core/crypto.py + app/models/llm.py (migration f2b3c4d5e6a7), credential resolution in backend/app/llm/provider.py resolve_generation_config; covered by backend/tests/test_credentials_api.py. The catalog below is the value domain for GENERATION_PROVIDER and llm_provider_credentials.provider (GENERATION_PROVIDER additionally accepts openai_compatible as a deprecated alias of custom).",
+  "core_rule": "The catalog is UI prefill data shipped with the code, not a security boundary and not a capability gate: base_url stays editable, model names stay free-form, and whether a combination works is decided by POST /api/generation/ping and the real generation chain. Plaintext keys never enter Git, sync feeds, manual sync packages, audit details or any API response; at-rest storage is Fernet-encrypted only.",
+  "client_rule": "Every preset goes through the single OpenAI-compatible chat/completions client (backend/app/llm/provider.py request_chat_completion) with the existing /chat/completions URL completion rule. No provider-specific client branches: anthropic uses its OpenAI-compatible endpoint; native x-api-key or non-chat/completions protocols are out of scope (use custom + a gateway).",
+  "catalog": [
+    {
+      "code": "openai",
+      "name": "OpenAI",
+      "default_base_url": "https://api.openai.com/v1",
+      "auth_header": "authorization_bearer",
+      "key_required": true,
+      "common_models": ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "o4-mini"],
+      "notes": "",
+      "sort_order": 10
+    },
+    {
+      "code": "anthropic",
+      "name": "Anthropic Claude",
+      "default_base_url": "https://api.anthropic.com/v1",
+      "auth_header": "authorization_bearer",
+      "key_required": true,
+      "common_models": ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"],
+      "notes": "Uses Anthropic's OpenAI-compatible endpoint; the native x-api-key protocol is intentionally not a second client branch.",
+      "sort_order": 20
+    },
+    {
+      "code": "deepseek",
+      "name": "DeepSeek",
+      "default_base_url": "https://api.deepseek.com/v1",
+      "auth_header": "authorization_bearer",
+      "key_required": true,
+      "common_models": ["deepseek-chat", "deepseek-reasoner"],
+      "notes": "",
+      "sort_order": 30
+    },
+    {
+      "code": "moonshot",
+      "name": "Moonshot Kimi",
+      "default_base_url": "https://api.moonshot.cn/v1",
+      "auth_header": "authorization_bearer",
+      "key_required": true,
+      "common_models": ["kimi-k2", "kimi-latest", "moonshot-v1-32k"],
+      "notes": "",
+      "sort_order": 40
+    },
+    {
+      "code": "zhipu_glm",
+      "name": "智谱 GLM",
+      "default_base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "auth_header": "authorization_bearer",
+      "key_required": true,
+      "common_models": ["glm-4.6", "glm-4.5", "glm-4.5-air"],
+      "notes": "",
+      "sort_order": 50
+    },
+    {
+      "code": "minimax",
+      "name": "MiniMax",
+      "default_base_url": "https://api.minimaxi.com/v1",
+      "auth_header": "authorization_bearer",
+      "key_required": true,
+      "common_models": ["MiniMax-M2.7-highspeed", "MiniMax-M2.7"],
+      "notes": "Current instance default provider; default model MiniMax-M2.7-highspeed stays unchanged.",
+      "sort_order": 60
+    },
+    {
+      "code": "openrouter",
+      "name": "OpenRouter",
+      "default_base_url": "https://openrouter.ai/api/v1",
+      "auth_header": "authorization_bearer",
+      "key_required": true,
+      "common_models": ["anthropic/claude-sonnet-4-5", "openai/gpt-4o-mini", "deepseek/deepseek-chat"],
+      "notes": "Model names are namespaced (vendor/model).",
+      "sort_order": 70
+    },
+    {
+      "code": "ollama",
+      "name": "Ollama (本地/自托管)",
+      "default_base_url": "http://localhost:11434/v1",
+      "auth_header": "authorization_bearer",
+      "key_required": false,
+      "common_models": ["qwen3", "llama3.1", "deepseek-r1"],
+      "notes": "Self-hosted; key input may stay empty.",
+      "sort_order": 80
+    },
+    {
+      "code": "custom",
+      "name": "自定义（兜底 base_url + key）",
+      "default_base_url": null,
+      "auth_header": "authorization_bearer",
+      "key_required": false,
+      "common_models": [],
+      "notes": "Catch-all for any OpenAI-compatible gateway/proxy: base_url is mandatory and free-form. Legacy GENERATION_PROVIDER=openai_compatible is a deprecated alias of custom.",
+      "sort_order": 90
+    }
+  ],
+  "catalog_rules": [
+    "common_models are dropdown hints only; the server never validates model names against them (generation_policy.model / GENERATION_MODEL accept any value).",
+    "Catalog changes are contract JSON edits shipped with a release; there is no runtime edit API.",
+    "GET /api/generation/providers serves this catalog verbatim to any logged-in user; the response contains no credential data."
+  ],
+  "credential_table": {
+    "table": "llm_provider_credentials",
+    "scope": "instance-level (no workspace_code): credentials are instance assets, workspaces reference them via generation_policy.credential_id",
+    "columns": [
+      "id / global_id / created_at / updated_at",
+      "provider (str32, one of catalog codes incl. custom)",
+      "base_url (str512, resolved at write time: catalog default or user-edited; mandatory for custom)",
+      "key_encrypted (text, Fernet token; empty string allowed for key-less providers such as ollama)",
+      "key_last4 (str8, plaintext last 4 chars for masked display; display path never decrypts)",
+      "label (str64)",
+      "enabled (bool, default true; DELETE = soft-disable with disabled_at)",
+      "disabled_at (nullable datetime)",
+      "created_by_id (fk users.id)"
+    ],
+    "encryption": {
+      "algorithm": "Fernet (cryptography), key derived via HKDF-SHA256 from AUTH_SESSION_SECRET with salt 'infowatchtower/llm-credentials/v1' and info 'fernet-key'; no new env variable",
+      "rotation": "MultiFernet over Settings.auth_session_secret_list (AUTH_SESSION_SECRETS rotation list, first = current): encrypt with the first key, decrypt tries all; rows decryptable only with an old key are re-encrypted with the current key idempotently at first resolution/use. Dropping an old secret without the rotation list makes stored credentials undecryptable: behavior is degrade-to-unconfigured (key_source=credential_missing, rule-fallback drafts, ping key_missing), audited as generation.credential.decrypt_failed, never a crash and never silent env fallback."
+    },
+    "masking": "Every API response (list, detail, policy resolved view, ping, errors) exposes at most key_masked = '****' + key_last4; neither plaintext nor the Fernet ciphertext ever appears in API responses or audit details.",
+    "sync_export_exclusion": "llm_provider_credentials never enters sync feeds, manual sync packages or any export; secrets are re-entered per environment (pull-only intranet topology keeps its own rows)."
+  },
+  "resolution_priority": [
+    "1. workspace generation_policy.credential_id set -> enabled credential row decrypted: provider/base_url/key come from the row (key_source=credential); disabled/missing/undecryptable -> treat as key-not-configured (key_source=credential_missing), never silently fall back to env",
+    "2. credential_id null -> instance env chain byte-identical to current behavior: GENERATION_API_KEY_REF -> GENERATION_API_KEY -> MINIMAX_API_KEY (provider/base_url via GENERATION_*/MINIMAX_* compatibility chain)",
+    "3. model/temperature/max_tokens/timeout plus budget and fallback_behavior keep the existing policy-over-env layering regardless of key source"
+  ],
+  "api": [
+    "GET /api/generation/providers (any logged-in user): catalog projection",
+    "GET /api/generation/credentials (super_admin or editor_admin): masked list only",
+    "POST /api/generation/credentials (super_admin): {provider, base_url?, api_key, label}; base_url defaults from catalog, mandatory for custom; audited generation.credential.create",
+    "PATCH /api/generation/credentials/{id} (super_admin): label/base_url/enabled/api_key (new key replaces and re-encrypts); audited generation.credential.update",
+    "DELETE /api/generation/credentials/{id} (super_admin): soft-disable; audited generation.credential.disable",
+    "POST /api/generation/ping accepts optional credential_id (takes precedence over workspace_code) for save-then-test; audit detail carries credential_id, never key material"
+  ],
+  "startup_failfast_revision": "Implemented with the credential store: 'GENERATION_ENABLED=true and empty env key' is a startup WARNING (key may be configured at runtime via UI; see deployment_modes.json startup_warning_rules). Kept fail-fast: provider value outside the catalog (openai_compatible allowed as deprecated custom alias) and custom/openai_compatible without GENERATION_BASE_URL. deployment_modes.json startup_failfast_rules stays 1:1 with backend/app/core/deploy_checks.py.",
+  "invariants": [
+    "Plaintext keys exist only in env values, credential_ref target files and the outbound Authorization header; the DB stores Fernet ciphertext only.",
+    "workspaces.config_json.generation_policy still never contains key/base_url/provider fields; credential_id is a whitelisted pointer, and secret-like payload keys still answer 422.",
+    "Provider or credential switching never relaxes generation quality gates, the 10-category constraint or company SQL gating.",
+    "The env chain (GENERATION_*/MINIMAX_*) remains fully supported as the fallback path; instances with no credential rows behave byte-identically to the pre-R2 implementation."
+  ]
+}

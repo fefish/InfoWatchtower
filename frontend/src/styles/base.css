@@ -2140,9 +2140,13 @@ button {
   cursor: not-allowed;
 }
 
-.weekly-layout,
 .ingestion-layout {
   grid-template-columns: 300px minmax(0, 1fr);
+}
+
+.weekly-layout {
+  /* 时间轴侧栏固定宽 240px（frontend-product-design §13.1，weekly 变体） */
+  grid-template-columns: 240px minmax(0, 1fr);
 }
 
 .weekly-detail,
@@ -3960,16 +3964,10 @@ button {
 }
 
 .daily-report-layout.enhanced {
-  grid-template-columns: minmax(150px, 176px) minmax(0, 1fr);
+  /* 时间轴侧栏固定宽 240px（frontend-product-design §13.1：长日期 + 徽章不换行） */
+  grid-template-columns: 240px minmax(0, 1fr);
   gap: var(--space-card);
   width: 100%;
-}
-
-.report-timeline {
-  position: sticky;
-  top: 86px;
-  display: grid;
-  gap: 8px;
 }
 
 .report-tab {
@@ -4003,13 +4001,14 @@ button {
 }
 
 .daily-report-card {
+  /* §13.3：详情卡表面补四边内边距，消除“文字顶在框左上角” */
   min-width: 0;
+  padding: var(--space-card-pad);
 }
 
 .daily-report-card.editorial {
   min-width: 0;
   border-right: 0;
-  padding-right: 0;
 }
 
 .daily-report-header {
@@ -4017,7 +4016,11 @@ button {
   justify-content: space-between;
   gap: 18px;
   border-bottom: 1px solid #e5e7eb;
-  padding-bottom: 22px;
+  padding: 0 0 var(--space-card-pad);
+}
+
+.daily-report-header .eyebrow {
+  margin: 0 0 var(--space-control);
 }
 
 .daily-report-header .icon-button.secondary {
@@ -4039,20 +4042,22 @@ button {
 
 .daily-report-header p:last-child {
   max-width: 720px;
-  margin: 8px 0 0;
+  margin: var(--space-control) 0 0;
   color: #71717a;
 }
 
 .daily-item-list {
   display: grid;
   gap: 0;
+  /* §13.3：正文区与格式 tab 行间距 */
+  margin-top: var(--space-inline);
 }
 
 .daily-item {
   display: grid;
   gap: 9px;
   border-bottom: 1px solid #eef0f3;
-  padding: 22px 0;
+  padding: var(--space-card-pad) 0;
 }
 
 .daily-item h4 {
@@ -4118,9 +4123,9 @@ button {
 .report-metrics {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: var(--space-control);
   border-bottom: 1px solid #eef0f3;
-  padding: 16px 0 2px;
+  padding: var(--space-inline) 0;
 }
 
 .report-metrics span {
@@ -5372,10 +5377,6 @@ button {
 }
 
 @media (max-width: 1540px) {
-  .daily-report-layout.enhanced {
-    grid-template-columns: 160px minmax(0, 1fr);
-  }
-
   .daily-report-card.editorial {
     grid-column: 2;
     grid-row: 1;
@@ -5421,7 +5422,6 @@ button {
     grid-column: auto;
     grid-row: auto;
     border-right: 0;
-    padding-right: 0;
   }
 
   .control-rail {
@@ -5580,7 +5580,7 @@ button {
     position: static;
   }
 
-  .report-timeline {
+  .report-timeline-card {
     position: static;
   }
 
@@ -6971,9 +6971,10 @@ button:focus-visible {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--space-inline);
   flex-wrap: wrap;
-  margin: 4px 0 6px;
+  margin: 0;
+  padding: var(--space-inline) 0 0;
 }
 
 .rendition-actions {
@@ -6988,6 +6989,8 @@ button:focus-visible {
 .rendition-view {
   display: grid;
   gap: 18px;
+  /* §13.3：正文区与格式 tab 行间距 */
+  margin-top: var(--space-inline);
 }
 
 .rendition-headlines {
@@ -7751,5 +7754,253 @@ button:focus-visible {
     max-height: none;
     border-radius: 0;
     border: 0;
+  }
+}
+
+/* ============================================================
+   报告时间轴（ReportTimeline，frontend-product-design §13.1）
+   与顶部筛选条（§13.2）——日报/周报页共用
+   ============================================================ */
+
+.report-timeline-card {
+  /* 玻璃卡侧栏（compact 卡：--space-card-pad 收 16px） */
+  --space-card-pad: 16px;
+  position: sticky;
+  top: 86px;
+  display: grid;
+  gap: var(--space-inline);
+  align-content: start;
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.65);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+  box-shadow: var(--glass-stroke), var(--shadow-panel);
+  padding: var(--space-card-pad);
+}
+
+.timeline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-control);
+}
+
+.timeline-head .eyebrow {
+  margin: 0;
+}
+
+.timeline-month-jump {
+  min-width: 0;
+  max-width: 150px;
+  border: 1px solid var(--color-border-soft);
+  border-radius: var(--radius-control);
+  padding: 5px 8px;
+  background: var(--color-surface-solid);
+  color: var(--color-text);
+  font-size: 12px;
+}
+
+/* 宽屏隐藏坍缩下拉，≤1180px 才启用 */
+.timeline-compact {
+  display: none;
+}
+
+.timeline-scroll {
+  display: grid;
+  gap: var(--space-inline); /* 月份组间距 */
+  align-content: start;
+  max-height: min(64vh, 680px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.timeline-month {
+  display: grid;
+  gap: var(--space-control); /* 节点间距 */
+  align-content: start;
+}
+
+.timeline-month-head {
+  /* 组头吸顶：吸附于组件内部滚动容器（不违反 §9.2 业务卡片禁 fixed/absolute） */
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0;
+  padding: 4px 2px;
+  background: var(--color-surface-solid);
+  color: var(--color-muted);
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.timeline-node {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--space-control);
+  row-gap: 2px;
+}
+
+.timeline-node strong {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.timeline-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--color-faint); /* 草稿=灰（现有状态色 token） */
+}
+
+.timeline-dot.published {
+  background: #34c759; /* 已发布=绿（沿用开关/状态成功色） */
+}
+
+.timeline-count {
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: rgba(120, 130, 150, 0.12);
+  color: var(--color-muted);
+  font-size: 11px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.timeline-node .timeline-status {
+  grid-column: 2 / -1;
+  color: var(--color-faint);
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+.timeline-loading {
+  margin: 0;
+  padding: var(--space-control) 2px;
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.timeline-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-control);
+  border: 1px solid rgba(220, 38, 38, 0.25);
+  border-radius: var(--radius-control);
+  padding: var(--space-control) var(--space-inline);
+  background: rgba(220, 38, 38, 0.06);
+  color: #b91c1c;
+  font-size: 12px;
+}
+
+.timeline-error span {
+  overflow-wrap: anywhere;
+}
+
+.timeline-sentinel {
+  height: 1px;
+}
+
+/* 顶部筛选条：单行卡，纯前端过滤当前报告条目 */
+.report-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-inline);
+  border: 1px solid rgba(255, 255, 255, 0.65);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+  box-shadow: var(--glass-stroke), var(--shadow-soft);
+  padding: var(--space-inline) var(--space-card-pad);
+}
+
+.filter-chip-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-control);
+  min-width: 0;
+}
+
+.filter-chip {
+  border: 1px solid var(--color-border-soft);
+  border-radius: 999px;
+  padding: 4px 12px;
+  background: transparent;
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 700;
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+.filter-chip:hover {
+  border-color: var(--color-primary-edge);
+  color: var(--color-primary-dark);
+}
+
+.filter-chip.active {
+  border-color: var(--color-primary-edge);
+  background: var(--color-primary-soft);
+  color: var(--color-primary-dark);
+}
+
+.report-filter-bar .filter-section,
+.report-filter-bar .filter-keyword {
+  border: 1px solid var(--color-border-soft);
+  border-radius: var(--radius-control);
+  padding: 6px 10px;
+  background: var(--color-surface-solid);
+  color: var(--color-text);
+  font-size: 13px;
+}
+
+.report-filter-bar .filter-keyword {
+  flex: 1 1 180px;
+  min-width: 140px;
+}
+
+.filter-count {
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.empty-state.filter-empty {
+  display: flex;
+  align-items: center;
+  gap: var(--space-control);
+  padding: var(--space-inline) 0;
+}
+
+/* ≤1180px 坍缩：竖向滚动列表收起，改为月份选择 + 报告下拉（保持全量可达） */
+@media (max-width: 1180px) {
+  .report-timeline-card {
+    position: static;
+  }
+
+  .timeline-scroll {
+    display: none;
+  }
+
+  .timeline-compact {
+    display: grid;
+    gap: var(--space-control);
+    color: var(--color-muted);
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .timeline-compact select {
+    border: 1px solid var(--color-border-soft);
+    border-radius: var(--radius-control);
+    padding: 8px 10px;
+    background: var(--color-surface-solid);
+    color: var(--color-text);
+    font-size: 13px;
   }
 }

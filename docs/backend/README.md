@@ -18,7 +18,7 @@
 | Sources / Ingestion / Content Pipeline / Storage | `data-ingestion-flow-storage-design.md` |
 | Recommendation & Scoring | `recommendation-scoring-design.md` |
 | Pipeline & Jobs | `pipeline-jobs-design.md` |
-| Generation Provider | `generation-provider-design.md`（LLM 生成 provider 配置、工作台 generation_policy、连通性自检；2026-07-08 已实现） |
+| Generation Provider | `generation-provider-design.md`（LLM 生成 provider 配置、工作台 generation_policy、连通性自检；基线 2026-07-08 已实现，§8-§11 Provider 预设目录 + 密钥落库 R2 修订待实现） |
 | Reports & Editorial | `reports-editorial-design.md` |
 | Workspace Configuration | `workspace-configuration-design.md` |
 | Strategy Loop | `strategy-loop-design.md` |
