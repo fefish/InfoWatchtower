@@ -11,7 +11,6 @@
 | `capability-map.md` | 当前已实现能力、缺口、证据和优先级 |
 | `software-design-description.md` | 正式 SDD 总装版，面向完整设计审查 |
 | `workspace-report-knowledge-chat-plan.md` | 工作台取数、报告发布发现、知识库与 Chat 架构纠偏的跨模块评审入口和施工索引 |
-| `consumer-platform-journey-review-2026-07-10.md` | 消费侧方案的用户旅程评审与修订建议（R-J1..R-J7），交实施团队逐条评审回写 |
 
 ## 附录
 
